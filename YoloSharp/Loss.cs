@@ -586,7 +586,7 @@ namespace YoloSharp
 
 				var target_scores_sum = torch.max(target_scores.sum());
 				loss[1] = this.bce.forward(pred_scores, target_scores).sum() / target_scores_sum;  // BCE
-																											 //float loss1 = (this.bce.forward(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum).ToSingle();  // BCE
+																								   //float loss1 = (this.bce.forward(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum).ToSingle();  // BCE
 				if (fg_mask.sum().ToInt64() > 0)
 				{
 					target_bboxes /= stride_tensor;
@@ -613,28 +613,29 @@ namespace YoloSharp
 
 			private Tensor dist2bbox(Tensor distance, Tensor anchor_points, bool xywh = true, int dim = -1)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				Tensor[] ltrb = distance.chunk(2, dim);
+				Tensor lt = ltrb[0];
+				Tensor rb = ltrb[1];
+
+				Tensor x1y1 = anchor_points - lt;
+				Tensor x2y2 = anchor_points + rb;
+
+				if (xywh)
 				{
-					Tensor[] ltrb = distance.chunk(2, dim);
-					Tensor lt = ltrb[0];
-					Tensor rb = ltrb[1];
-
-					Tensor x1y1 = anchor_points - lt;
-					Tensor x2y2 = anchor_points + rb;
-
-					if (xywh)
-					{
-						Tensor c_xy = (x1y1 + x2y2) / 2;
-						Tensor wh = x2y2 - x1y1;
-						return torch.cat(new Tensor[] { c_xy, wh }, dim);  // xywh bbox
-					}
-					return torch.cat(new Tensor[] { x1y1, x2y2 }, dim).MoveToOuterDisposeScope(); // xyxy bbox
+					Tensor c_xy = (x1y1 + x2y2) / 2;
+					Tensor wh = x2y2 - x1y1;
+					return torch.cat(new Tensor[] { c_xy, wh }, dim);  // xywh bbox
 				}
+				return torch.cat(new Tensor[] { x1y1, x2y2 }, dim).MoveToOuterDisposeScope(); // xyxy bbox
+
 			}
 
 			private (Tensor, Tensor) make_anchors(Tensor[] feats, int[] strides, float grid_cell_offset = 0.5f)
 			{
 				using var _ = NewDisposeScope();
+
 				torch.ScalarType dtype = feats[0].dtype;
 				Device device = feats[0].device;
 				List<Tensor> anchor_points = new List<Tensor>();
@@ -657,6 +658,7 @@ namespace YoloSharp
 			private Tensor postprocess(Tensor targets, long batch_size, Tensor scale_tensor)
 			{
 				using var _ = NewDisposeScope();
+
 				// Preprocesses the target counts and matches with the input batch size to output a tensor.
 				long nl = targets.shape[0];
 				long ne = targets.shape[1];
@@ -742,134 +744,135 @@ namespace YoloSharp
 			}
 			public override (Tensor, Tensor) forward(Tensor[] preds, Tensor targets, Tensor masks)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				this.device = preds[0].device;
+				this.dtype = preds[0].dtype;
+
+				Tensor loss = torch.zeros(4).to(this.device);  // box, cls, dfl
+				Tensor[] feats = new Tensor[] { preds[0], preds[1], preds[2] };
+				Tensor pred_masks = preds[3];
+				Tensor proto = preds[4];
+
+				long batch_size = proto.shape[0];
+				long mask_h = proto.shape[2];
+				long mask_w = proto.shape[3];
+				Tensor[] pred_distri_scores = torch.cat(feats.Select(xi => xi.view(feats[0].shape[0], no, -1)).ToArray(), 2).split(new long[] { this.reg_max * 4, this.nc }, 1);
+				Tensor pred_distri = pred_distri_scores[0];
+				Tensor pred_scores = pred_distri_scores[1];
+
+				// B, grids, ..
+				pred_scores = pred_scores.permute(0, 2, 1).contiguous();
+				pred_distri = pred_distri.permute(0, 2, 1).contiguous();
+				pred_masks = pred_masks.permute(0, 2, 1).contiguous();
+
+				Tensor imgsz = torch.tensor(feats[0].shape[2..], device: this.device, dtype: this.dtype) * this.stride[0]; // image size (h,w)
+				var (anchor_points, stride_tensor) = make_anchors(feats, this.stride, 0.5f);
+				var indices = torch.tensor(new long[] { 1, 0, 1, 0 }, device: device);
+
+				// Select elements from imgsz
+				var scale_tensor = torch.index_select(imgsz, 0, indices).to(device);
+				var tgs = postprocess(targets, batch_size, scale_tensor);
+				Tensor[] gt_labels_bboxes = tgs.split(new long[] { 1, 4 }, 2);  // cls, xyxy
+				Tensor gt_labels = gt_labels_bboxes[0];
+				Tensor gt_bboxes = gt_labels_bboxes[1];
+				Tensor mask_gt = gt_bboxes.sum(2, keepdim: true).gt_(0.0);
+
+				// Pboxes
+				Tensor pred_bboxes = bbox_decode(anchor_points, pred_distri);  // xyxy, (b, h*w, 4)
+
+				TaskAlignedAssigner assigner = new TaskAlignedAssigner(topk: tal_topk, num_classes: this.nc, alpha: 0.5f, beta: 6.0f);
+				var (_, target_bboxes, target_scores, fg_mask, target_gt_idx) = assigner.forward(pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype), anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt);
+				var target_scores_sum = torch.max(target_scores.sum());
+				loss[2] = this.bce.forward(pred_scores, target_scores).sum() / target_scores_sum; //BCE
+				if (fg_mask.sum().ToSingle() > 0)
 				{
-					this.device = preds[0].device;
-					this.dtype = preds[0].dtype;
-
-					Tensor loss = torch.zeros(4).to(this.device);  // box, cls, dfl
-					Tensor[] feats = new Tensor[] { preds[0], preds[1], preds[2] };
-					Tensor pred_masks = preds[3];
-					Tensor proto = preds[4];
-
-					long batch_size = proto.shape[0];
-					long mask_h = proto.shape[2];
-					long mask_w = proto.shape[3];
-					Tensor[] pred_distri_scores = torch.cat(feats.Select(xi => xi.view(feats[0].shape[0], no, -1)).ToArray(), 2).split(new long[] { this.reg_max * 4, this.nc }, 1);
-					Tensor pred_distri = pred_distri_scores[0];
-					Tensor pred_scores = pred_distri_scores[1];
-
-					// B, grids, ..
-					pred_scores = pred_scores.permute(0, 2, 1).contiguous();
-					pred_distri = pred_distri.permute(0, 2, 1).contiguous();
-					pred_masks = pred_masks.permute(0, 2, 1).contiguous();
-
-					Tensor imgsz = torch.tensor(feats[0].shape[2..], device: this.device, dtype: this.dtype) * this.stride[0]; // image size (h,w)
-					var (anchor_points, stride_tensor) = make_anchors(feats, this.stride, 0.5f);
-					var indices = torch.tensor(new long[] { 1, 0, 1, 0 }, device: device);
-
-					// Select elements from imgsz
-					var scale_tensor = torch.index_select(imgsz, 0, indices).to(device);
-					var tgs = postprocess(targets, batch_size, scale_tensor);
-					Tensor[] gt_labels_bboxes = tgs.split(new long[] { 1, 4 }, 2);  // cls, xyxy
-					Tensor gt_labels = gt_labels_bboxes[0];
-					Tensor gt_bboxes = gt_labels_bboxes[1];
-					Tensor mask_gt = gt_bboxes.sum(2, keepdim: true).gt_(0.0);
-
-					// Pboxes
-					Tensor pred_bboxes = bbox_decode(anchor_points, pred_distri);  // xyxy, (b, h*w, 4)
-
-					TaskAlignedAssigner assigner = new TaskAlignedAssigner(topk: tal_topk, num_classes: this.nc, alpha: 0.5f, beta: 6.0f);
-					var (_, target_bboxes, target_scores, fg_mask, target_gt_idx) = assigner.forward(pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype), anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt);
-					var target_scores_sum = torch.max(target_scores.sum());
-					loss[2] = this.bce.forward(pred_scores, target_scores).sum() / target_scores_sum; //BCE
-					if (fg_mask.sum().ToSingle() > 0)
-					{
-						(loss[0], loss[3]) = new BboxLoss().forward(pred_distri, pred_bboxes, anchor_points, target_bboxes / stride_tensor, target_scores, target_scores_sum, fg_mask);
-						loss[1] = calculate_segmentation_loss(fg_mask, masks, target_gt_idx, target_bboxes, /*batch_idx,*/ proto, pred_masks, imgsz, this.over_laps);
-					}
-
-					loss[0] *= this.hyp_box;    // box gain
-					loss[1] *= this.hyp_box;    // seg gain
-					loss[2] *= this.hyp_cls;    // cls gain
-					loss[3] *= this.hyp_dfl;    // dfl gain
-
-					return ((loss.sum() * batch_size).MoveToOuterDisposeScope(), loss.detach().MoveToOuterDisposeScope());    // loss(box, cls, dfl)
+					(loss[0], loss[3]) = new BboxLoss().forward(pred_distri, pred_bboxes, anchor_points, target_bboxes / stride_tensor, target_scores, target_scores_sum, fg_mask);
+					loss[1] = calculate_segmentation_loss(fg_mask, masks, target_gt_idx, target_bboxes, /*batch_idx,*/ proto, pred_masks, imgsz, this.over_laps);
 				}
+
+				loss[0] *= this.hyp_box;    // box gain
+				loss[1] *= this.hyp_box;    // seg gain
+				loss[2] *= this.hyp_cls;    // cls gain
+				loss[3] *= this.hyp_dfl;    // dfl gain
+
+				return ((loss.sum() * batch_size).MoveToOuterDisposeScope(), loss.detach().MoveToOuterDisposeScope());    // loss(box, cls, dfl)
+
 			}
 
 			private (Tensor, Tensor) make_anchors(Tensor[] feats, int[] strides, float grid_cell_offset = 0.5f)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				torch.ScalarType dtype = feats[0].dtype;
+				Device device = feats[0].device;
+				List<Tensor> anchor_points = new List<Tensor>();
+				List<Tensor> stride_tensor = new List<Tensor>();
+				for (int i = 0; i < strides.Length; i++)
 				{
-					torch.ScalarType dtype = feats[0].dtype;
-					Device device = feats[0].device;
-					List<Tensor> anchor_points = new List<Tensor>();
-					List<Tensor> stride_tensor = new List<Tensor>();
-					for (int i = 0; i < strides.Length; i++)
-					{
-						long h = feats[i].shape[2];
-						long w = feats[i].shape[3];
-						Tensor sx = torch.arange(w, device: device, dtype: dtype) + grid_cell_offset;  // shift x
-						Tensor sy = torch.arange(h, device: device, dtype: dtype) + grid_cell_offset;  // shift y
-						Tensor[] sy_sx = torch.meshgrid(new Tensor[] { sy, sx }, indexing: "ij");
-						sy = sy_sx[0];
-						sx = sy_sx[1];
-						anchor_points.Add(torch.stack(new Tensor[] { sx, sy }, -1).view(-1, 2));
-						stride_tensor.Add(torch.full(new long[] { h * w, 1 }, strides[i], dtype: dtype, device: device));
-					}
-					return (torch.cat(anchor_points).MoveToOuterDisposeScope(), torch.cat(stride_tensor).MoveToOuterDisposeScope());
+					long h = feats[i].shape[2];
+					long w = feats[i].shape[3];
+					Tensor sx = torch.arange(w, device: device, dtype: dtype) + grid_cell_offset;  // shift x
+					Tensor sy = torch.arange(h, device: device, dtype: dtype) + grid_cell_offset;  // shift y
+					Tensor[] sy_sx = torch.meshgrid(new Tensor[] { sy, sx }, indexing: "ij");
+					sy = sy_sx[0];
+					sx = sy_sx[1];
+					anchor_points.Add(torch.stack(new Tensor[] { sx, sy }, -1).view(-1, 2));
+					stride_tensor.Add(torch.full(new long[] { h * w, 1 }, strides[i], dtype: dtype, device: device));
 				}
+				return (torch.cat(anchor_points).MoveToOuterDisposeScope(), torch.cat(stride_tensor).MoveToOuterDisposeScope());
+
 			}
 
 			private Tensor postprocess(Tensor targets, long batch_size, Tensor scale_tensor)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				// Preprocesses the target counts and matches with the input batch size to output a tensor.
+				long nl = targets.shape[0];
+				long ne = targets.shape[1];
+
+				if (nl == 0)
 				{
-					// Preprocesses the target counts and matches with the input batch size to output a tensor.
-					long nl = targets.shape[0];
-					long ne = targets.shape[1];
-
-					if (nl == 0)
-					{
-						return torch.zeros(new long[] { batch_size, 0, ne - 1 }, device: this.device);
-					}
-					else
-					{
-						Tensor i = targets[TensorIndex.Colon, 0];  // image index
-						var (_, _, counts) = i.unique(return_counts: true);
-						Tensor _out = torch.zeros(new long[] { batch_size, counts.max().ToInt64(), ne - 1 }, device: this.device);
-
-						for (int j = 0; j < batch_size; j++)
-						{
-							Tensor matches = i == j;
-							long n = matches.sum().ToInt64();
-							if (n > 0)
-							{
-								// Get the indices where matches is True
-								var indices = torch.nonzero(matches).squeeze().to(torch.ScalarType.Int64);
-
-								// Select the rows from targets
-								var selectedRows = targets.index_select(0, indices.contiguous());
-
-								// Slice the rows to exclude the first column
-								var selectedRowsSliced = selectedRows.narrow(1, 1, ne - 1);
-
-								// Assign to the output tensor
-								_out[j, TensorIndex.Slice(0, n)] = selectedRowsSliced;
-							}
-
-						}
-						// Convert xywh to xyxy format and scale
-						_out[TensorIndex.Ellipsis, TensorIndex.Slice(1, 5)] = xywh2xyxy(_out[TensorIndex.Ellipsis, TensorIndex.Slice(1, 5)].mul(scale_tensor));
-						return _out.MoveToOuterDisposeScope();
-					}
+					return torch.zeros(new long[] { batch_size, 0, ne - 1 }, device: this.device);
 				}
+				else
+				{
+					Tensor i = targets[TensorIndex.Colon, 0];  // image index
+					var (_, _, counts) = i.unique(return_counts: true);
+					Tensor _out = torch.zeros(new long[] { batch_size, counts.max().ToInt64(), ne - 1 }, device: this.device);
+
+					for (int j = 0; j < batch_size; j++)
+					{
+						Tensor matches = i == j;
+						long n = matches.sum().ToInt64();
+						if (n > 0)
+						{
+							// Get the indices where matches is True
+							var indices = torch.nonzero(matches).squeeze().to(torch.ScalarType.Int64);
+
+							// Select the rows from targets
+							var selectedRows = targets.index_select(0, indices.contiguous());
+
+							// Slice the rows to exclude the first column
+							var selectedRowsSliced = selectedRows.narrow(1, 1, ne - 1);
+
+							// Assign to the output tensor
+							_out[j, TensorIndex.Slice(0, n)] = selectedRowsSliced;
+						}
+
+					}
+					// Convert xywh to xyxy format and scale
+					_out[TensorIndex.Ellipsis, TensorIndex.Slice(1, 5)] = xywh2xyxy(_out[TensorIndex.Ellipsis, TensorIndex.Slice(1, 5)].mul(scale_tensor));
+					return _out.MoveToOuterDisposeScope();
+				}
+
 			}
 
 			private Tensor xywh2xyxy(Tensor xywh)
 			{
 				using var _ = NewDisposeScope();
+
 				var xyxy = torch.zeros_like(xywh);
 				xyxy[TensorIndex.Ellipsis, 0] = xywh[TensorIndex.Ellipsis, 0] - xywh[TensorIndex.Ellipsis, 2] / 2; // x1
 				xyxy[TensorIndex.Ellipsis, 1] = xywh[TensorIndex.Ellipsis, 1] - xywh[TensorIndex.Ellipsis, 3] / 2; // y1
@@ -900,6 +903,7 @@ namespace YoloSharp
 			private Tensor bbox_decode(Tensor anchor_points, Tensor pred_dist)
 			{
 				using var _ = NewDisposeScope();
+
 				// Decode predicted object bounding box coordinates from anchor points and distribution.
 				Tensor proj = torch.arange(this.reg_max, dtype: pred_dist.dtype, device: pred_dist.device);
 				if (this.use_dfl)
@@ -912,23 +916,23 @@ namespace YoloSharp
 
 			private Tensor dist2bbox(Tensor distance, Tensor anchor_points, bool xywh = true, int dim = -1)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				Tensor[] ltrb = distance.chunk(2, dim);
+				Tensor lt = ltrb[0];
+				Tensor rb = ltrb[1];
+
+				Tensor x1y1 = anchor_points - lt;
+				Tensor x2y2 = anchor_points + rb;
+
+				if (xywh)
 				{
-					Tensor[] ltrb = distance.chunk(2, dim);
-					Tensor lt = ltrb[0];
-					Tensor rb = ltrb[1];
-
-					Tensor x1y1 = anchor_points - lt;
-					Tensor x2y2 = anchor_points + rb;
-
-					if (xywh)
-					{
-						Tensor c_xy = (x1y1 + x2y2) / 2;
-						Tensor wh = x2y2 - x1y1;
-						return torch.cat(new Tensor[] { c_xy, wh }, dim);  // xywh bbox
-					}
-					return torch.cat(new Tensor[] { x1y1, x2y2 }, dim).MoveToOuterDisposeScope(); // xyxy bbox
+					Tensor c_xy = (x1y1 + x2y2) / 2;
+					Tensor wh = x2y2 - x1y1;
+					return torch.cat(new Tensor[] { c_xy, wh }, dim);  // xywh bbox
 				}
+				return torch.cat(new Tensor[] { x1y1, x2y2 }, dim).MoveToOuterDisposeScope(); // xyxy bbox
+
 			}
 
 			/// <summary>
@@ -951,6 +955,7 @@ namespace YoloSharp
 			private Tensor calculate_segmentation_loss(Tensor fg_mask, Tensor masks, Tensor target_gt_idx, Tensor target_bboxes,/* torch.Tensor batch_idx,*/ torch.Tensor proto, torch.Tensor pred_masks, torch.Tensor imgsz, bool overlap)
 			{
 				using var _ = NewDisposeScope();
+
 				long mask_h = proto.shape[2];
 				long mask_w = proto.shape[3];
 				Tensor loss = 0;
@@ -1007,6 +1012,7 @@ namespace YoloSharp
 			private Tensor single_mask_loss(Tensor gt_mask, torch.Tensor pred, torch.Tensor proto, torch.Tensor xyxy, torch.Tensor area)
 			{
 				using var _ = NewDisposeScope();
+
 				Tensor pred_mask = torch.einsum("in,nhw->ihw", pred, proto); //(n, 32) @ (32, 80, 80) -> (n, 80, 80)
 				Tensor loss = torch.nn.functional.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction: Reduction.None);
 				return (crop_mask(loss, xyxy).mean(dimensions: new long[] { 1, 2 }) / area).sum().MoveToOuterDisposeScope();
@@ -1021,6 +1027,7 @@ namespace YoloSharp
 			private Tensor crop_mask(Tensor masks, Tensor boxes)
 			{
 				using var _ = NewDisposeScope();
+
 				long h = masks.shape[1];
 				long w = masks.shape[2];
 				Tensor[] x1y1x2y2 = torch.chunk(boxes[.., .., TensorIndex.None], 4, 1);  // x1 shape(n,1,1)

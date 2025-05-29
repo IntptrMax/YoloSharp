@@ -28,7 +28,7 @@ namespace YoloSharp
 				t.bytes = dt;
 				dict.Add(li.Name, t);
 			}
-			var state_dict = model.state_dict();
+			Dictionary<string, Tensor> state_dict = model.state_dict();
 			var (loadMissing, unexp) = model.load_state_dict(dict, false);
 			model.save(outName);
 		}

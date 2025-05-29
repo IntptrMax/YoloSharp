@@ -16,7 +16,7 @@ namespace YoloSharp
 			{
 
 			}
-			internal override ModuleList<Module> BuildModel(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null)
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
 			{
 				(float depth_multiple, float width_multiple) = yoloSize switch
 				{
@@ -87,7 +87,7 @@ namespace YoloSharp
 			{
 
 			}
-			internal override ModuleList<Module> BuildModel(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null)
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
 			{
 				(float depth_multiple, float width_multiple) = yoloSize switch
 				{
@@ -156,7 +156,7 @@ namespace YoloSharp
 				RegisterComponents();
 			}
 
-			internal virtual ModuleList<Module> BuildModel(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null)
+			internal virtual ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
 			{
 				var (depth_multiple, width_multiple, max_channels) = yoloSize switch
 				{
@@ -210,7 +210,7 @@ namespace YoloSharp
 
 			public override Tensor[] forward(Tensor x)
 			{
-				using (NewDisposeScope())
+				// using (NewDisposeScope())
 				{
 					List<Tensor> outputs = new List<Tensor>();
 					int catCount = 0;
@@ -252,7 +252,7 @@ namespace YoloSharp
 
 			}
 
-			internal override ModuleList<Module> BuildModel(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null)
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
 			{
 				(float depth_multiple, float width_multiple, int max_channels, bool useC3k) = yoloSize switch
 				{
@@ -311,7 +311,7 @@ namespace YoloSharp
 
 			}
 
-			internal override ModuleList<Module> BuildModel(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null)
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
 			{
 				(float depth_multiple, float width_multiple, int max_channels, bool useC3k, int n_nultiple, bool useResidual, float mlp_ratio) = yoloSize switch
 				{
@@ -369,7 +369,7 @@ namespace YoloSharp
 
 			}
 
-			internal override ModuleList<Module> BuildModel(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null)
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
 			{
 				var mod = base.BuildModel(nc, yoloSize, device, dtype);
 				mod.RemoveAt(mod.Count - 1); // remove Detect
@@ -387,7 +387,7 @@ namespace YoloSharp
 
 			}
 
-			internal override ModuleList<Module> BuildModel(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null)
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
 			{
 				var mod = base.BuildModel(nc, yoloSize, device, dtype);
 				mod.RemoveAt(mod.Count - 1); // remove Detect
@@ -405,11 +405,43 @@ namespace YoloSharp
 
 			}
 
-			internal override ModuleList<Module> BuildModel(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null)
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
 			{
 				var mod = base.BuildModel(nc, yoloSize, device, dtype);
 				mod.RemoveAt(mod.Count - 1); // remove Detect
 				mod.Add(new Segment(ch, nc, npr: ch[0], legacy: false, device: device, dtype: dtype));
+				return mod;
+			}
+		}
+
+		public class Yolov8Obb : Yolov8
+		{
+			public Yolov8Obb(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null) : base(nc, yoloSize, device, dtype)
+			{
+
+			}
+
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
+			{
+				var mod = base.BuildModel(nc, yoloSize, device, dtype);
+				mod.RemoveAt(mod.Count - 1); // remove Detect
+				mod.Add(new OBB(ch, nc, device: device, dtype: dtype));
+				return mod;
+			}
+		}
+
+		public class Yolov11Obb : Yolov11
+		{
+			public Yolov11Obb(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null) : base(nc, yoloSize, device, dtype)
+			{
+
+			}
+
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
+			{
+				var mod = base.BuildModel(nc, yoloSize, device, dtype);
+				mod.RemoveAt(mod.Count - 1); // remove Detect
+				mod.Add(new OBB(ch, nc, device: device, dtype: dtype));
 				return mod;
 			}
 		}

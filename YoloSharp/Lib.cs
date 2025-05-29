@@ -1,4 +1,5 @@
 ﻿using ImageMagick;
+using System.Diagnostics;
 using TorchSharp;
 using static TorchSharp.torch;
 
@@ -61,7 +62,7 @@ namespace YoloSharp
 		/// <returns>The clipped boxes</returns>
 		internal static Tensor ClipBox(Tensor x, float[] shape)
 		{
-			using var _ = NewDisposeScope();
+			//	using var _ = NewDisposeScope();
 			Tensor box = torch.zeros_like(x);
 			box[TensorIndex.Ellipsis, 0] = x[TensorIndex.Ellipsis, 0].clamp_(0, shape[1]);  // x1
 			box[TensorIndex.Ellipsis, 1] = x[TensorIndex.Ellipsis, 1].clamp_(0, shape[0]);  // y1
@@ -76,7 +77,8 @@ namespace YoloSharp
 			{
 				image.Write(memoryStream, MagickFormat.Png);
 				memoryStream.Position = 0;
-				return torchvision.io.read_image(memoryStream, torchvision.io.ImageReadMode.RGB);
+				Tensor result = torchvision.io.read_image(memoryStream, torchvision.io.ImageReadMode.RGB);
+				return result;
 			}
 		}
 

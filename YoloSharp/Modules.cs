@@ -13,8 +13,8 @@ namespace YoloSharp
 			private readonly Conv2d conv;
 			private readonly BatchNorm2d bn;
 			private readonly bool act;
-			private double eps = 0.001;
-			private double momentum = 0.03;
+			private readonly double eps = 0.001;
+			private readonly double momentum = 0.03;
 
 			internal Conv(int in_channels, int out_channels, int kernel_size, int stride = 1, int? padding = null, int groups = 1, int d = 1, bool bias = false, bool act = true, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(Conv))
 			{
@@ -31,35 +31,31 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+				Module<Tensor, Tensor> ac = act ? SiLU(true) : Identity();
+
+				if (this.training)
 				{
-					Module<Tensor, Tensor> ac = act ? SiLU(true) : Identity();
-
-					if (this.training)
+					Tensor result = ac.forward(bn.forward(conv.forward(x)));
+					return result.MoveToOuterDisposeScope();
+				}
+				else
+				{
+					using (no_grad())
 					{
-						Tensor result = ac.forward(bn.forward(conv.forward(x)));
-						return result.MoveToOuterDisposeScope();
+						// Prepare filters
+						Conv2d fusedconv = nn.Conv2d(conv.in_channels, conv.out_channels, kernel_size: (conv.kernel_size[0], conv.kernel_size[1]), stride: (conv.stride[0], conv.stride[1]), padding: (conv.padding[0], conv.padding[1]), dilation: (conv.dilation[0], conv.dilation[1]), groups: conv.groups, bias: true, device: conv.weight.device, dtype: conv.weight.dtype);
+						Tensor w_conv = conv.weight.view(conv.out_channels, -1);
+						Tensor w_bn = torch.diag(bn.weight.div(torch.sqrt(bn.eps + bn.running_var)));
+						fusedconv.weight.copy_(torch.mm(w_bn, w_conv).view(fusedconv.weight.shape));
+
+						// Prepare spatial bias
+						Tensor b_conv = (conv.bias is null) ? torch.zeros(conv.weight.shape[0], dtype: conv.weight.dtype, device: conv.weight.device) : conv.bias;
+						Tensor b_bn = bn.bias - bn.weight.mul(bn.running_mean).div(torch.sqrt(bn.running_var + bn.eps));
+						fusedconv.bias.copy_(torch.mm(w_bn, b_conv.reshape(-1, 1)).reshape(-1) + b_bn);
+
+						return ac.forward(fusedconv.forward(x)).MoveToOuterDisposeScope();
 					}
-					else
-					{
-						using (no_grad())
-						{
-							// Prepare filters
-							Conv2d fusedconv = nn.Conv2d(conv.in_channels, conv.out_channels, kernel_size: (conv.kernel_size[0], conv.kernel_size[1]), stride: (conv.stride[0], conv.stride[1]), padding: (conv.padding[0], conv.padding[1]), dilation: (conv.dilation[0], conv.dilation[1]), groups: conv.groups, bias: true, device: conv.weight.device, dtype: conv.weight.dtype);
-							Tensor w_conv = conv.weight.view(conv.out_channels, -1);
-							Tensor w_bn = torch.diag(bn.weight.div(torch.sqrt(bn.eps + bn.running_var)));
-							fusedconv.weight.copy_(torch.mm(w_bn, w_conv).view(fusedconv.weight.shape));
-
-							// Prepare spatial bias
-							Tensor b_conv = (conv.bias is null) ? torch.zeros(conv.weight.shape[0], dtype: conv.weight.dtype, device: conv.weight.device) : conv.bias;
-							Tensor b_bn = bn.bias - bn.weight.mul(bn.running_mean).div(torch.sqrt(bn.running_var + bn.eps));
-							fusedconv.bias.copy_(torch.mm(w_bn, b_conv.reshape(-1, 1)).reshape(-1) + b_bn);
-
-							Tensor result = ac.forward(fusedconv.forward(x));
-							return result.MoveToOuterDisposeScope();
-						}
-					}
-
 				}
 			}
 		}
@@ -76,7 +72,7 @@ namespace YoloSharp
 		{
 			private readonly Conv cv1;
 			private readonly Conv cv2;
-			bool add;
+			private readonly bool add;
 
 			internal Bottleneck(int inChannels, int outChannels, (int, int) kernal, bool shortcut = true, int groups = 1, float e = 0.5f, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(Bottleneck))
 			{
@@ -89,11 +85,7 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor input)
 			{
-				using (NewDisposeScope())
-				{
-					Tensor re = cv2.forward(cv1.forward(input));
-					return add ? (input + re).MoveToOuterDisposeScope() : re.MoveToOuterDisposeScope();
-				}
+				return add ? cv2.forward(cv1.forward(input)) + input : cv2.forward(cv1.forward(input));
 			}
 		}
 
@@ -120,10 +112,7 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor input)
 			{
-				using (NewDisposeScope())
-				{
-					return cv3.forward(cat(new Tensor[] { m.forward(cv1.forward(input)), cv2.forward(input) }, 1)).MoveToOuterDisposeScope();
-				}
+				return cv3.forward(cat(new Tensor[] { m.forward(cv1.forward(input)), cv2.forward(input) }, 1));
 			}
 		}
 
@@ -143,10 +132,7 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor input)
 			{
-				using (NewDisposeScope())
-				{
-					return base.cv3.forward(cat(new Tensor[] { m.forward(base.cv1.forward(input)), base.cv2.forward(input) }, 1)).MoveToOuterDisposeScope();
-				}
+				return base.cv3.forward(cat(new Tensor[] { m.forward(base.cv1.forward(input)), base.cv2.forward(input) }, 1));
 			}
 		}
 
@@ -171,16 +157,14 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor input)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+				var y = this.cv1.forward(input).chunk(2, 1).ToList();
+				for (int i = 0; i < m.Count; i++)
 				{
-					var y = this.cv1.forward(input).chunk(2, 1).ToList();
-					for (int i = 0; i < m.Count; i++)
-					{
-						y.Add(m[i].call(y.Last()));
-					}
-					Tensor result = cv2.forward(cat(y, 1));
-					return result.MoveToOuterDisposeScope();
+					y.Add(m[i].call(y.Last()));
 				}
+				Tensor result = cv2.forward(cat(y, 1));
+				return result.MoveToOuterDisposeScope();
 			}
 		}
 
@@ -212,16 +196,15 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor input)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				List<Tensor> y = this.cv1.forward(input).chunk(2, 1).ToList();
+				for (int i = 0; i < m.Count; i++)
 				{
-					List<Tensor> y = this.cv1.forward(input).chunk(2, 1).ToList();
-					for (int i = 0; i < m.Count; i++)
-					{
-						y.Add(((Module<Tensor, Tensor>)m[i]).forward(y.Last()));
-					}
-					Tensor result = cv2.forward(cat(y, 1));
-					return result.MoveToOuterDisposeScope();
+					y.Add(((Module<Tensor, Tensor>)m[i]).forward(y.Last()));
 				}
+				Tensor result = cv2.forward(cat(y, 1));
+				return result.MoveToOuterDisposeScope();
 			}
 		}
 
@@ -242,14 +225,14 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor input)
 			{
-				using (NewDisposeScope())
-				{
-					Tensor x = cv1.forward(input);
-					Tensor y1 = m.forward(x);
-					Tensor y2 = m.forward(y1);
-					Tensor result = cv2.forward(cat(new[] { x, y1, y2, m.forward(y2) }, 1));
-					return result.MoveToOuterDisposeScope();
-				}
+				using var _ = NewDisposeScope();
+
+				Tensor x = cv1.forward(input);
+				Tensor y1 = m.forward(x);
+				Tensor y2 = m.forward(y1);
+				Tensor result = cv2.forward(cat(new[] { x, y1, y2, m.forward(y2) }, 1));
+				return result.MoveToOuterDisposeScope();
+
 			}
 		}
 
@@ -279,15 +262,13 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
-				{
-					Tensor[] ab = this.cv1.forward(x).split(new long[] { this.c, this.c }, dim: 1);
-					Tensor a = ab[0];
-					Tensor b = ab[1];
-					b = this.m.forward(b);
-					Tensor result = this.cv2.forward(torch.cat(new Tensor[] { a, b }, 1));
-					return result.MoveToOuterDisposeScope();
-				}
+				using var _ = NewDisposeScope();
+
+				Tensor[] ab = this.cv1.forward(x).split(new long[] { this.c, this.c }, dim: 1);
+				Tensor a = ab[0];
+				Tensor b = ab[1];
+				b = this.m.forward(b);
+				return this.cv2.forward(torch.cat(new Tensor[] { a, b }, 1)).MoveToOuterDisposeScope();
 			}
 		}
 
@@ -307,12 +288,9 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
-				{
-					x = this.add ? (x + this.attn.forward(x)) : this.attn.forward(x);
-					x = this.add ? (x + this.ffn.forward(x)) : this.ffn.forward(x);
-					return x.MoveToOuterDisposeScope();
-				}
+				x = this.add ? (x + this.attn.forward(x)) : this.attn.forward(x);
+				x = this.add ? (x + this.ffn.forward(x)) : this.ffn.forward(x);
+				return x;
 			}
 		}
 
@@ -349,62 +327,60 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				long B = x.shape[0];
+				long C = x.shape[1];
+				long H = x.shape[2];
+				long W = x.shape[3];
+
+				long N = H * W;
+
+				Tensor qkv = this.qkv.forward(x);
+
+				Tensor[] qkv_mix = qkv.view(B, this.num_heads, this.key_dim * 2 + this.head_dim, N).split(new long[] { this.key_dim, this.key_dim, this.head_dim }, dim: 2);
+				Tensor q = qkv_mix[0];
+				Tensor k = qkv_mix[1];
+				Tensor v = qkv_mix[2];
+
+				switch (attentionType)
 				{
-					long B = x.shape[0];
-					long C = x.shape[1];
-					long H = x.shape[2];
-					long W = x.shape[3];
+					case AttentionType.SelfAttention:
+						{
+							Tensor attn = q.transpose(-2, -1).matmul(k) * this.scale;
+							attn = attn.softmax(dim: -1);
+							x = (v.matmul(attn.transpose(-2, -1))).view(B, C, H, W) + this.pe.forward(v.reshape(B, C, H, W));
+							break;
+						}
+					case AttentionType.ScaledDotProductAttention:
+						{
+							q = q.transpose(-2, -1); // [B, num_heads, N, key_dim]
+							k = k.transpose(-2, -1); // [B, num_heads, N, key_dim]
+							v = v.transpose(-2, -1); // [B, num_heads, N, head_dim]
 
-					long N = H * W;
+							Tensor attn_output = functional.scaled_dot_product_attention(q, k, v, is_casual: false);
 
-					Tensor qkv = this.qkv.forward(x);
+							attn_output = attn_output.transpose(-2, -1); // [B, num_heads, N, head_dim]
+							attn_output = attn_output.contiguous();
 
-					Tensor[] qkv_mix = qkv.view(B, this.num_heads, this.key_dim * 2 + this.head_dim, N).split(new long[] { this.key_dim, this.key_dim, this.head_dim }, dim: 2);
-					Tensor q = qkv_mix[0];
-					Tensor k = qkv_mix[1];
-					Tensor v = qkv_mix[2];
-
-					switch (attentionType)
-					{
-						case AttentionType.SelfAttention:
+							if (B * this.num_heads * N * this.head_dim != B * C * H * W)
 							{
-								Tensor attn = q.transpose(-2, -1).matmul(k) * this.scale;
-								attn = attn.softmax(dim: -1);
-								x = (v.matmul(attn.transpose(-2, -1))).view(B, C, H, W) + this.pe.forward(v.reshape(B, C, H, W));
-								break;
+								throw new InvalidOperationException("Shape mismatch: Cannot reshape attn_output to [B, C, H, W].");
 							}
-						case AttentionType.ScaledDotProductAttention:
-							{
-								q = q.transpose(-2, -1); // [B, num_heads, N, key_dim]
-								k = k.transpose(-2, -1); // [B, num_heads, N, key_dim]
-								v = v.transpose(-2, -1); // [B, num_heads, N, head_dim]
 
-								Tensor attn_output = functional.scaled_dot_product_attention(q, k, v, is_casual: false);
-
-								attn_output = attn_output.transpose(-2, -1); // [B, num_heads, N, head_dim]
-								attn_output = attn_output.contiguous();
-
-								if (B * this.num_heads * N * this.head_dim != B * C * H * W)
-								{
-									throw new InvalidOperationException("Shape mismatch: Cannot reshape attn_output to [B, C, H, W].");
-								}
-
-								attn_output = attn_output.view(B, C, H, W);
-								x = attn_output + this.pe.forward(attn_output);
-								break;
-							}
-						default:
-							{
-								throw new NotImplementedException($"Attention type {this.attentionType} is not implemented.");
-							}
-					}
-
-					x = this.proj.forward(x);
-
-					return x.MoveToOuterDisposeScope();
+							attn_output = attn_output.view(B, C, H, W);
+							x = attn_output + this.pe.forward(attn_output);
+							break;
+						}
+					default:
+						{
+							throw new NotImplementedException($"Attention type {this.attentionType} is not implemented.");
+						}
 				}
 
+				x = this.proj.forward(x);
+
+				return x.MoveToOuterDisposeScope();
 			}
 		}
 
@@ -421,7 +397,7 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
+				// using (NewDisposeScope())
 				{
 					return this.cv2.forward(this.cv1.forward(x)).MoveToOuterDisposeScope();
 				}
@@ -448,16 +424,14 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor input)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				var y = this.cv1.forward(input).chunk(2, 1).ToList();
+				for (int i = 0; i < m.Count; i++)
 				{
-					var y = this.cv1.forward(input).chunk(2, 1).ToList();
-					for (int i = 0; i < m.Count; i++)
-					{
-						y.Add(m[i].call(y.Last()));
-					}
-					Tensor result = cv2.forward(cat(y, 1));
-					return result.MoveToOuterDisposeScope();
+					y.Add(m[i].call(y.Last()));
 				}
+				return cv2.forward(cat(y, 1)).MoveToOuterDisposeScope();
 			}
 		}
 
@@ -481,10 +455,7 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
-				{
-					return this.add ? (x + this.cv1.forward(x)).MoveToOuterDisposeScope() : this.cv1.forward(x).MoveToOuterDisposeScope();
-				}
+				return this.add ? (x + this.cv1.forward(x)) : this.cv1.forward(x);
 			}
 		}
 
@@ -566,25 +537,24 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				List<Tensor> y = new List<Tensor> { cv1.forward(x) };
+
+				foreach (var module in m.children())
 				{
-					List<Tensor> y = new List<Tensor> { cv1.forward(x) };
-
-					foreach (var module in m.children())
-					{
-						y.Add(((Module<Tensor, Tensor>)module).forward(y.Last()));
-					}
-
-					Tensor y_cat = torch.cat(y.ToArray(), 1);
-					Tensor output = cv2.forward(y_cat);
-
-					if (gamma is not null)
-					{
-						Tensor gamma_view = gamma.view(new long[] { -1, gamma.shape[0], 1, 1 });
-						return (x + gamma_view * output).MoveToOuterDisposeScope();
-					}
-					return output.MoveToOuterDisposeScope();
+					y.Add(((Module<Tensor, Tensor>)module).forward(y.Last()));
 				}
+
+				Tensor y_cat = torch.cat(y.ToArray(), 1);
+				Tensor output = cv2.forward(y_cat);
+
+				if (gamma is not null)
+				{
+					Tensor gamma_view = gamma.view(new long[] { -1, gamma.shape[0], 1, 1 });
+					return (x + gamma_view * output).MoveToOuterDisposeScope();
+				}
+				return output.MoveToOuterDisposeScope();
 			}
 		}
 
@@ -620,11 +590,10 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
-				{
-					x = x + this.attn.forward(x);
-					return (x + this.mlp.forward(x)).MoveToOuterDisposeScope();
-				}
+				using var _ = NewDisposeScope();
+
+				x = x + this.attn.forward(x);
+				return (x + this.mlp.forward(x)).MoveToOuterDisposeScope();
 			}
 		}
 
@@ -662,70 +631,70 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				long B = x.shape[0];
+				long C = x.shape[1];
+				long H = x.shape[2];
+				long W = x.shape[3];
+				long N = H * W;
+
+				Tensor qkv = this.qkv.forward(x).flatten(2).transpose(1, 2);
+
+				if (this.area > 1)
 				{
-					long B = x.shape[0];
-					long C = x.shape[1];
-					long H = x.shape[2];
-					long W = x.shape[3];
-					long N = H * W;
-
-					Tensor qkv = this.qkv.forward(x).flatten(2).transpose(1, 2);
-
-					if (this.area > 1)
-					{
-						qkv = qkv.reshape(B * this.area, N / this.area, C * 3);
-						B = qkv.shape[0];
-						N = qkv.shape[1];
-					}
-					Tensor[] qkv_mix = qkv.view(B, N, this.num_heads, this.head_dim * 3).permute(0, 2, 3, 1).split(new long[] { this.head_dim, this.head_dim, this.head_dim }, dim: 2);
-					Tensor q = qkv_mix[0];
-					Tensor k = qkv_mix[1];
-					Tensor v = qkv_mix[2];
-					if (this.attentionType == AttentionType.SelfAttention)
-					{
-						Tensor attn = (q.transpose(-2, -1).matmul(k)) * (float)Math.Pow(this.head_dim, -0.5);
-						attn = attn.softmax(dim: -1);
-						x = v.matmul(attn.transpose(-2, -1));
-						x = x.permute(0, 3, 1, 2);
-						v = v.permute(0, 3, 1, 2);
-					}
-					else if (this.attentionType == AttentionType.ScaledDotProductAttention)
-					{
-						// 调整维度为 (B, num_heads, seq_len, head_dim)
-						q = q.permute(0, 1, 3, 2); // [B, nh, N, hd]
-						k = k.permute(0, 1, 3, 2);
-						v = v.permute(0, 1, 3, 2);
-
-						// 使用内置的scaled_dot_product_attention
-						x = torch.nn.functional.scaled_dot_product_attention(q, k, v);
-
-						// 调整输出维度与原始实现一致
-						x = x.permute(0, 2, 1, 3)  // [B, N, nh, hd]
-							.reshape(B, N, -1);     // [B, N, C]
-
-						// 处理v的维度与原始实现一致
-						v = v.permute(0, 2, 1, 3)  // [B, N, nh, hd]
-							.reshape(B, N, -1);     // [B, N, C]
-					}
-					else
-					{
-						throw new NotImplementedException($"Attention type {this.attentionType} is not implemented.");
-					}
-
-					if (this.area > 1)
-					{
-						x = x.reshape(B / this.area, N * this.area, C);
-						v = v.reshape(B / this.area, N * this.area, C);
-						B = x.shape[0];
-						N = x.shape[1];
-					}
-
-					x = x.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous();
-					v = v.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous();
-					x = x + this.pe.forward(v);
-					return this.proj.forward(x).MoveToOuterDisposeScope();
+					qkv = qkv.reshape(B * this.area, N / this.area, C * 3);
+					B = qkv.shape[0];
+					N = qkv.shape[1];
 				}
+				Tensor[] qkv_mix = qkv.view(B, N, this.num_heads, this.head_dim * 3).permute(0, 2, 3, 1).split(new long[] { this.head_dim, this.head_dim, this.head_dim }, dim: 2);
+				Tensor q = qkv_mix[0];
+				Tensor k = qkv_mix[1];
+				Tensor v = qkv_mix[2];
+				if (this.attentionType == AttentionType.SelfAttention)
+				{
+					Tensor attn = (q.transpose(-2, -1).matmul(k)) * (float)Math.Pow(this.head_dim, -0.5);
+					attn = attn.softmax(dim: -1);
+					x = v.matmul(attn.transpose(-2, -1));
+					x = x.permute(0, 3, 1, 2);
+					v = v.permute(0, 3, 1, 2);
+				}
+				else if (this.attentionType == AttentionType.ScaledDotProductAttention)
+				{
+					// 调整维度为 (B, num_heads, seq_len, head_dim)
+					q = q.permute(0, 1, 3, 2); // [B, nh, N, hd]
+					k = k.permute(0, 1, 3, 2);
+					v = v.permute(0, 1, 3, 2);
+
+					// 使用内置的scaled_dot_product_attention
+					x = torch.nn.functional.scaled_dot_product_attention(q, k, v);
+
+					// 调整输出维度与原始实现一致
+					x = x.permute(0, 2, 1, 3)  // [B, N, nh, hd]
+						.reshape(B, N, -1);     // [B, N, C]
+
+					// 处理v的维度与原始实现一致
+					v = v.permute(0, 2, 1, 3)  // [B, N, nh, hd]
+						.reshape(B, N, -1);     // [B, N, C]
+				}
+				else
+				{
+					throw new NotImplementedException($"Attention type {this.attentionType} is not implemented.");
+				}
+
+				if (this.area > 1)
+				{
+					x = x.reshape(B / this.area, N * this.area, C);
+					v = v.reshape(B / this.area, N * this.area, C);
+					B = x.shape[0];
+					N = x.shape[1];
+				}
+
+				x = x.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous();
+				v = v.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous();
+				x = x + this.pe.forward(v);
+				return this.proj.forward(x).MoveToOuterDisposeScope();
+
 			}
 		}
 
@@ -746,10 +715,7 @@ namespace YoloSharp
 			}
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
-				{
-					return this.act.forward(this.conv.forward(x) + this.conv1.forward(x)).MoveToOuterDisposeScope();
-				}
+				return this.act.forward(this.conv.forward(x) + this.conv1.forward(x));
 			}
 		}
 
@@ -769,13 +735,10 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
-				{
-					long b = x.shape[0];  // batch, channels, anchors
-					long a = x.shape[2];
+				long b = x.shape[0];  // batch, channels, anchors
+				long a = x.shape[2];
+				return this.conv.forward(x.view(b, 4, this.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a);
 
-					return this.conv.forward(x.view(b, 4, this.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a).MoveToOuterDisposeScope();
-				}
 			}
 		}
 
@@ -789,10 +752,7 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor[] input)
 			{
-				using (NewDisposeScope())
-				{
-					return torch.concat(input, dim: dim).MoveToOuterDisposeScope();
-				}
+				return torch.concat(input, dim: dim);
 			}
 		}
 
@@ -834,86 +794,84 @@ namespace YoloSharp
 
 			public override Tensor[] forward(Tensor[] x)
 			{
-				using (NewDisposeScope())
+				using var _ = NewDisposeScope();
+
+				this.device = x[0].device;
+				this.scalarType = x[0].dtype;
+
+				List<Tensor> z = new List<Tensor>();
+				Tensor stride = tensor(new int[] { 8, 16, 32 }, dtype: scalarType, device: device);  //strides computed during build
+				for (int i = 0; i < nl; i++)
 				{
-					this.device = x[0].device;
-					this.scalarType = x[0].dtype;
-
-					List<Tensor> z = new List<Tensor>();
-					Tensor stride = tensor(new int[] { 8, 16, 32 }, dtype: scalarType, device: device);  //strides computed during build
-					for (int i = 0; i < nl; i++)
+					x[i] = ((Module<Tensor, Tensor>)m[i]).forward(x[i]);
+					long bs = x[i].shape[0];
+					int ny = (int)x[i].shape[2];
+					int nx = (int)x[i].shape[3];
+					x[i] = x[i].view(bs, na, no, ny, nx).permute(0, 1, 3, 4, 2).contiguous();
+					if (!training)
 					{
-						x[i] = ((Module<Tensor, Tensor>)m[i]).forward(x[i]);
-						long bs = x[i].shape[0];
-						int ny = (int)x[i].shape[2];
-						int nx = (int)x[i].shape[3];
-						x[i] = x[i].view(bs, na, no, ny, nx).permute(0, 1, 3, 4, 2).contiguous();
-						if (!training)
-						{
-							var (grid, anchor_grid) = _make_grid(nx, ny, i);
-							Tensor[] re = x[i].sigmoid().split(new long[] { 2, 2, nc + 1 }, 4);
-							Tensor xy = re[0];
-							Tensor wh = re[1];
-							Tensor conf = re[2];
+						var (grid, anchor_grid) = _make_grid(nx, ny, i);
+						Tensor[] re = x[i].sigmoid().split(new long[] { 2, 2, nc + 1 }, 4);
+						Tensor xy = re[0];
+						Tensor wh = re[1];
+						Tensor conf = re[2];
 
-							xy = (xy * 2 + grid) * stride[i];  // xy
-							wh = (wh * 2).pow(2) * anchor_grid;  // wh
-							Tensor y = cat(new Tensor[] { xy, wh, conf }, 4);
-							z.Add(y.view(bs, na * nx * ny, no));
-						}
-					}
-
-					if (training)
-					{
-						for (int i = 0; i < x.Length; i++)
-						{
-							x[i] = x[i].MoveToOuterDisposeScope();
-						}
-						return x;
-					}
-					else
-					{
-						var list = new List<Tensor>() { cat(z, 1) };
-						Tensor[] result = list.ToArray();
-						for (int i = 0; i < result.Length; i++)
-						{
-							result[i] = result[i].MoveToOuterDisposeScope();
-						}
-						return result;
+						xy = (xy * 2 + grid) * stride[i];  // xy
+						wh = (wh * 2).pow(2) * anchor_grid;  // wh
+						Tensor y = cat(new Tensor[] { xy, wh, conf }, 4);
+						z.Add(y.view(bs, na * nx * ny, no));
 					}
 				}
+
+				if (training)
+				{
+					for (int i = 0; i < x.Length; i++)
+					{
+						x[i] = x[i].MoveToOuterDisposeScope();
+					}
+					return x;
+				}
+				else
+				{
+					var list = new List<Tensor>() { cat(z, 1) };
+					Tensor[] result = list.ToArray();
+					for (int i = 0; i < result.Length; i++)
+					{
+						result[i] = result[i].MoveToOuterDisposeScope();
+					}
+					return result;
+				}
+
 			}
 
 			private (Tensor, Tensor) _make_grid(int nx = 20, int ny = 20, int i = 0)
 			{
-				using (NewDisposeScope())
+				float[] an = new float[this.anchors.Length * this.anchors[0].Length];
+				for (int ii = 0; ii < this.anchors.Length; ii++)
 				{
-					float[] an = new float[this.anchors.Length * this.anchors[0].Length];
-					for (int ii = 0; ii < this.anchors.Length; ii++)
+					for (int j = 0; j < this.anchors[1].Length; j++)
 					{
-						for (int j = 0; j < this.anchors[1].Length; j++)
-						{
-							an[ii * this.anchors[0].Length + j] = this.anchors[ii][j];
-						}
+						an[ii * this.anchors[0].Length + j] = this.anchors[ii][j];
 					}
-					Tensor anchors = tensor(an, new long[] { this.anchors.Length, this.anchors[0].Length / 2, 2 }, dtype: scalarType, device: device);
-					Tensor stride = tensor(new int[] { 8, 16, 32 }, dtype: scalarType, device: device);  //strides computed during build
-																										 //Tensor stride = tensor(ch, dtype: scalarType, device: device) / 8;  //strides computed during build
-					var d = anchors[i].device;
-					var t = anchors[i].dtype;
-
-					long[] shape = new long[] { 1, na, ny, nx, 2 }; // grid shape
-					Tensor y = arange(ny, t, d);
-					Tensor x = arange(nx, t, d);
-					Tensor[] xy = meshgrid(new Tensor[] { y, x }, indexing: "ij");
-					Tensor yv = xy[0];
-					Tensor xv = xy[1];
-					Tensor grid = stack(new Tensor[] { xv, yv }, 2).expand(shape) - 0.5f;  // add grid offset, i.e. y = 2.0 * x - 0.5
-
-					Tensor anchor_grid = (anchors[i] * stride[i]).view(new long[] { 1, na, 1, 1, 2 }).expand(shape);
-
-					return (grid.MoveToOuterDisposeScope(), anchor_grid.MoveToOuterDisposeScope());
 				}
+				Tensor anchors = tensor(an, new long[] { this.anchors.Length, this.anchors[0].Length / 2, 2 }, dtype: scalarType, device: device);
+				Tensor stride = tensor(new int[] { 8, 16, 32 }, dtype: scalarType, device: device);  //strides computed during build
+																									 //Tensor stride = tensor(ch, dtype: scalarType, device: device) / 8;  //strides computed during build
+				var d = anchors[i].device;
+				var t = anchors[i].dtype;
+
+				long[] shape = new long[] { 1, na, ny, nx, 2 }; // grid shape
+				Tensor y = arange(ny, t, d);
+				Tensor x = arange(nx, t, d);
+				Tensor[] xy = meshgrid(new Tensor[] { y, x }, indexing: "ij");
+				Tensor yv = xy[0];
+				Tensor xv = xy[1];
+				Tensor grid = stack(new Tensor[] { xv, yv }, 2).expand(shape) - 0.5f;  // add grid offset, i.e. y = 2.0 * x - 0.5
+
+				Tensor anchor_grid = (anchors[i] * stride[i]).view(new long[] { 1, na, 1, 1, 2 }).expand(shape);
+
+				return (grid, anchor_grid);
+
 			}
 		}
 
@@ -925,7 +883,7 @@ namespace YoloSharp
 			private Tensor strides = torch.empty(0); // init
 
 			private readonly int nc;
-			private readonly int nl;
+			protected readonly int nl;
 			private readonly int reg_max;
 			private readonly int no;
 			private readonly int[] stride;
@@ -963,63 +921,60 @@ namespace YoloSharp
 				}
 
 				this.dfl = this.reg_max > 1 ? new DFL(this.reg_max, device: device, dtype: dtype) : nn.Identity();
-				//RegisterComponents();
+				// RegisterComponents();
 			}
 
 			public override Tensor[] forward(Tensor[] x)
 			{
-				using (NewDisposeScope())
-				{
-					for (int i = 0; i < nl; i++)
-					{
-						x[i] = torch.cat(new Tensor[] { cv2[i].forward(x[i]), cv3[i].forward(x[i]) }, 1).MoveToOuterDisposeScope();
-					}
+				using var _ = NewDisposeScope();
 
-					if (training)
+				for (int i = 0; i < nl; i++)
+				{
+					x[i] = torch.cat(new Tensor[] { cv2[i].forward(x[i]), cv3[i].forward(x[i]) }, 1).MoveToOuterDisposeScope();
+				}
+
+				if (training)
+				{
+					return x;
+				}
+				else
+				{
+					Tensor y = _inference(x);
+					Tensor[] results = new Tensor[] { y }.Concat(x).ToArray();
+					for (int i = 0; i < results.Length; i++)
 					{
-						return x;
+						results[i] = results[i].MoveToOuterDisposeScope();
 					}
-					else
-					{
-						Tensor y = _inference(x);
-						Tensor[] results = new Tensor[] { y }.Concat(x).ToArray();
-						for (int i = 0; i < results.Length; i++)
-						{
-							results[i] = results[i].MoveToOuterDisposeScope();
-						}
-						return results;
-					}
+					return results;
 				}
 			}
 
 			//Decode predicted bounding boxes and class probabilities based on multiple-level feature maps.
 			private Tensor _inference(Tensor[] x)
 			{
-				using (NewDisposeScope())
+				long[] shape = x[0].shape;  // BCHW
+
+				List<Tensor> xi_mix = new List<Tensor>();
+				foreach (var xi in x)
 				{
-					long[] shape = x[0].shape;  // BCHW
-
-					List<Tensor> xi_mix = new List<Tensor>();
-					foreach (var xi in x)
-					{
-						xi_mix.Add(xi.view(shape[0], this.no, -1));
-					}
-					Tensor x_cat = torch.cat(xi_mix, 2);
-
-					if (this.shape != shape)
-					{
-						var (anchors, strides) = make_anchors(x, this.stride, 0.5f);
-						this.anchors = anchors.transpose(0, 1);
-						this.strides = strides.transpose(0, 1);
-						this.shape = shape;
-					}
-
-					Tensor[] box_cls = x_cat.split(new long[] { this.reg_max * 4, this.nc }, 1);
-					Tensor box = box_cls[0];
-					Tensor cls = box_cls[1];
-					Tensor dbox = decode_bboxes(this.dfl.forward(box), this.anchors.unsqueeze(0)) * this.strides;
-					return torch.cat(new Tensor[] { dbox, cls.sigmoid() }, 1).MoveToOuterDisposeScope();
+					xi_mix.Add(xi.view(shape[0], this.no, -1));
 				}
+				Tensor x_cat = torch.cat(xi_mix, 2);
+
+				if (this.shape != shape)
+				{
+					var (anchors, strides) = make_anchors(x, this.stride, 0.5f);
+					this.anchors = anchors.transpose(0, 1);
+					this.strides = strides.transpose(0, 1);
+					this.shape = shape;
+				}
+
+				Tensor[] box_cls = x_cat.split(new long[] { this.reg_max * 4, this.nc }, 1);
+				Tensor box = box_cls[0];
+				Tensor cls = box_cls[1];
+				Tensor dbox = decode_bboxes(this.dfl.forward(box), this.anchors.unsqueeze(0)) * this.strides;
+				return torch.cat(new Tensor[] { dbox, cls.sigmoid() }, 1);
+
 			}
 
 			// Decode bounding boxes.
@@ -1031,47 +986,43 @@ namespace YoloSharp
 			// Transform distance(ltrb) to box(xywh or xyxy).
 			private Tensor dist2bbox(Tensor distance, Tensor anchor_points, bool xywh = true, int dim = -1)
 			{
-				using (NewDisposeScope())
+				Tensor[] ltrb = distance.chunk(2, dim);
+				Tensor lt = ltrb[0];
+				Tensor rb = ltrb[1];
+
+				Tensor x1y1 = anchor_points - lt;
+				Tensor x2y2 = anchor_points + rb;
+
+				if (xywh)
 				{
-					Tensor[] ltrb = distance.chunk(2, dim);
-					Tensor lt = ltrb[0];
-					Tensor rb = ltrb[1];
-
-					Tensor x1y1 = anchor_points - lt;
-					Tensor x2y2 = anchor_points + rb;
-
-					if (xywh)
-					{
-						Tensor c_xy = (x1y1 + x2y2) / 2;
-						Tensor wh = x2y2 - x1y1;
-						return torch.cat(new Tensor[] { c_xy, wh }, dim).MoveToOuterDisposeScope();  // xywh bbox
-					}
-					return torch.cat(new Tensor[] { x1y1, x2y2 }, dim).MoveToOuterDisposeScope(); // xyxy bbox
+					Tensor c_xy = (x1y1 + x2y2) / 2;
+					Tensor wh = x2y2 - x1y1;
+					return torch.cat(new Tensor[] { c_xy, wh }, dim);  // xywh bbox
 				}
+				return torch.cat(new Tensor[] { x1y1, x2y2 }, dim); // xyxy bbox
+
 			}
 
 			private (Tensor, Tensor) make_anchors(Tensor[] feats, int[] strides, float grid_cell_offset = 0.5f)
 			{
-				using (NewDisposeScope())
+				torch.ScalarType dtype = feats[0].dtype;
+				Device device = feats[0].device;
+				List<Tensor> anchor_points = new List<Tensor>();
+				List<Tensor> stride_tensor = new List<Tensor>();
+				for (int i = 0; i < strides.Length; i++)
 				{
-					torch.ScalarType dtype = feats[0].dtype;
-					Device device = feats[0].device;
-					List<Tensor> anchor_points = new List<Tensor>();
-					List<Tensor> stride_tensor = new List<Tensor>();
-					for (int i = 0; i < strides.Length; i++)
-					{
-						long h = feats[i].shape[2];
-						long w = feats[i].shape[3];
-						Tensor sx = torch.arange(w, device: device, dtype: dtype) + grid_cell_offset;  // shift x
-						Tensor sy = torch.arange(h, device: device, dtype: dtype) + grid_cell_offset;  // shift y
-						Tensor[] sy_sx = torch.meshgrid(new Tensor[] { sy, sx }, indexing: "ij");
-						sy = sy_sx[0];
-						sx = sy_sx[1];
-						anchor_points.Add(torch.stack(new Tensor[] { sx, sy }, -1).view(-1, 2));
-						stride_tensor.Add(torch.full(new long[] { h * w, 1 }, strides[i], dtype: dtype, device: device));
-					}
-					return (torch.cat(anchor_points).MoveToOuterDisposeScope(), torch.cat(stride_tensor).MoveToOuterDisposeScope());
+					long h = feats[i].shape[2];
+					long w = feats[i].shape[3];
+					Tensor sx = torch.arange(w, device: device, dtype: dtype) + grid_cell_offset;  // shift x
+					Tensor sy = torch.arange(h, device: device, dtype: dtype) + grid_cell_offset;  // shift y
+					Tensor[] sy_sx = torch.meshgrid(new Tensor[] { sy, sx }, indexing: "ij");
+					sy = sy_sx[0];
+					sx = sy_sx[1];
+					anchor_points.Add(torch.stack(new Tensor[] { sx, sy }, -1).view(-1, 2));
+					stride_tensor.Add(torch.full(new long[] { h * w, 1 }, strides[i], dtype: dtype, device: device));
 				}
+				return (torch.cat(anchor_points), torch.cat(stride_tensor));
+
 			}
 
 		}
@@ -1093,10 +1044,7 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor x)
 			{
-				using (NewDisposeScope())
-				{
-					return this.cv3.forward(this.cv2.forward(this.upsample.forward(this.cv1.forward(x)))).MoveToOuterDisposeScope();
-				}
+				return this.cv3.forward(this.cv2.forward(this.upsample.forward(this.cv1.forward(x))));
 			}
 		}
 
@@ -1124,26 +1072,106 @@ namespace YoloSharp
 
 			public override Tensor[] forward(Tensor[] x)
 			{
-				using (NewDisposeScope())
-				{
-					Tensor p = this.proto.forward(x[0]); // mask protos
-					long bs = p.shape[0]; //batch size
+				using var _ = NewDisposeScope();
 
-					var mc = torch.cat(this.cv4.Select((module, i) => module.forward(x[i]).view(bs, this.nm, -1)).ToArray(), dim: 2); // mask coefficients				x = base.forward(x);
-					x = base.forward(x);
-					if (this.training)
+				Tensor p = this.proto.forward(x[0]); // mask protos
+				long bs = p.shape[0]; //batch size
+
+				var mc = torch.cat(this.cv4.Select((module, i) => module.forward(x[i]).view(bs, this.nm, -1)).ToArray(), dim: 2); // mask coefficients				x = base.forward(x);
+				x = base.forward(x);
+				if (this.training)
+				{
+					x = (x.Append(mc).Append(p)).ToArray();
+					for (int i = 0; i < x.Length; i++)
 					{
-						x = (x.Append(mc).Append(p)).ToArray();
-						for (int i = 0; i < x.Length; i++)
-						{
-							x[i] = x[i].MoveToOuterDisposeScope();
-						}
-						return x;
+						x[i] = x[i].MoveToOuterDisposeScope();
 					}
-					else
-					{
-						return new Tensor[] { torch.cat(new Tensor[] { x[0], mc }, dim: 1).MoveToOuterDisposeScope(), x[1].MoveToOuterDisposeScope(), x[2].MoveToOuterDisposeScope(), x[3].MoveToOuterDisposeScope(), p.MoveToOuterDisposeScope() };
-					}
+					return x;
+				}
+				else
+				{
+					return new Tensor[] { torch.cat(new Tensor[] { x[0], mc }, dim: 1).MoveToOuterDisposeScope(), x[1].MoveToOuterDisposeScope(), x[2].MoveToOuterDisposeScope(), x[3].MoveToOuterDisposeScope(), p.MoveToOuterDisposeScope() };
+				}
+			}
+		}
+
+		public class OBB : YolovDetect
+		{
+			private readonly int ne;
+			private readonly ModuleList<Sequential> cv4 = new ModuleList<Sequential>();
+			private Tensor angle;
+
+			public OBB(int[] ch, int nc = 80, int ne = 1, bool legacy = true, Device? device = null, torch.ScalarType? dtype = null) : base(nc, ch, legacy: legacy, device: device, dtype: dtype)
+			{
+				this.ne = ne;  // number of extra parameters
+				int c4 = Math.Max(ch[0] / 4, this.ne);
+
+				foreach (int x in ch)
+				{
+					cv4.append(nn.Sequential(new Conv(x, c4, 3, device: device, dtype: dtype), new Conv(c4, c4, 3, device: device, dtype: dtype), nn.Conv2d(c4, this.ne, 1, device: device, dtype: dtype)));
+				}
+				RegisterComponents();
+			}
+
+			public override Tensor[] forward(Tensor[] x)
+			{
+				long bs = x[0].shape[0];  // batch size
+				List<Tensor> cat = new List<Tensor>();
+				for (int i = 0; i < this.nl; i++)
+				{
+					cat.Add(this.cv4[i].forward(x[i]).view(bs, this.ne, -1));
+				}
+				Tensor angle = torch.cat(cat, 2);  // OBB theta logits																							// NOTE: set `angle` as an attribute so that `decode_bboxes` could use it.
+				angle = (angle.sigmoid() - 0.25f) * MathF.PI;  // [-pi/4, 3pi/4]
+															   // angle = angle.sigmoid() * math.pi / 2  # [0, pi/2]
+
+				if (!this.training)
+				{
+					this.angle = angle;
+				}
+
+				x = base.forward(x);
+
+				if (this.training)
+				{
+					return x.Concat(new Tensor[] { angle }).ToArray();
+				}
+				return new Tensor[] { torch.cat(new Tensor[] { x[0], angle }, 1), x[1], angle };
+
+			}
+
+			//Decode rotated bounding boxes.
+			private Tensor decode_bboxes(Tensor bboxes, Tensor anchors)
+			{
+				return dist2rbox(bboxes, this.angle, anchors, dim: 1);
+			}
+
+			/// <summary>
+			/// Decode predicted rotated bounding box coordinates from anchor points and distribution.
+			/// </summary>
+			/// <param name="pred_dist">Predicted rotated distance with shape (bs, h*w, 4).</param>
+			/// <param name="pred_angle">Predicted angle with shape (bs, h*w, 1).</param>
+			/// <param name="anchor_points">Anchor points with shape (h*w, 2).</param>
+			/// <param name="dim">Dimension along which to split. Defaults to -1.</param>
+			/// <returns>Predicted rotated bounding boxes with shape (bs, h*w, 4).</returns>
+			private Tensor dist2rbox(Tensor pred_dist, Tensor pred_angle, Tensor anchor_points, int dim = -1)
+			{
+				// using (NewDisposeScope())
+				{
+					Tensor[] lt_rb = pred_dist.split(2, dim: dim);
+					Tensor lt = lt_rb[0]; // (bs, h*w, 2)
+					Tensor rb = lt_rb[1]; // (bs, h*w, 2)
+
+					Tensor cos = torch.cos(pred_angle);
+					Tensor sin = torch.sin(pred_angle);
+					// (bs, h*w, 1)
+					Tensor[] xf_yf = ((rb - lt) / 2).split(1, dim: dim);
+					Tensor xf = xf_yf[0]; // (bs, h*w, 1)
+					Tensor yf = xf_yf[1]; // (bs, h*w, 1)
+					Tensor x = xf * cos - yf * sin;
+					Tensor y = xf * sin + yf * cos;
+					Tensor xy = torch.cat(new Tensor[] { x, y }, dim: dim) + anchor_points;
+					return torch.cat(new Tensor[] { xy, lt + rb }, dim: dim).MoveToOuterDisposeScope();
 				}
 			}
 		}

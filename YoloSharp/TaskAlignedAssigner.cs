@@ -59,6 +59,7 @@ namespace YoloSharp
 		private (Tensor, Tensor, Tensor) get_pos_mask(Tensor pd_scores, Tensor pd_bboxes, Tensor gt_labels, Tensor gt_bboxes, Tensor anc_points, Tensor mask_gt)
 		{
 			using var _ = NewDisposeScope();
+
 			var mask_in_gts = select_candidates_in_gts(anc_points, gt_bboxes);
 			var (align_metric, overlaps) = get_box_metrics(pd_scores, pd_bboxes, gt_labels, gt_bboxes, mask_in_gts * mask_gt);
 			var mask_topk = select_topk_candidates(align_metric, topk_mask: mask_gt.expand(bs, n_max_boxes, topk).to_type(torch.ScalarType.Bool));
@@ -70,6 +71,7 @@ namespace YoloSharp
 		private Tensor GetBboxScoresUsingGather(Tensor pdScores, Tensor ind, Tensor maskGt)
 		{
 			using var _ = NewDisposeScope();
+
 			// Extract the batch size, number of proposals, and the number of classes
 			var bs = pdScores.shape[0];
 			var numProposals = pdScores.shape[1];
@@ -91,7 +93,9 @@ namespace YoloSharp
 
 		private (Tensor, Tensor) get_box_metrics(Tensor pd_scores, Tensor pd_bboxes, Tensor gt_labels, Tensor gt_bboxes, Tensor mask_gt)
 		{
+
 			using var _ = NewDisposeScope();
+
 			var na = pd_bboxes.shape[1];
 			mask_gt = mask_gt.to_type(torch.ScalarType.Bool);
 
@@ -126,14 +130,13 @@ namespace YoloSharp
 
 		private Tensor iou_calculation(Tensor gt_bboxes, Tensor pd_bboxes)
 		{
-			using var _ = NewDisposeScope();
-			Tensor result = bbox_iou(gt_bboxes, pd_bboxes, xywh: false, CIoU: true).squeeze(-1).clamp(0);
-			return result.MoveToOuterDisposeScope();
+			return bbox_iou(gt_bboxes, pd_bboxes, xywh: false, CIoU: true).squeeze(-1).clamp(0);
 		}
 
 		private Tensor select_topk_candidates(Tensor metrics, bool largest = true, Tensor topk_mask = null)
 		{
 			using var _ = NewDisposeScope();
+
 			var topk_metrics = torch.topk(metrics, topk, dim: -1, largest: largest).values;
 			var topk_idxs = torch.topk(metrics, topk, dim: -1, largest: largest).indices;
 
@@ -159,6 +162,7 @@ namespace YoloSharp
 		private (Tensor, Tensor, Tensor) get_targets(Tensor gt_labels, Tensor gt_bboxes, Tensor target_gt_idx, Tensor fg_mask)
 		{
 			using var _ = NewDisposeScope();
+
 			var batch_ind = torch.arange(bs, dtype: torch.int64, device: gt_labels.device).view(-1, 1);
 			target_gt_idx = target_gt_idx + batch_ind * n_max_boxes;
 			var target_labels = gt_labels.@long().flatten()[target_gt_idx];
@@ -182,25 +186,26 @@ namespace YoloSharp
 
 		private Tensor select_candidates_in_gts(Tensor xy_centers, Tensor gt_bboxes, float eps = 1e-9f)
 		{
-			using (NewDisposeScope())
-			{
-				var n_anchors = xy_centers.shape[0];
-				//var (bs, n_boxes, _) = gt_bboxes.shape;
-				long bs = gt_bboxes.shape[0];
-				long n_boxes = gt_bboxes.shape[1];
-				//var (lt, rb) = gt_bboxes.view(-1, 1, 4).chunk(2, dim: 2);
-				Tensor[] lt_rb = gt_bboxes.view(-1, 1, 4).chunk(2, dim: 2);
-				Tensor lt = lt_rb[0];
-				Tensor rb = lt_rb[1];
+			using var _ = NewDisposeScope();
 
-				var bbox_deltas = torch.cat(new Tensor[] { xy_centers[TensorIndex.None] - lt, rb - xy_centers[TensorIndex.None] }, dim: 2).view(bs, n_boxes, n_anchors, -1);
-				return bbox_deltas.amin(dims: new long[] { 3 }).gt_(eps).MoveToOuterDisposeScope();
-			}
+			var n_anchors = xy_centers.shape[0];
+			//var (bs, n_boxes, _) = gt_bboxes.shape;
+			long bs = gt_bboxes.shape[0];
+			long n_boxes = gt_bboxes.shape[1];
+			//var (lt, rb) = gt_bboxes.view(-1, 1, 4).chunk(2, dim: 2);
+			Tensor[] lt_rb = gt_bboxes.view(-1, 1, 4).chunk(2, dim: 2);
+			Tensor lt = lt_rb[0];
+			Tensor rb = lt_rb[1];
+
+			var bbox_deltas = torch.cat(new Tensor[] { xy_centers[TensorIndex.None] - lt, rb - xy_centers[TensorIndex.None] }, dim: 2).view(bs, n_boxes, n_anchors, -1);
+			return bbox_deltas.amin(dims: new long[] { 3 }).gt_(eps).MoveToOuterDisposeScope();
+
 		}
 
 		private (Tensor, Tensor, Tensor) select_highest_overlaps(Tensor mask_pos, Tensor overlaps, long n_max_boxes)
 		{
 			using var _ = NewDisposeScope();
+
 			var fg_mask = mask_pos.sum(dim: -2);
 
 			if (fg_mask.amax().ToSingle() > 1)
@@ -222,6 +227,7 @@ namespace YoloSharp
 		private Tensor bbox_iou(Tensor box1, Tensor box2, bool xywh = true, bool GIoU = false, bool DIoU = false, bool CIoU = false, float eps = 1e-7f)
 		{
 			using var _ = NewDisposeScope();
+
 			Tensor b1_x1, b1_x2, b1_y1, b1_y2;
 			Tensor b2_x1, b2_x2, b2_y1, b2_y2;
 			Tensor w1, h1, w2, h2;

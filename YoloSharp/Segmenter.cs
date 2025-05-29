@@ -181,7 +181,8 @@ namespace YoloSharp
 
 			tensor = torch.nn.functional.pad(tensor, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros);
 
-			Tensor[] outputs = yolo.forward(tensor.cuda());
+			Tensor[] outputs = yolo.forward(tensor);
+
 			List<Tensor> preds = NonMaxSuppression(outputs[0], PredictThreshold, IouThreshold);
 			Tensor proto = outputs[4];
 
@@ -275,7 +276,6 @@ namespace YoloSharp
 
 		private List<Tensor> NonMaxSuppression(Tensor prediction, float confThreshold = 0.25f, float iouThreshold = 0.45f, bool agnostic = false, int max_det = 300, int nc = 80)
 		{
-			using var _ = NewDisposeScope();
 			// Checks
 			if (confThreshold < 0 || confThreshold > 1)
 			{
@@ -337,7 +337,6 @@ namespace YoloSharp
 				i = i[TensorIndex.Slice(0, max_det)]; // limit detections
 
 				output[xi] = x[i];
-				output[xi] = output[xi].MoveToOuterDisposeScope();
 
 				if ((DateTime.Now - t).TotalSeconds > time_limit)
 				{
@@ -353,7 +352,6 @@ namespace YoloSharp
 
 		private Tensor process_mask(Tensor protos, Tensor masks_in, Tensor bboxes, long[] shape, bool upsample = false)
 		{
-			using var _ = NewDisposeScope();
 			long c = protos.shape[0]; //  # CHW
 			long mh = protos.shape[1];
 			long mw = protos.shape[2];
@@ -377,7 +375,7 @@ namespace YoloSharp
 			{
 				masks = torch.nn.functional.interpolate(masks[TensorIndex.None], size: shape, mode: InterpolationMode.Bilinear, align_corners: false)[0];// # CHW
 			}
-			return masks.gt_(0.0).MoveToOuterDisposeScope();
+			return masks.gt_(0.0);
 
 		}
 
@@ -389,7 +387,6 @@ namespace YoloSharp
 		/// <returns>The masks are being cropped to the bounding box.</returns>
 		private Tensor crop_mask(Tensor masks, Tensor boxes)
 		{
-			using var _ = NewDisposeScope();
 			long h = masks.shape[1];
 			long w = masks.shape[2];
 			Tensor[] x1y1x2y2 = torch.chunk(boxes[.., .., TensorIndex.None], 4, 1);  // x1 shape(n,1,1)
@@ -400,7 +397,7 @@ namespace YoloSharp
 			Tensor r = torch.arange(w, device: masks.device, dtype: x1.dtype)[TensorIndex.None, TensorIndex.None, ..];  // rows shape(1,1,w)
 			Tensor c = torch.arange(h, device: masks.device, dtype: x1.dtype)[TensorIndex.None, .., TensorIndex.None];  // cols shape(1,h,1)
 
-			return (masks * ((r >= x1) * (r < x2) * (c >= y1) * (c < y2))).MoveToOuterDisposeScope();
+			return (masks * ((r >= x1) * (r < x2) * (c >= y1) * (c < y2)));
 		}
 
 	}
