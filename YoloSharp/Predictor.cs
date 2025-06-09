@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+﻿using SkiaSharp;
 using System.Text.RegularExpressions;
 using TorchSharp;
 using TorchSharp.Modules;
@@ -175,7 +175,7 @@ namespace YoloSharp
 			return lossValue;
 		}
 
-		public List<PredictResult> ImagePredict(ImageMagick.MagickImage image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		public List<PredictResult> ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
 		{
 			Tensor orgImage = Lib.GetTensorFromImage(image).to(dtype, device);
 			orgImage = torch.stack(new Tensor[] { orgImage[2], orgImage[1], orgImage[0] }, dim: 0).unsqueeze(0) / 255.0f;

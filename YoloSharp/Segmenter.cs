@@ -1,4 +1,5 @@
-﻿using System.Text.RegularExpressions;
+﻿using SkiaSharp;
+using System.Text.RegularExpressions;
 using TorchSharp;
 using TorchSharp.Modules;
 using static TorchSharp.torch;
@@ -166,7 +167,7 @@ namespace YoloSharp
 		}
 
 
-		public (List<SegmentResult>, ImageMagick.MagickImage) ImagePredict(ImageMagick.MagickImage image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f, int imgSize = 640)
+		public (List<SegmentResult>, SKBitmap) ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f, int imgSize = 640)
 		{
 			yolo.eval();
 			Tensor orgImage = Lib.GetTensorFromImage(image).to(dtype, device);
@@ -187,7 +188,7 @@ namespace YoloSharp
 			Tensor proto = outputs[4];
 
 			List<SegmentResult> results = new List<SegmentResult>();
-			ImageMagick.MagickImage maskBitmap = new ImageMagick.MagickImage();
+			SKBitmap maskBitmap = new SKBitmap();
 			if (proto.shape[0] > 0)
 			{
 				if (!Equals(preds[0], null))

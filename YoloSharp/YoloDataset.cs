@@ -1,5 +1,4 @@
-﻿using ImageMagick;
-using ImageMagick.Drawing;
+﻿using SkiaSharp;
 using System.Drawing;
 using TorchSharp;
 using static TorchSharp.torch;
@@ -236,16 +235,33 @@ namespace YoloSharp
 				labelArray[i, 3] = width;
 				labelArray[i, 4] = height;
 
-				MagickImage bitmap = new MagickImage(MagickColors.Black, (uint)maskSize, (uint)maskSize);
-				var drawables = new Drawables()
-						.FillColor(MagickColors.White)
-						//.StrokeColor(MagickColors.Transparent) 
-						.Polygon(points.Select(p => new PointD(p.X, p.Y)).ToArray());
+				using (var bitmap = new SKBitmap(maskSize, maskSize, SKColorType.Rgba8888, SKAlphaType.Premul))
+				using (var canvas = new SKCanvas(bitmap))
+				{
+					// Fill with black background
+					canvas.Clear(SKColors.Black);
 
-				drawables.Draw(bitmap);
-				Tensor msk = Lib.GetTensorFromImage(bitmap);
-				msk = msk[0] > 0;
-				mask[msk] = i + 1;
+					// Create paint for drawing
+					using (var paint = new SKPaint())
+					{
+						paint.Color = SKColors.White;
+						paint.Style = SKPaintStyle.Fill; // Fill the polygon
+						paint.IsAntialias = true;       // Smooth edges
+
+						// Convert points to SKPoint array
+						SKPoint[]? skPoints = points.Select(p => new SKPoint((float)p.X, (float)p.Y)).ToArray();
+
+						// Draw polygon
+						using (var path = new SKPath())
+						{
+							path.AddPoly(skPoints);
+							canvas.DrawPath(path, paint);
+						}
+					}
+					Tensor msk = Lib.GetTensorFromImage(bitmap);
+					msk = msk[0] > 0;
+					mask[msk] = i + 1;
+				}
 			}
 			Tensor labelTensor = tensor(labelArray);
 			long p = imgTensor.shape[0];
@@ -444,33 +460,53 @@ namespace YoloSharp
 
 			List<Tensor> labels = new List<Tensor>();
 			List<Tensor> masks = new List<Tensor>();
+
 			foreach (string line in lines)
 			{
-				List<PointD> points = new List<PointD>();
+				// Parse points from label file
+				List<SKPoint> points = new List<SKPoint>();
 				string[] strs = line.Split(' ');
 				for (int i = 0; i < strs.Length / 2; i++)
 				{
 					float x = float.Parse(strs[i * 2 + 1]) * width;
 					float y = float.Parse(strs[i * 2 + 2]) * height;
-					points.Add(new PointD(x, y));
+					points.Add(new SKPoint(x, y));
 				}
-				float x_max = (float)points.Max(a => a.X);
-				float y_max = (float)points.Max(a => a.Y);
-				float x_min = (float)points.Min(a => a.X);
-				float y_min = (float)points.Min(a => a.Y);
+
+				// Calculate bounding box
+				float x_max = points.Max(a => a.X);
+				float y_max = points.Max(a => a.Y);
+				float x_min = points.Min(a => a.X);
+				float y_min = points.Min(a => a.Y);
 
 				labels.Add(torch.tensor(new float[] { x_min, y_min, x_max - x_min, y_max - y_min }).unsqueeze(0));
 
-				var image = new MagickImage(MagickColors.Black, (uint)width, (uint)height);
+				// Create mask using SkiaSharp
+				using (var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Premul))
+				using (var canvas = new SKCanvas(bitmap))
+				{
+					// Fill with black background
+					canvas.Clear(SKColors.Black);
 
-				var drawables = new Drawables()
-					.FillColor(MagickColors.White)
-					.Polygon(points);
+					// Draw white polygon
+					using (var paint = new SKPaint())
+					{
+						paint.Color = SKColors.White;
+						paint.Style = SKPaintStyle.Fill;
+						paint.IsAntialias = true;
 
-				drawables.Draw(image);
+						using (var path = new SKPath())
+						{
+							path.AddPoly(points.ToArray());
+							canvas.DrawPath(path, paint);
+						}
+					}
 
-				Tensor ts = Lib.GetTensorFromImage(image);
-				masks.Add(ts[0].unsqueeze(0));
+					// Convert SKBitmap to Tensor
+					var bytes = bitmap.Bytes;
+					Tensor ts = torch.tensor(bytes, new long[] { 1, height, width }, torch.uint8);
+					masks.Add(ts.unsqueeze(0));
+				}
 			}
 
 			Tensor labelTensor = torch.cat(labels.ToArray());

@@ -1,5 +1,4 @@
-﻿using ImageMagick;
-using System.Diagnostics;
+﻿using SkiaSharp;
 using TorchSharp;
 using static TorchSharp.torch;
 
@@ -62,32 +61,34 @@ namespace YoloSharp
 		/// <returns>The clipped boxes</returns>
 		internal static Tensor ClipBox(Tensor x, float[] shape)
 		{
-			//	using var _ = NewDisposeScope();
 			Tensor box = torch.zeros_like(x);
 			box[TensorIndex.Ellipsis, 0] = x[TensorIndex.Ellipsis, 0].clamp_(0, shape[1]);  // x1
 			box[TensorIndex.Ellipsis, 1] = x[TensorIndex.Ellipsis, 1].clamp_(0, shape[0]);  // y1
 			box[TensorIndex.Ellipsis, 2] = x[TensorIndex.Ellipsis, 2].clamp_(0, shape[1]);  // x2
 			box[TensorIndex.Ellipsis, 3] = x[TensorIndex.Ellipsis, 3].clamp_(0, shape[0]);  // y2
-			return box.MoveToOuterDisposeScope();
+			return box;
 		}
 
-		internal static Tensor GetTensorFromImage(MagickImage image)
+		internal static Tensor GetTensorFromImage(SKBitmap skBitmap)
 		{
-			using (MemoryStream memoryStream = new MemoryStream())
+			using (MemoryStream stream = new MemoryStream())
 			{
-				image.Write(memoryStream, MagickFormat.Png);
-				memoryStream.Position = 0;
-				Tensor result = torchvision.io.read_image(memoryStream, torchvision.io.ImageReadMode.RGB);
-				return result;
+				skBitmap.Encode(stream, SKEncodedImageFormat.Png, 100);
+				stream.Position = 0;
+				Tensor tensor = torchvision.io.read_image(stream, torchvision.io.ImageReadMode.RGB);
+				return tensor;
 			}
 		}
 
-		internal static MagickImage GetImageFromTensor(Tensor tensor)
+		internal static SKBitmap GetImageFromTensor(Tensor tensor)
 		{
-			MemoryStream memoryStream = new MemoryStream();
-			torchvision.io.write_png(tensor.cpu(), memoryStream);
-			memoryStream.Position = 0;
-			return new MagickImage(memoryStream, MagickFormat.Png);
+			using (MemoryStream memoryStream = new MemoryStream())
+			{
+				torchvision.io.write_png(tensor.cpu(), memoryStream);
+				memoryStream.Position = 0;
+				SKBitmap skBitmap = SKBitmap.Decode(memoryStream);
+				return skBitmap;
+			}
 		}
 
 	}
