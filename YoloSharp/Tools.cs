@@ -19,9 +19,9 @@ namespace YoloSharp
 		{
 			Dictionary<string, Tensor> dict = new Dictionary<string, Tensor>();
 			SafetensorsLoader safetensorLoader = new SafetensorsLoader();
-			var safetensorTensors = safetensorLoader.ReadTensorsInfoFromFile(safetensorName);
+			List<CommonTensor> safetensorTensors = safetensorLoader.ReadTensorsInfoFromFile(safetensorName);
 
-			foreach (var li in safetensorTensors)
+			foreach (CommonTensor li in safetensorTensors)
 			{
 				Tensor t = torch.zeros(li.Shape.ToArray(), dtype: li.Type);
 				byte[] dt = safetensorLoader.ReadByteFromFile(li);
@@ -29,6 +29,15 @@ namespace YoloSharp
 				dict.Add(li.Name, t);
 			}
 			Dictionary<string, Tensor> state_dict = model.state_dict();
+
+			//var ldd = TorchSharp.PyBridge.Safetensors.LoadStateDict(@".\yolov8n-obb.safetensors");
+			//Dictionary<string, Tensor> dd = new Dictionary<string, Tensor>();
+			//foreach (var ld in ldd)
+			//{
+			//	dd.Add(ld.Key.Remove(0,6),ld.Value);
+			//}
+			//var (loadMissing, unexp) = model.load_state_dict(dd, false);
+
 			var (loadMissing, unexp) = model.load_state_dict(dict, false);
 			model.save(outName);
 		}

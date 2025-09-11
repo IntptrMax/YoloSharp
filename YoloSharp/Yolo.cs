@@ -16,6 +16,7 @@ namespace YoloSharp
 			{
 
 			}
+
 			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
 			{
 				(float depth_multiple, float width_multiple) = yoloSize switch
@@ -210,7 +211,7 @@ namespace YoloSharp
 
 			public override Tensor[] forward(Tensor x)
 			{
-				// using (NewDisposeScope())
+				using (NewDisposeScope())
 				{
 					List<Tensor> outputs = new List<Tensor>();
 					int catCount = 0;
@@ -226,17 +227,15 @@ namespace YoloSharp
 								catCount++;
 								break;
 						}
+
 						if (outputIndexs.Contains(i))
 						{
 							outputs.Add(x);
 						}
 					}
 
-					Tensor[] list = ((Module<Tensor[], Tensor[]>)model[model.Count - 1]).forward(new Tensor[] { outputs[outputs.Count - 3], outputs[outputs.Count - 2], outputs[outputs.Count - 1] });
-					for (int i = 0; i < list.Length; i++)
-					{
-						list[i] = list[i].MoveToOuterDisposeScope();
-					}
+					Tensor[] list = ((Module<Tensor[], Tensor[]>)model.Last()).forward(new Tensor[] { outputs[outputs.Count - 3], outputs[outputs.Count - 2], outputs[outputs.Count - 1] });
+					list = list.Select(x => x.MoveToOuterDisposeScope()).ToArray();
 					return list;
 				}
 			}

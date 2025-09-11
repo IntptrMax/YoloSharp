@@ -2,6 +2,7 @@
 using System.Text.RegularExpressions;
 using TorchSharp;
 using TorchSharp.Modules;
+using Utils;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
 using static TorchSharp.torch.optim;
@@ -11,17 +12,6 @@ namespace YoloSharp
 {
 	public class Segmenter
 	{
-		public class SegmentResult
-		{
-			public int ClassID;
-			public float Score;
-			public int X;
-			public int Y;
-			public int W;
-			public int H;
-			public bool[,] Mask;
-		}
-
 		private Module<Tensor, Tensor[]> yolo;
 		private Module<Tensor[], Tensor, Tensor, (Tensor, Tensor)> loss;
 		private torch.Device device;
@@ -49,13 +39,12 @@ namespace YoloSharp
 			};
 			loss = yoloType switch
 			{
-				YoloType.Yolov8 => new Loss.SegmentationLoss(this.sortCount),
-				YoloType.Yolov11 => new Loss.SegmentationLoss(this.sortCount),
+				YoloType.Yolov8 => new Utils.Loss.V8SegmentationLoss(this.sortCount),
+				YoloType.Yolov11 => new Utils.Loss.V8SegmentationLoss(this.sortCount),
 				_ => throw new NotImplementedException("Yolo type not supported."),
 			};
 			//Tools.TransModelFromSafetensors(yolo, @".\yolov8n-seg.safetensors", @".\PreTrainedModels\yolov11x-seg.bin");
 		}
-
 
 		public void Train(string trainDataPath, string valDataPath = "", string outputPath = "output", int imageSize = 640, int epochs = 100, float lr = 0.0001f, int batchSize = 8, int numWorkers = 0, bool useMosaic = true)
 		{
@@ -86,7 +75,7 @@ namespace YoloSharp
 					Tensor[] masks = new Tensor[indexs.Length];
 					for (int i = 0; i < indexs.Length; i++)
 					{
-						var (img, lb, mask) = trainDataSet.GetSegmentDataTensor(indexs[i]);
+						(Tensor img, Tensor lb, Tensor mask) = trainDataSet.GetSegmentDataTensor(indexs[i]);
 						images[i] = img.to(dtype, device).unsqueeze(0) / 255.0f;
 						labels[i] = full(new long[] { lb.shape[0], lb.shape[1] + 1 }, i, dtype: dtype, device: lb.device);
 						labels[i].slice(1, 1, lb.shape[1] + 1, 1).copy_(lb);
@@ -107,6 +96,7 @@ namespace YoloSharp
 					optimizer.step();
 					Console.WriteLine($"Process: Epoch {epoch}, Step/Total Step  {step}/{trainDataLoader.Count}");
 				}
+
 				Console.Write("Do val now... ");
 				float valLoss = Val(valDataPath, imageSize);
 				Console.WriteLine($"Epoch {epoch}, Val Loss: {valLoss}");
@@ -166,8 +156,7 @@ namespace YoloSharp
 			return lossValue;
 		}
 
-
-		public (List<SegmentResult>, SKBitmap) ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f, int imgSize = 640)
+		public (List<YoloResult>, SKBitmap) ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f, int imgSize = 640)
 		{
 			yolo.eval();
 			Tensor orgImage = Lib.GetTensorFromImage(image).to(dtype, device);
@@ -184,10 +173,10 @@ namespace YoloSharp
 
 			Tensor[] outputs = yolo.forward(tensor);
 
-			List<Tensor> preds = NonMaxSuppression(outputs[0], PredictThreshold, IouThreshold);
+			(List<Tensor> preds, var _) = Ops.non_max_suppression(outputs[0], nc: sortCount, conf_thres: PredictThreshold, iou_thres: IouThreshold);
 			Tensor proto = outputs[4];
 
-			List<SegmentResult> results = new List<SegmentResult>();
+			List<YoloResult> results = new List<YoloResult>();
 			SKBitmap maskBitmap = new SKBitmap();
 			if (proto.shape[0] > 0)
 			{
@@ -196,7 +185,7 @@ namespace YoloSharp
 					int i = 0;
 					Tensor masks = process_mask(proto[i], preds[i][.., 6..], preds[i][.., 0..4], new long[] { tensor.shape[2], tensor.shape[3] }, upsample: true);
 					preds[i][.., ..4] = preds[i][.., ..4] * gain;
-					preds[i][.., ..4] = Lib.ClipBox(preds[i][.., ..4], new float[] { orgImage.shape[2], orgImage.shape[3] });
+					preds[i][.., ..4] = Utils.Ops.clip_boxes(preds[i][.., ..4], new float[] { orgImage.shape[2], orgImage.shape[3] });
 					Tensor orgImg = (tensor[0] * 255).@byte();
 					masks = torchvision.transforms.functional.crop(masks, 0, 0, new_h, new_w);
 					masks = torchvision.transforms.functional.resize(masks, (int)orgImage.shape[2], (int)orgImage.shape[3]);
@@ -213,14 +202,14 @@ namespace YoloSharp
 						int w = (preds[i][j, 2]).ToInt32() - x;
 						int h = (preds[i][j, 3]).ToInt32() - y;
 
-						results.Add(new SegmentResult()
+						results.Add(new YoloResult()
 						{
 							ClassID = preds[i][j, 5].ToInt32(),
 							Score = preds[i][j, 4].ToSingle(),
-							X = x,
-							Y = y,
-							W = w,
-							H = h,
+							CenterX = x + w / 2,
+							CenterY = y + h / 2,
+							Width = w,
+							Height = h,
 							Mask = mask
 						});
 						orgImage[0, 0, masks[j].@bool()] += rand.NextSingle();
@@ -249,14 +238,14 @@ namespace YoloSharp
 				List<string> skipList = new();
 				if (skipNcNotEqualLayers)
 				{
-					string? layerPattern = yoloType switch
+					string layerPattern = yoloType switch
 					{
 						YoloType.Yolov8 => @"model\.22\.cv3",
 						YoloType.Yolov11 => @"model\.23\.cv3",
-						_ => null
+						_ => string.Empty
 					};
 
-					if (layerPattern != null)
+					if (!string.IsNullOrEmpty(layerPattern))
 					{
 						skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern)).ToList();
 						if (state_dict[skipList.LastOrDefault(a => a.EndsWith(".bias"))!].shape[0] == sortCount)
@@ -275,81 +264,79 @@ namespace YoloSharp
 			}
 		}
 
-		private List<Tensor> NonMaxSuppression(Tensor prediction, float confThreshold = 0.25f, float iouThreshold = 0.45f, bool agnostic = false, int max_det = 300, int nc = 80)
-		{
-			// Checks
-			if (confThreshold < 0 || confThreshold > 1)
-			{
-				throw new ArgumentException($"Invalid Confidence threshold {confThreshold}, valid values are between 0.0 and 1.0");
-			}
-			if (iouThreshold < 0 || iouThreshold > 1)
-			{
-				throw new ArgumentException($"Invalid IoU {iouThreshold}, valid values are between 0.0 and 1.0");
-			}
+		//private List<Tensor> NonMaxSuppression(Tensor prediction, float confThreshold = 0.25f, float iouThreshold = 0.45f, bool agnostic = false, int max_det = 300, int nc = 80)
+		//{
+		//	// Checks
+		//	if (confThreshold < 0 || confThreshold > 1)
+		//	{
+		//		throw new ArgumentException($"Invalid Confidence threshold {confThreshold}, valid values are between 0.0 and 1.0");
+		//	}
+		//	if (iouThreshold < 0 || iouThreshold > 1)
+		//	{
+		//		throw new ArgumentException($"Invalid IoU {iouThreshold}, valid values are between 0.0 and 1.0");
+		//	}
 
-			var device = prediction.device;
-			var scalType = prediction.dtype;
+		//	var device = prediction.device;
+		//	var scalType = prediction.dtype;
 
-			var bs = prediction.shape[0]; // batch size
-			var nm = prediction.shape[1] - nc - 4; // number of mask
-			var mi = 4 + nc; // mask start index
-			var xc = prediction[TensorIndex.Colon, 4..(int)mi].amax(1) > confThreshold; // candidates
+		//	var bs = prediction.shape[0]; // batch size
+		//	var nm = prediction.shape[1] - nc - 4; // number of mask
+		//	var mi = 4 + nc; // mask start index
+		//	var xc = prediction[TensorIndex.Colon, 4..(int)mi].amax(1) > confThreshold; // candidates
 
-			prediction = prediction.transpose(1, 2);
-			// Settings
-			var max_wh = 7680; // maximum box width and height
-			var max_nms = 30000; // maximum number of boxes into torchvision.ops.nms()
-			var time_limit = 0.5f + 0.05f * bs; // seconds to quit after
+		//	prediction = prediction.transpose(1, 2);
+		//	// Settings
+		//	var max_wh = 7680; // maximum box width and height
+		//	var max_nms = 30000; // maximum number of boxes into torchvision.ops.nms()
+		//	var time_limit = 0.5f + 0.05f * bs; // seconds to quit after
 
-			var t = DateTime.Now;
+		//	var t = DateTime.Now;
 
-			var output = new List<Tensor>(new Tensor[bs]);
-			for (int xi = 0; xi < bs; xi++)
-			{
-				var x = prediction[xi];
-				x = x[xc[xi]]; // confidence
+		//	var output = new List<Tensor>(new Tensor[bs]);
+		//	for (int xi = 0; xi < bs; xi++)
+		//	{
+		//		var x = prediction[xi];
+		//		x = x[xc[xi]]; // confidence
 
-				Tensor[] box_cls_mask = x.split(new long[] { 4, nc, nm }, 1);
-				Tensor box = torchvision.ops.box_convert(box_cls_mask[0], torchvision.ops.BoxFormats.cxcywh, torchvision.ops.BoxFormats.xyxy); // box
-				Tensor cls = box_cls_mask[1]; // class
-				Tensor mask = box_cls_mask[2]; // mask
-											   // Box/Mask
+		//		Tensor[] box_cls_mask = x.split(new long[] { 4, nc, nm }, 1);
+		//		Tensor box = torchvision.ops.box_convert(box_cls_mask[0], torchvision.ops.BoxFormats.cxcywh, torchvision.ops.BoxFormats.xyxy); // box
+		//		Tensor cls = box_cls_mask[1]; // class
+		//		Tensor mask = box_cls_mask[2]; // mask
+		//									   // Box/Mask
 
-				// Detections matrix nx6 (xyxy, conf, cls)
+		//		// Detections matrix nx6 (xyxy, conf, cls)
 
-				var conf = x[TensorIndex.Colon, TensorIndex.Slice(4, mi)].max(1, true);
-				var j = conf.indexes;
-				x = torch.cat(new Tensor[] { box, conf.values, j.to_type(scalType), mask }, 1)[conf.values.view(-1) > confThreshold];
+		//		var conf = x[TensorIndex.Colon, TensorIndex.Slice(4, mi)].max(1, true);
+		//		var j = conf.indexes;
+		//		x = torch.cat(new Tensor[] { box, conf.values, j.to_type(scalType), mask }, 1)[conf.values.view(-1) > confThreshold];
 
-				var n = x.shape[0]; // number of boxes
-				if (n == 0)
-				{
-					continue;
-				}
-				if (n > max_nms)
-				{
-					x = x[x[TensorIndex.Ellipsis, 4].argsort(descending: true)][TensorIndex.Slice(0, max_nms)]; // sort by confidence and remove excess boxes
-				}
-				// Batched NMS
-				var c = x[TensorIndex.Ellipsis, 5].unsqueeze(-1) * (agnostic ? 0 : max_wh); // classes
-				var boxes = x[TensorIndex.Ellipsis, TensorIndex.Slice(0, 4)] + c;
-				var scores = x[TensorIndex.Ellipsis, 4];
-				var i = torchvision.ops.nms(boxes, scores, iouThreshold); // NMS
-				i = i[TensorIndex.Slice(0, max_det)]; // limit detections
+		//		var n = x.shape[0]; // number of boxes
+		//		if (n == 0)
+		//		{
+		//			continue;
+		//		}
+		//		if (n > max_nms)
+		//		{
+		//			x = x[x[TensorIndex.Ellipsis, 4].argsort(descending: true)][TensorIndex.Slice(0, max_nms)]; // sort by confidence and remove excess boxes
+		//		}
+		//		// Batched NMS
+		//		var c = x[TensorIndex.Ellipsis, 5].unsqueeze(-1) * (agnostic ? 0 : max_wh); // classes
+		//		var boxes = x[TensorIndex.Ellipsis, TensorIndex.Slice(0, 4)] + c;
+		//		var scores = x[TensorIndex.Ellipsis, 4];
+		//		var i = torchvision.ops.nms(boxes, scores, iouThreshold); // NMS
+		//		i = i[TensorIndex.Slice(0, max_det)]; // limit detections
 
-				output[xi] = x[i];
+		//		output[xi] = x[i];
 
-				if ((DateTime.Now - t).TotalSeconds > time_limit)
-				{
-					Console.WriteLine($"WARNING ⚠️ NMS time limit {time_limit:F3}s exceeded");
-					break; // time limit exceeded
-				}
-			}
+		//		if ((DateTime.Now - t).TotalSeconds > time_limit)
+		//		{
+		//			Console.WriteLine($"WARNING ⚠️ NMS time limit {time_limit:F3}s exceeded");
+		//			break; // time limit exceeded
+		//		}
+		//	}
 
-			return output;
-
-
-		}
+		//	return output;
+		//}
 
 		private Tensor process_mask(Tensor protos, Tensor masks_in, Tensor bboxes, long[] shape, bool upsample = false)
 		{

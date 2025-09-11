@@ -2,6 +2,7 @@
 using System.Text.RegularExpressions;
 using TorchSharp;
 using TorchSharp.Modules;
+using Utils;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
 using static TorchSharp.torch.optim;
@@ -11,16 +12,6 @@ namespace YoloSharp
 {
 	public class Predictor
 	{
-		public class PredictResult
-		{
-			public int ClassID;
-			public float Score;
-			public int X;
-			public int Y;
-			public int W;
-			public int H;
-		}
-
 		private Module<Tensor, Tensor[]> yolo;
 		private Module<Tensor[], Tensor, (Tensor, Tensor)> loss;
 		private Module<Tensor, float, float, Tensor> predict;
@@ -50,11 +41,11 @@ namespace YoloSharp
 
 			loss = yoloType switch
 			{
-				YoloType.Yolov5 => new Loss.Yolov5DetectionLoss(this.socrCount),
-				YoloType.Yolov5u => new Loss.YoloDetectionLoss(this.socrCount),
-				YoloType.Yolov8 => new Loss.YoloDetectionLoss(this.socrCount),
-				YoloType.Yolov11 => new Loss.YoloDetectionLoss(this.socrCount),
-				YoloType.Yolov12 => new Loss.YoloDetectionLoss(this.socrCount),
+				YoloType.Yolov5 => new Utils.Loss.V5DetectionLoss(this.socrCount),
+				YoloType.Yolov5u => new Utils.Loss.V8DetectionLoss(this.socrCount),
+				YoloType.Yolov8 => new Utils.Loss.V8DetectionLoss(this.socrCount),
+				YoloType.Yolov11 => new Utils.Loss.V8DetectionLoss(this.socrCount),
+				YoloType.Yolov12 => new Utils.Loss.V8DetectionLoss(this.socrCount),
 				_ => throw new NotImplementedException(),
 			};
 			predict = yoloType switch
@@ -75,15 +66,25 @@ namespace YoloSharp
 			Console.WriteLine("Model will be write to: " + outputPath);
 			Console.WriteLine("Load model...");
 
-			YoloDataset trainDataSet = new YoloDataset(trainDataPath, imageSize, deviceType: this.device.type, useMosaic: useMosaic);
+			YoloDataset trainDataSet = new YoloDataset(trainDataPath, imageSize, useMosaic: useMosaic);
 			if (trainDataSet.Count == 0)
 			{
 				throw new FileNotFoundException("No data found in the path: " + trainDataPath);
 			}
-			DataLoader trainDataLoader = new DataLoader(trainDataSet, batchSize, num_worker: numWorkers, shuffle: true, device: device);
-			valDataPath = string.IsNullOrEmpty(valDataPath) ? trainDataPath : valDataPath;
-			Optimizer optimizer = new SGD(yolo.parameters(), lr: lr);
 
+			DataLoader trainDataLoader = new DataLoader(trainDataSet, batchSize, num_worker: numWorkers, shuffle: true, device: device);
+
+			valDataPath = string.IsNullOrEmpty(valDataPath) ? trainDataPath : valDataPath;
+
+			YoloDataset valDataSet = new YoloDataset(valDataPath, imageSize, useMosaic: false);
+			if (valDataSet.Count == 0)
+			{
+				throw new FileNotFoundException("No data found in the path: " + trainDataPath);
+			}
+
+			DataLoader valDataLoader = new DataLoader(valDataSet, 4, num_worker: 0, shuffle: true, device: device);
+
+			Optimizer optimizer = new SGD(yolo.parameters(), lr: lr);
 
 			float tempLoss = float.MaxValue;
 			Console.WriteLine("Start Training...");
@@ -105,7 +106,7 @@ namespace YoloSharp
 						labels[i].slice(1, 1, lb.shape[1] + 1, 1).copy_(lb);
 					}
 					Tensor imageTensor = concat(images);
-					Tensor labelTensor = concat(labels);
+					Tensor labelTensor = concat(labels).to(imageTensor.device);
 					if (labelTensor.shape[0] == 0)
 					{
 						continue;
@@ -118,7 +119,7 @@ namespace YoloSharp
 					Console.WriteLine($"Process: Epoch {epoch}, Step/Total Step  {step}/{trainDataLoader.Count}");
 				}
 				Console.Write("Do val now... ");
-				float valLoss = Val(valDataPath, imageSize);
+				float valLoss = Val(valDataSet, valDataLoader);
 				Console.WriteLine($"Epoch {epoch}, Val Loss: {valLoss}");
 				if (!Directory.Exists(outputPath))
 				{
@@ -134,20 +135,18 @@ namespace YoloSharp
 			Console.WriteLine("Train Done.");
 		}
 
-		private float Val(string valDataPath, int imageSize = 640)
+		private float Val(YoloDataset valDataset, DataLoader valDataLoader)
 		{
-			YoloDataset yoloDataset = new YoloDataset(valDataPath, imageSize, deviceType: this.device.type, useMosaic: false);
-			DataLoader loader = new DataLoader(yoloDataset, 4, num_worker: 0, shuffle: true, device: device);
-
+			using var _ = no_grad();
 			float lossValue = float.MaxValue;
-			foreach (var data in loader)
+			foreach (var data in valDataLoader)
 			{
 				long[] indexs = data["index"].data<long>().ToArray();
 				Tensor[] images = new Tensor[indexs.Length];
 				Tensor[] labels = new Tensor[indexs.Length];
 				for (int i = 0; i < indexs.Length; i++)
 				{
-					var (img, lb) = yoloDataset.GetDataTensor(indexs[i]);
+					var (img, lb) = valDataset.GetDataTensor(indexs[i]);
 					images[i] = img.to(this.dtype, device);
 					labels[i] = full(new long[] { lb.shape[0], lb.shape[1] + 1 }, i, dtype: dtype, device: lb.device);
 					labels[i].slice(1, 1, lb.shape[1] + 1, 1).copy_(lb);
@@ -171,13 +170,16 @@ namespace YoloSharp
 					lossValue = lossValue + ls.ToSingle();
 				}
 			}
-			lossValue = lossValue / yoloDataset.Count;
+			lossValue = lossValue / valDataset.Count;
 			return lossValue;
 		}
 
-		public List<PredictResult> ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		public List<YoloResult> ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
 		{
+			using var _ = no_grad();
 			Tensor orgImage = Lib.GetTensorFromImage(image).to(dtype, device);
+
+			// Change RGB → BGR
 			orgImage = torch.stack(new Tensor[] { orgImage[2], orgImage[1], orgImage[0] }, dim: 0).unsqueeze(0) / 255.0f;
 
 			int w = (int)orgImage.shape[3];
@@ -190,10 +192,11 @@ namespace YoloSharp
 
 			Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros);
 			yolo.eval();
+
 			Tensor[] tensors = yolo.forward(input);
 			Tensor results = predict.forward(tensors[0], PredictThreshold, IouThreshold);
 
-			List<PredictResult> predResults = new List<PredictResult>();
+			List<YoloResult> predResults = new List<YoloResult>();
 			for (int i = 0; i < results.shape[0]; i++)
 			{
 				int x = results[i, 0].ToInt32();
@@ -204,14 +207,14 @@ namespace YoloSharp
 				float score = results[i, 4].ToSingle();
 				int sort = results[i, 5].ToInt32();
 
-				predResults.Add(new PredictResult()
+				predResults.Add(new YoloResult()
 				{
 					ClassID = sort,
 					Score = score,
-					X = x,
-					Y = y,
-					W = rw,
-					H = rh
+					CenterX = x + rw / 2,
+					CenterY = y + rh / 2,
+					Width = rw,
+					Height = rh
 				});
 			}
 			return predResults;
@@ -239,17 +242,17 @@ namespace YoloSharp
 
 				if (skipNcNotEqualLayers)
 				{
-					string? layerPattern = yoloType switch
+					string layerPattern = yoloType switch
 					{
 						YoloType.Yolov5 => @"model\.24\.m",
 						YoloType.Yolov5u => @"model\.24\.cv3",
 						YoloType.Yolov8 => @"model\.22\.cv3",
 						YoloType.Yolov11 => @"model\.23\.cv3",
 						YoloType.Yolov12 => @"model\.21\.cv3",
-						_ => null,
+						_ => string.Empty,
 					};
 
-					if (layerPattern != null)
+					if (!string.IsNullOrEmpty(layerPattern))
 					{
 						skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern)).ToList();
 						nc = yoloType switch
@@ -376,104 +379,17 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor tensor, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
 			{
-				var re = NonMaxSuppression(tensor, PredictThreshold, IouThreshold);
+				var (output, keepi) = Ops.non_max_suppression(tensor, PredictThreshold, IouThreshold);
 
-				if (re[0] is not null)
+				if (output[0] is not null)
 				{
-					return re[0];
+					return output[0];
 				}
 				else
 				{
 					return torch.tensor(new float[0, 6]);
 				}
 			}
-
-			private List<Tensor> NonMaxSuppression(Tensor prediction, float confThreshold = 0.25f, float iouThreshold = 0.45f, bool agnostic = false, int max_det = 300, int nm = 0)
-			{
-				// Checks
-				if (confThreshold < 0 || confThreshold > 1)
-				{
-					throw new ArgumentException($"Invalid Confidence threshold {confThreshold}, valid values are between 0.0 and 1.0");
-				}
-				if (iouThreshold < 0 || iouThreshold > 1)
-				{
-					throw new ArgumentException($"Invalid IoU {iouThreshold}, valid values are between 0.0 and 1.0");
-				}
-
-				long bs = prediction.shape[0]; // batch size
-				long nc = prediction.shape[1] - nm - 4; // number of classes
-				long mi = 4 + nc; // mask start index
-				Tensor xc = prediction[.., 4..(int)mi].amax(1) > confThreshold; // candidates
-
-				List<Tensor> xindsList = new List<Tensor>();
-				for (int idx = 0; idx < xc.shape[0]; idx++)
-				{
-					Tensor mask = xc[idx];
-					xindsList.Add(torch.arange(mask.NumberOfElements, device: prediction.device));
-				}
-				Tensor xinds = torch.stack(xindsList, 0).unsqueeze(-1); // [batch, N, 1]
-
-				prediction = prediction.transpose(-1, -2);
-				// Settings
-				int max_wh = 7680; // maximum box width and height
-				int max_nms = 30000; // maximum number of boxes into torchvision.ops.nms()
-				float time_limit = 0.5f + 0.05f * bs; // seconds to quit after
-
-				prediction[TensorIndex.Ellipsis, ..4] = torchvision.ops.box_convert(prediction[TensorIndex.Ellipsis, ..4], torchvision.ops.BoxFormats.cxcywh, torchvision.ops.BoxFormats.xyxy);
-				DateTime t = DateTime.Now;
-
-				List<Tensor> output = new List<Tensor>(new Tensor[bs]);
-				List<Tensor> keepi = new List<Tensor>(new Tensor[bs]);
-				for (int xi = 0; xi < bs; xi++)
-				{
-					Tensor x = prediction[xi];
-					Tensor xk = xinds[xi];
-					Tensor filt = xc[xi];
-					x = x[filt]; // confidence
-					xk = xk[filt];
-
-					Tensor[] box_cls_mask = x.split(new long[] { 4, nc, nm }, 1);
-					Tensor box = box_cls_mask[0];
-					Tensor cls = box_cls_mask[1];
-					Tensor mask = box_cls_mask[2];
-
-					(Tensor conf, Tensor j) = cls.max(1, keepdim: true);
-					filt = conf.view(-1) > confThreshold;
-
-					x = torch.cat(new Tensor[] { box, conf, j.@float(), mask }, 1)[filt];
-					xk = xk[filt];
-
-					// Check shape
-					long n = x.shape[0];  // number of boxes
-					if (n is 0)
-					{
-						continue;
-					}
-
-					if (n > max_nms)//  # excess boxes
-					{
-						filt = x[.., 4].argsort(descending: true)[..max_nms];  // sort by confidence and remove excess boxes
-						(x, xk) = (x[filt], xk[filt]);
-					}
-
-					// Batched NMS
-					Tensor c = x[.., 5..6] * max_wh;  // classes
-					Tensor scores = x[.., 4];  // scores
-					Tensor boxes = x[.., ..4] + c;  // boxes (offset by class)
-					Tensor i = torchvision.ops.nms(boxes, scores, iouThreshold);  // NMS
-					i = i[..max_det]; // limit detections
-					(output[xi], keepi[xi]) = (x[i], xk[i].reshape(-1));
-					if ((DateTime.Now - t).TotalSeconds > time_limit)
-					{
-						// time limit exceeded
-						Console.WriteLine($"NMS time limit {time_limit}s exceeded");
-					}
-				}
-
-				return output;
-
-			}
-
 		}
 
 	}

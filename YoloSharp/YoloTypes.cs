@@ -35,3 +35,4 @@ public enum AttentionType
 	ScaledDotProductAttention = 2,
 	FlashAttention = 3,
 }
+

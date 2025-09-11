@@ -12,35 +12,31 @@ namespace YoloSharp
 		{
 			private readonly Conv2d conv;
 			private readonly BatchNorm2d bn;
-			private readonly bool act;
+			private readonly Module<Tensor, Tensor> act;
 			private readonly double eps = 0.001;
 			private readonly double momentum = 0.03;
 
-			internal Conv(int in_channels, int out_channels, int kernel_size, int stride = 1, int? padding = null, int groups = 1, int d = 1, bool bias = false, bool act = true, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(Conv))
+			internal Conv(int in_channels, int out_channels, int kernel_size, int stride = 1, int? padding = null, int groups = 1, int d = 1, bool bias = false, Func<Module<Tensor, Tensor>>? act = null, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(Conv))
 			{
 				if (padding == null)
 				{
 					padding = (kernel_size) / 2;
 				}
-
 				conv = Conv2d(in_channels, out_channels, kernel_size, stride, padding.Value, groups: groups, bias: bias, dilation: d, device: device, dtype: dtype);
 				bn = BatchNorm2d(out_channels, eps: eps, momentum: momentum, track_running_stats: true, device: device, dtype: dtype);
-				this.act = act;
+				this.act = (act ?? SiLU)();
 				RegisterComponents();
 			}
 
 			public override Tensor forward(Tensor x)
 			{
-				using var _ = NewDisposeScope();
-				Module<Tensor, Tensor> ac = act ? SiLU(true) : Identity();
-
 				if (this.training)
 				{
-					Tensor result = ac.forward(bn.forward(conv.forward(x)));
-					return result.MoveToOuterDisposeScope();
+					return this.act.forward(bn.forward(conv.forward(x))).MoveToOuterDisposeScope();
 				}
 				else
 				{
+					using var _ = NewDisposeScope();
 					using (no_grad())
 					{
 						// Prepare filters
@@ -54,15 +50,16 @@ namespace YoloSharp
 						Tensor b_bn = bn.bias - bn.weight.mul(bn.running_mean).div(torch.sqrt(bn.running_var + bn.eps));
 						fusedconv.bias.copy_(torch.mm(w_bn, b_conv.reshape(-1, 1)).reshape(-1) + b_bn);
 
-						return ac.forward(fusedconv.forward(x)).MoveToOuterDisposeScope();
+						return this.act.forward(fusedconv.forward(x)).MoveToOuterDisposeScope();
 					}
+
 				}
 			}
 		}
 
 		internal class DWConv : Conv
 		{
-			internal DWConv(int in_channels, int out_channels, int kernel_size = 1, int stride = 1, int d = 1, bool act = true, bool bias = false, Device? device = null, torch.ScalarType? dtype = null) : base(in_channels, out_channels, kernel_size, stride, groups: (int)BigInteger.GreatestCommonDivisor(in_channels, out_channels), d: d, bias: bias, act: act, device: device, dtype: dtype)
+			internal DWConv(int in_channels, int out_channels, int kernel_size = 1, int stride = 1, int d = 1, Func<Module<Tensor, Tensor>>? act = null, bool bias = false, Device? device = null, torch.ScalarType? dtype = null) : base(in_channels, out_channels, kernel_size, stride, groups: (int)BigInteger.GreatestCommonDivisor(in_channels, out_channels), d: d, bias: bias, act: act, device: device, dtype: dtype)
 			{
 
 			}
@@ -118,21 +115,21 @@ namespace YoloSharp
 
 		internal class C3k : C3
 		{
-			internal Sequential m = Sequential();
+			internal new Sequential m = Sequential();
 			internal C3k(int inChannels, int outChannels, int n = 1, bool shortcut = true, int groups = 1, float e = 0.5f, Device? device = null, torch.ScalarType? dtype = null) : base(inChannels, outChannels, n, shortcut, groups, e, device, dtype)
 			{
 				int c = (int)(outChannels * e);
 
 				for (int i = 0; i < n; i++)
 				{
-					m.append(new Bottleneck(c, c, (3, 3), shortcut, groups, e: 1.0f, device: device, dtype: dtype));
+					this.m.append(new Bottleneck(c, c, (3, 3), shortcut, groups, e: 1.0f, device: device, dtype: dtype));
 				}
 				RegisterComponents();
 			}
 
 			public override Tensor forward(Tensor input)
 			{
-				return base.cv3.forward(cat(new Tensor[] { m.forward(base.cv1.forward(input)), base.cv2.forward(input) }, 1));
+				return base.cv3.forward(cat(new Tensor[] { this.m.forward(base.cv1.forward(input)), base.cv2.forward(input) }, 1));
 			}
 		}
 
@@ -281,7 +278,7 @@ namespace YoloSharp
 			internal PSABlock(int c, float attn_ratio = 0.5f, int num_heads = 8, bool shortcut = true, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(PSABlock))
 			{
 				this.attn = new Attention(c, num_heads, attn_ratio, attentionType: AttentionType.SelfAttention, device: device, dtype: dtype);
-				this.ffn = Sequential(new Conv(c, c * 2, 1, device: device, dtype: dtype), new Conv(c * 2, c, 1, act: false, device: device, dtype: dtype));
+				this.ffn = Sequential(new Conv(c, c * 2, 1, device: device, dtype: dtype), new Conv(c * 2, c, 1, device: device, dtype: dtype));
 				this.add = shortcut;
 				RegisterComponents();
 			}
@@ -317,9 +314,9 @@ namespace YoloSharp
 				int nh_kd = this.key_dim * num_heads;
 				int h = dim + nh_kd * 2;
 
-				this.qkv = new Conv(dim, h, 1, act: false, device: device, dtype: dtype);
-				this.proj = new Conv(dim, dim, 1, act: false, device: device, dtype: dtype);
-				this.pe = new Conv(dim, dim, 3, 1, groups: dim, act: false, device: device, dtype: dtype);
+				this.qkv = new Conv(dim, h, 1, device: device, dtype: dtype);
+				this.proj = new Conv(dim, dim, 1, device: device, dtype: dtype);
+				this.pe = new Conv(dim, dim, 3, 1, groups: dim, device: device, dtype: dtype);
 
 				this.attentionType = attentionType;
 				RegisterComponents();
@@ -391,16 +388,13 @@ namespace YoloSharp
 			internal SCDown(int inChannel, int outChannel, int k, int s, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(SCDown))
 			{
 				this.cv1 = new Conv(inChannel, outChannel, 1, 1, device: device, dtype: dtype);
-				this.cv2 = new Conv(outChannel, outChannel, kernel_size: k, stride: s, groups: outChannel, act: false, device: device, dtype: dtype);
+				this.cv2 = new Conv(outChannel, outChannel, kernel_size: k, stride: s, groups: outChannel, device: device, dtype: dtype);
 				RegisterComponents();
 			}
 
 			public override Tensor forward(Tensor x)
 			{
-				// using (NewDisposeScope())
-				{
-					return this.cv2.forward(this.cv1.forward(x)).MoveToOuterDisposeScope();
-				}
+				return this.cv2.forward(this.cv1.forward(x));
 			}
 		}
 
@@ -573,7 +567,7 @@ namespace YoloSharp
 			{
 				this.attn = new AAttn(dim, num_heads: num_heads, area: area, attentionType: AttentionType.SelfAttention, device: device, dtype: dtype);
 				int mlp_hidden_dim = (int)(dim * mlp_ratio);
-				this.mlp = Sequential(new Conv(dim, mlp_hidden_dim, 1, device: device, dtype: dtype), new Conv(mlp_hidden_dim, dim, 1, act: false, device: device, dtype: dtype));
+				this.mlp = Sequential(new Conv(dim, mlp_hidden_dim, 1, device: device, dtype: dtype), new Conv(mlp_hidden_dim, dim, 1, device: device, dtype: dtype));
 				// Initialize weights
 				initWeights = m =>
 				{
@@ -623,9 +617,9 @@ namespace YoloSharp
 				this.head_dim = dim / num_heads;
 				int all_head_dim = head_dim * this.num_heads;
 
-				this.qkv = new Conv(dim, all_head_dim * 3, 1, act: false, device: device, dtype: dtype);
-				this.proj = new Conv(all_head_dim, dim, 1, act: false, device: device, dtype: dtype);
-				this.pe = new Conv(all_head_dim, dim, 7, 1, 3, groups: dim, act: false, bias: true, device: device, dtype: dtype);
+				this.qkv = new Conv(dim, all_head_dim * 3, 1, device: device, dtype: dtype);
+				this.proj = new Conv(all_head_dim, dim, 1, device: device, dtype: dtype);
+				this.pe = new Conv(all_head_dim, dim, 7, 1, 3, groups: dim, bias: true, device: device, dtype: dtype);
 				RegisterComponents();
 			}
 
@@ -704,12 +698,12 @@ namespace YoloSharp
 			private readonly Conv conv1;
 			private readonly int dim;
 			private readonly Module<Tensor, Tensor> act;
-			internal RepVGGDW(int ed, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(RepVGGDW))
+			internal RepVGGDW(int ed, Device? device = null, Func<Module<Tensor, Tensor>>? act = null, torch.ScalarType? dtype = null) : base(nameof(RepVGGDW))
 			{
-				this.conv = new Conv(ed, ed, 7, 1, 3, groups: ed, act: false, device: device, dtype: dtype);
-				this.conv1 = new Conv(ed, ed, 3, 1, 1, groups: ed, act: false, device: device, dtype: dtype);
+				this.conv = new Conv(ed, ed, 7, 1, 3, groups: ed, act: act, device: device, dtype: dtype);
+				this.conv1 = new Conv(ed, ed, 3, 1, 1, groups: ed, act: act, device: device, dtype: dtype);
 				this.dim = ed;
-				this.act = nn.SiLU();
+				this.act = (act ?? SiLU)();
 
 				RegisterComponents();
 			}
@@ -825,52 +819,46 @@ namespace YoloSharp
 
 				if (training)
 				{
-					for (int i = 0; i < x.Length; i++)
-					{
-						x[i] = x[i].MoveToOuterDisposeScope();
-					}
-					return x;
+					return x.Select(tensor => tensor.MoveToOuterDisposeScope()).ToArray();
 				}
 				else
 				{
-					var list = new List<Tensor>() { cat(z, 1) };
-					Tensor[] result = list.ToArray();
-					for (int i = 0; i < result.Length; i++)
-					{
-						result[i] = result[i].MoveToOuterDisposeScope();
-					}
-					return result;
+					List<Tensor> list = new List<Tensor>() { cat(z, 1) };
+					return list.Select(tensor => tensor.MoveToOuterDisposeScope()).ToArray();
 				}
 
 			}
 
 			private (Tensor, Tensor) _make_grid(int nx = 20, int ny = 20, int i = 0)
 			{
-				float[] an = new float[this.anchors.Length * this.anchors[0].Length];
-				for (int ii = 0; ii < this.anchors.Length; ii++)
+				using (no_grad())
 				{
-					for (int j = 0; j < this.anchors[1].Length; j++)
+					float[] an = new float[this.anchors.Length * this.anchors[0].Length];
+					for (int ii = 0; ii < this.anchors.Length; ii++)
 					{
-						an[ii * this.anchors[0].Length + j] = this.anchors[ii][j];
+						for (int j = 0; j < this.anchors[1].Length; j++)
+						{
+							an[ii * this.anchors[0].Length + j] = this.anchors[ii][j];
+						}
 					}
+					Tensor anchors = tensor(an, new long[] { this.anchors.Length, this.anchors[0].Length / 2, 2 }, dtype: scalarType, device: device);
+					Tensor stride = tensor(new int[] { 8, 16, 32 }, dtype: scalarType, device: device);  //strides computed during build
+																										 //Tensor stride = tensor(ch, dtype: scalarType, device: device) / 8;  //strides computed during build
+					var d = anchors[i].device;
+					var t = anchors[i].dtype;
+
+					long[] shape = new long[] { 1, na, ny, nx, 2 }; // grid shape
+					Tensor y = arange(ny, t, d);
+					Tensor x = arange(nx, t, d);
+					Tensor[] xy = meshgrid(new Tensor[] { y, x }, indexing: "ij");
+					Tensor yv = xy[0];
+					Tensor xv = xy[1];
+					Tensor grid = stack(new Tensor[] { xv, yv }, 2).expand(shape) - 0.5f;  // add grid offset, i.e. y = 2.0 * x - 0.5
+
+					Tensor anchor_grid = (anchors[i] * stride[i]).view(new long[] { 1, na, 1, 1, 2 }).expand(shape);
+
+					return (grid, anchor_grid);
 				}
-				Tensor anchors = tensor(an, new long[] { this.anchors.Length, this.anchors[0].Length / 2, 2 }, dtype: scalarType, device: device);
-				Tensor stride = tensor(new int[] { 8, 16, 32 }, dtype: scalarType, device: device);  //strides computed during build
-																									 //Tensor stride = tensor(ch, dtype: scalarType, device: device) / 8;  //strides computed during build
-				var d = anchors[i].device;
-				var t = anchors[i].dtype;
-
-				long[] shape = new long[] { 1, na, ny, nx, 2 }; // grid shape
-				Tensor y = arange(ny, t, d);
-				Tensor x = arange(nx, t, d);
-				Tensor[] xy = meshgrid(new Tensor[] { y, x }, indexing: "ij");
-				Tensor yv = xy[0];
-				Tensor xv = xy[1];
-				Tensor grid = stack(new Tensor[] { xv, yv }, 2).expand(shape) - 0.5f;  // add grid offset, i.e. y = 2.0 * x - 0.5
-
-				Tensor anchor_grid = (anchors[i] * stride[i]).view(new long[] { 1, na, 1, 1, 2 }).expand(shape);
-
-				return (grid, anchor_grid);
 
 			}
 		}
@@ -941,10 +929,8 @@ namespace YoloSharp
 				{
 					Tensor y = _inference(x);
 					Tensor[] results = new Tensor[] { y }.Concat(x).ToArray();
-					for (int i = 0; i < results.Length; i++)
-					{
-						results[i] = results[i].MoveToOuterDisposeScope();
-					}
+					results = results.Select(tensor => tensor.MoveToOuterDisposeScope()).ToArray();
+
 					return results;
 				}
 			}
@@ -978,7 +964,7 @@ namespace YoloSharp
 			}
 
 			// Decode bounding boxes.
-			private Tensor decode_bboxes(Tensor bboxes, Tensor anchors)
+			protected virtual Tensor decode_bboxes(Tensor bboxes, Tensor anchors)
 			{
 				return dist2bbox(bboxes, anchors, xywh: true, dim: 1);
 			}
@@ -1082,11 +1068,8 @@ namespace YoloSharp
 				if (this.training)
 				{
 					x = (x.Append(mc).Append(p)).ToArray();
-					for (int i = 0; i < x.Length; i++)
-					{
-						x[i] = x[i].MoveToOuterDisposeScope();
-					}
-					return x;
+
+					return x.Select(tensor => tensor.MoveToOuterDisposeScope()).ToArray();
 				}
 				else
 				{
@@ -1095,6 +1078,9 @@ namespace YoloSharp
 			}
 		}
 
+		/// <summary>
+		/// YOLO OBB detection head for detection with rotation models.
+		/// </summary>
 		public class OBB : YolovDetect
 		{
 			private readonly int ne;
@@ -1116,14 +1102,11 @@ namespace YoloSharp
 			public override Tensor[] forward(Tensor[] x)
 			{
 				long bs = x[0].shape[0];  // batch size
-				List<Tensor> cat = new List<Tensor>();
-				for (int i = 0; i < this.nl; i++)
-				{
-					cat.Add(this.cv4[i].forward(x[i]).view(bs, this.ne, -1));
-				}
-				Tensor angle = torch.cat(cat, 2);  // OBB theta logits																							// NOTE: set `angle` as an attribute so that `decode_bboxes` could use it.
+
+				// NOTE: set `angle` as an attribute so that `decode_bboxes` could use it.
+				Tensor angle = torch.cat(cv4.Zip(x, (layer, input) => layer.forward(input).view(bs, ne, -1)).ToArray(), 2);  // OBB theta logits	
 				angle = (angle.sigmoid() - 0.25f) * MathF.PI;  // [-pi/4, 3pi/4]
-															   // angle = angle.sigmoid() * math.pi / 2  # [0, pi/2]
+															   // angle = angle.sigmoid() * math.pi / 2  // [0, pi/2]
 
 				if (!this.training)
 				{
@@ -1136,44 +1119,17 @@ namespace YoloSharp
 				{
 					return x.Concat(new Tensor[] { angle }).ToArray();
 				}
-				return new Tensor[] { torch.cat(new Tensor[] { x[0], angle }, 1), x[1], angle };
+				return new Tensor[] { torch.cat(new Tensor[] { x[0], angle }, 1), x[1], x[2], x[3], angle };
 
 			}
 
 			//Decode rotated bounding boxes.
-			private Tensor decode_bboxes(Tensor bboxes, Tensor anchors)
+			protected override Tensor decode_bboxes(Tensor bboxes, Tensor anchors)
 			{
-				return dist2rbox(bboxes, this.angle, anchors, dim: 1);
+				return Utils.Tal.dist2rbox(bboxes, this.angle, anchors, dim: 1);
 			}
 
-			/// <summary>
-			/// Decode predicted rotated bounding box coordinates from anchor points and distribution.
-			/// </summary>
-			/// <param name="pred_dist">Predicted rotated distance with shape (bs, h*w, 4).</param>
-			/// <param name="pred_angle">Predicted angle with shape (bs, h*w, 1).</param>
-			/// <param name="anchor_points">Anchor points with shape (h*w, 2).</param>
-			/// <param name="dim">Dimension along which to split. Defaults to -1.</param>
-			/// <returns>Predicted rotated bounding boxes with shape (bs, h*w, 4).</returns>
-			private Tensor dist2rbox(Tensor pred_dist, Tensor pred_angle, Tensor anchor_points, int dim = -1)
-			{
-				// using (NewDisposeScope())
-				{
-					Tensor[] lt_rb = pred_dist.split(2, dim: dim);
-					Tensor lt = lt_rb[0]; // (bs, h*w, 2)
-					Tensor rb = lt_rb[1]; // (bs, h*w, 2)
 
-					Tensor cos = torch.cos(pred_angle);
-					Tensor sin = torch.sin(pred_angle);
-					// (bs, h*w, 1)
-					Tensor[] xf_yf = ((rb - lt) / 2).split(1, dim: dim);
-					Tensor xf = xf_yf[0]; // (bs, h*w, 1)
-					Tensor yf = xf_yf[1]; // (bs, h*w, 1)
-					Tensor x = xf * cos - yf * sin;
-					Tensor y = xf * sin + yf * cos;
-					Tensor xy = torch.cat(new Tensor[] { x, y }, dim: dim) + anchor_points;
-					return torch.cat(new Tensor[] { xy, lt + rb }, dim: dim).MoveToOuterDisposeScope();
-				}
-			}
 		}
 
 	}

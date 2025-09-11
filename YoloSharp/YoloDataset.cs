@@ -1,5 +1,4 @@
 ﻿using SkiaSharp;
-using System.Drawing;
 using TorchSharp;
 using static TorchSharp.torch;
 
@@ -29,14 +28,8 @@ namespace YoloSharp
 				string extension = Path.GetExtension(file).ToLower();
 				return extension == ".jpg" || extension == ".png" || extension == ".bmp";
 			}).ToArray();
-			foreach (string imageFileName in imagesFileNames)
-			{
-				string labelFileName = GetLabelFileNameFromImageName(imageFileName);
-				if (!string.IsNullOrEmpty(labelFileName))
-				{
-					imageFiles.Add(imageFileName);
-				}
-			}
+
+			imageFiles.AddRange(imagesFileNames);
 			this.imageSize = imageSize;
 			this.useMosaic = useMosaic;
 			device = new Device(deviceType);
@@ -71,36 +64,69 @@ namespace YoloSharp
 			return outputs;
 		}
 
+		//public (Tensor, Tensor) GetTensorByLetterBox(long index)
+		//{
+		//	using var _ = NewDisposeScope();
+		//	string file = imageFiles[(int)index];
+		//	Tensor orgImageTensor = torchvision.io.read_image(file, torchvision.io.ImageReadMode.RGB).to(device);
+		//	var (imgTensor, _, _) = Letterbox(orgImageTensor, imageSize, imageSize);
+		//	Tensor lb = GetLetterBoxLabelTensor(index);
+		//	return (imgTensor.unsqueeze(0).MoveToOuterDisposeScope(), lb.to(imgTensor.device).MoveToOuterDisposeScope());
+		//}
+
 		public (Tensor, Tensor) GetTensorByLetterBox(long index)
 		{
-			using var _ = NewDisposeScope();
 			string file = imageFiles[(int)index];
-			Tensor orgImageTensor = torchvision.io.read_image(file, torchvision.io.ImageReadMode.RGB).to(device);
-			var (imgTensor, _, _) = Letterbox(orgImageTensor, imageSize, imageSize);
-			Tensor lb = GetLetterBoxLabelTensor(index);
-			return (imgTensor.unsqueeze(0).MoveToOuterDisposeScope(), lb.to(imgTensor.device).MoveToOuterDisposeScope());
+
+			SKBitmap bitmap = SKBitmap.Decode(file);
+			(SKBitmap img, float _, int pad, bool isWidthLonger) = Letterbox(bitmap, imageSize, imageSize);
+			Tensor lb = GetLetterBoxLabelTensor(index, pad, isWidthLonger);
+			SKData data = img.Encode(SKEncodedImageFormat.Jpeg, 100);
+			Tensor imgTensor = torchvision.io.read_image(data.AsStream(), torchvision.io.ImageReadMode.RGB);
+			return (imgTensor.unsqueeze(0), lb.to(imgTensor.device));
 		}
 
-		public (Tensor, Tensor) GetTensorByMosaic(long index)
+		public (Tensor image, Tensor label) GetLetterBoxObbData(long index)
 		{
-			using var _ = NewDisposeScope();
-			var (img, lb) = load_mosaic(index);
-			return (img.unsqueeze(0).MoveToOuterDisposeScope(), lb.to(img.device).MoveToOuterDisposeScope());
+			string file = imageFiles[(int)index];
+
+			SKBitmap bitmap = SKBitmap.Decode(file);
+			(SKBitmap img, float _, int pad, bool isWidthLonger) = Letterbox(bitmap, imageSize, imageSize);
+			Tensor lb = GetLetterBoxLabelTensor(index, pad, isWidthLonger);
+			SKData data = img.Encode(SKEncodedImageFormat.Jpeg, 100);
+			Tensor imgTensor = torchvision.io.read_image(data.AsStream(), torchvision.io.ImageReadMode.RGB);
+			return (imgTensor.unsqueeze(0), lb.to(imgTensor.device));
 		}
 
-		public (Tensor, Tensor) GetDataTensor(long index)
+		public (Tensor image, Tensor label) GetTensorByMosaic(long index)
 		{
-			using var _ = NewDisposeScope();
-			var (image, label) = useMosaic ? GetTensorByMosaic(index) : GetTensorByLetterBox(index);
+			(Tensor img, Tensor lb) = load_mosaic(index);
+			return (img.unsqueeze(0), lb.to(img.device));
+		}
+
+		public (Tensor image, Tensor label) GetDataTensor(long index)
+		{
+			(Tensor image, Tensor label) = useMosaic ? GetTensorByMosaic(index) : GetTensorByLetterBox(index);
 			if (image.shape.Length == 3)
 			{
 				image = image.unsqueeze(0);
 			}
 			image = image / 255.0f;
-			return (image.MoveToOuterDisposeScope(), label.MoveToOuterDisposeScope());
+			return (image, label);
 		}
 
-		public (Tensor, Tensor, Tensor) GetSegmentDataTensor(long index)
+
+		public (Tensor image, Tensor label) GetObbDataTensor(long index)
+		{
+			if (useMosaic)
+			{
+				Console.WriteLine("Mosaic method are not support now, it will come soon.");
+				//load_mosaic(index);
+			}
+			return GetLetterBoxObbData(index);
+		}
+
+		public (Tensor image, Tensor label, Tensor mask) GetSegmentDataTensor(long index)
 		{
 			if (useMosaic)
 			{
@@ -110,8 +136,25 @@ namespace YoloSharp
 			return GetLetterBoxSegmentData(index);
 		}
 
+		private (SKBitmap paddedImage, float scale, int pad, bool isWidthLonger) Letterbox(SKBitmap sourceBitmap, int targetWidth, int targetHeight)
+		{
+			SKBitmap targetBitmap = new SKBitmap(targetWidth, targetHeight);
+			using (SKCanvas canvas = new SKCanvas(targetBitmap))
+			{
+				canvas.Clear(new SKColor(114, 114, 114));
+				float ratio = Math.Min((float)targetWidth / sourceBitmap.Width, (float)targetHeight / sourceBitmap.Height);
+				int scaledWidth = (int)(sourceBitmap.Width * ratio);
+				int scaledHeight = (int)(sourceBitmap.Height * ratio);
+				int offsetX = (targetWidth - scaledWidth) / 2;
+				int offsetY = (targetHeight - scaledHeight) / 2;
+				SKRect destRect = SKRect.Create(offsetX, offsetY, scaledWidth, scaledHeight);
+				canvas.DrawBitmap(sourceBitmap, destRect);
+				return (targetBitmap, ratio, offsetX + offsetY, offsetY > 0);
+			}
+		}
 
-		private (Tensor, float, int) Letterbox(Tensor image, int targetWidth, int targetHeight)
+
+		private (Tensor paddedImage, float scale, int pad) Letterbox(Tensor image, int targetWidth, int targetHeight)
 		{
 			using var _ = NewDisposeScope();
 			// 获取图像的原始尺寸
@@ -145,15 +188,18 @@ namespace YoloSharp
 			return (paddedImage.MoveToOuterDisposeScope(), scale, Math.Max(padLeft, padTop));
 		}
 
-		public Tensor GetLetterBoxLabelTensor(long index)
+		public Tensor GetLetterBoxLabelTensor(long index, int pad, bool isWidthLonger = true)
 		{
-			using var _ = NewDisposeScope();
-			Tensor orgImageTensor = torchvision.io.read_image(imageFiles[(int)index]);
-			var (imgTensor, scale, pad) = Letterbox(orgImageTensor, imageSize, imageSize);
-			bool isWidthLonger = orgImageTensor.shape[2] > orgImageTensor.shape[1];
-
+			//using var _ = NewDisposeScope();
+			//Tensor orgImageTensor = torchvision.io.read_image(imageFiles[(int)index]);
+			//var (imgTensor, scale, pad) = Letterbox(orgImageTensor, imageSize, imageSize);
+			//bool isWidthLonger = orgImageTensor.shape[2] > orgImageTensor.shape[1];
 
 			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
+			if (string.IsNullOrEmpty(labelName))
+			{
+				return torch.zeros(new long[] { 0, 5 }, torch.float32).MoveToOuterDisposeScope(); // No labels found, return empty tensor
+			}
 			string[] lines = File.ReadAllLines(labelName);
 
 			float[,] labelArray = new float[lines.Length, 5];
@@ -180,12 +226,12 @@ namespace YoloSharp
 				}
 
 			}
-			Tensor labelTensor = tensor(labelArray);
-			return labelTensor.MoveToOuterDisposeScope();
-
+			//Tensor labelTensor = tensor(labelArray);
+			//return labelTensor.MoveToOuterDisposeScope();
+			return tensor(labelArray);
 		}
 
-		public (Tensor, Tensor, Tensor) GetLetterBoxSegmentData(long index)
+		public (Tensor image, Tensor label, Tensor mask) GetLetterBoxSegmentData(long index)
 		{
 			using var _ = NewDisposeScope();
 			int maskSize = 160;
@@ -208,6 +254,10 @@ namespace YoloSharp
 			outputImg[TensorIndex.Colon, ..(int)imgTensor.shape[1], ..(int)imgTensor.shape[2]] = imgTensor;
 
 			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
+			if (string.IsNullOrEmpty(labelName))
+			{
+				return (outputImg.MoveToOuterDisposeScope(), torch.zeros(new long[] { 0, 5 }, torch.float32).MoveToOuterDisposeScope(), torch.zeros(new long[] { maskSize, maskSize }).MoveToOuterDisposeScope()); // No labels found, return empty tensors
+			}
 			string[] lines = File.ReadAllLines(labelName);
 			float[,] labelArray = new float[lines.Length, 5];
 
@@ -217,10 +267,10 @@ namespace YoloSharp
 				string[] datas = lines[i].Split(' ');
 				labelArray[i, 0] = float.Parse(datas[0]);
 
-				List<PointF> points = new List<PointF>();
+				List<SKPoint> points = new List<SKPoint>();
 				for (int j = 1; j < datas.Length; j = j + 2)
 				{
-					points.Add(new PointF(float.Parse(datas[j]) * scale * originalWidth * maskSize / imageSize, float.Parse(datas[j + 1]) * scale * originalHeight * maskSize / imageSize));
+					points.Add(new SKPoint(float.Parse(datas[j]) * scale * originalWidth * maskSize / imageSize, float.Parse(datas[j + 1]) * scale * originalHeight * maskSize / imageSize));
 				}
 
 				float maxX = points.Max(p => p.X) / maskSize;
@@ -249,7 +299,7 @@ namespace YoloSharp
 						paint.IsAntialias = true;       // Smooth edges
 
 						// Convert points to SKPoint array
-						SKPoint[]? skPoints = points.Select(p => new SKPoint((float)p.X, (float)p.Y)).ToArray();
+						SKPoint[] skPoints = points.Select(p => new SKPoint((float)p.X, (float)p.Y)).ToArray();
 
 						// Draw polygon
 						using (var path = new SKPath())
@@ -273,6 +323,8 @@ namespace YoloSharp
 			return torchvision.io.read_image(imageFiles[(int)index], torchvision.io.ImageReadMode.RGB);
 		}
 
+
+
 		/// <summary>
 		/// Loads a 4-image mosaic for YOLO, combining 1 selected and 3 random images, with labels and segments.
 		/// </summary>
@@ -281,6 +333,7 @@ namespace YoloSharp
 		public (Tensor, Tensor) load_mosaic(long index)
 		{
 			using var _ = NewDisposeScope();
+			using var __ = no_grad();
 			long[] indexs = Sample(index, 0, (int)Count, 4);
 			Random random = new Random();
 			int xc = random.Next(-mosaic_border[0], 2 * imageSize + mosaic_border[0]);
@@ -321,7 +374,7 @@ namespace YoloSharp
 				int padh = y1a - y1b;
 
 				Tensor labels = GetOrgLabelTensor(indexs[i]).to(device);
-				labels[TensorIndex.Ellipsis, 1..5] = xywhn2xyxy(labels[TensorIndex.Ellipsis, 1..5], w, h, padw, padh);
+				labels[TensorIndex.Ellipsis, 1..5] = Utils.Ops.xywhn2xyxy(labels[TensorIndex.Ellipsis, 1..5], w, h, padw, padh);
 				label4.Add(labels);
 			}
 			var labels4 = concat(label4, 0);
@@ -330,7 +383,7 @@ namespace YoloSharp
 
 			var (im, targets) = random_perspective(img4, labels4, degrees: 0, translate: 0.1f, scale: 0.5f, shear: 0, perspective: 0.0f, mosaic_border[0], mosaic_border[1]);
 
-			targets[TensorIndex.Ellipsis, 1..5] = xyxy2xywhn(targets[TensorIndex.Ellipsis, 1..5], w: (int)im.shape[1], h: (int)im.shape[2], clip: true, eps: 1e-3f);
+			targets[TensorIndex.Ellipsis, 1..5] = Utils.Ops.xyxy2xywhn(targets[TensorIndex.Ellipsis, 1..5], w: (int)im.shape[1], h: (int)im.shape[2], clip: true, eps: 1e-3f);
 			return (im.MoveToOuterDisposeScope(), targets.MoveToOuterDisposeScope());
 		}
 
@@ -388,54 +441,17 @@ namespace YoloSharp
 			return list.ToArray();
 		}
 
-		/// <summary>
-		/// Convert nx4 boxes from [x, y, w, h] normalized to [x1, y1, x2, y2] where xy1=top-left, xy2=bottom-right.
-		/// </summary>
-		/// <param name="x"></param>
-		/// <param name="w"></param>
-		/// <param name="h"></param>
-		/// <param name="padw"></param>
-		/// <param name="padh"></param>
-		/// <returns></returns>
-		private Tensor xywhn2xyxy(Tensor x, int w = 640, int h = 640, int padw = 0, int padh = 0)
-		{
-			using var _ = NewDisposeScope();
-			Tensor y = x.clone();
-			y[TensorIndex.Ellipsis, 0] = w * (x[TensorIndex.Ellipsis, 0] - x[TensorIndex.Ellipsis, 2] / 2) + padw;  // top left x
-			y[TensorIndex.Ellipsis, 1] = h * (x[TensorIndex.Ellipsis, 1] - x[TensorIndex.Ellipsis, 3] / 2) + padh;  // top left y
-			y[TensorIndex.Ellipsis, 2] = w * (x[TensorIndex.Ellipsis, 0] + x[TensorIndex.Ellipsis, 2] / 2) + padw;  // bottom right x
-			y[TensorIndex.Ellipsis, 3] = h * (x[TensorIndex.Ellipsis, 1] + x[TensorIndex.Ellipsis, 3] / 2) + padh;  // bottom right y
-			return y.MoveToOuterDisposeScope();
-		}
 
-		/// <summary>
-		/// Convert nx4 boxes from [x1, y1, x2, y2] to [x, y, w, h] normalized where xy1=top-left, xy2=bottom-right.
-		/// </summary>
-		/// <param name="x"></param>
-		/// <param name="w"></param>
-		/// <param name="h"></param>
-		/// <param name="clip"></param>
-		/// <param name="eps"></param>
-		/// <returns></returns>
-		private Tensor xyxy2xywhn(Tensor x, int w = 640, int h = 640, bool clip = false, float eps = 0.0f)
-		{
-			using var _ = NewDisposeScope();
-			if (clip)
-			{
-				x = Lib.ClipBox(x, new float[] { h - eps, w - eps });
-			}
-			var y = x.clone();
-			y[TensorIndex.Ellipsis, 0] = (x[TensorIndex.Ellipsis, 0] + x[TensorIndex.Ellipsis, 2]) / 2 / w;  // x center
-			y[TensorIndex.Ellipsis, 1] = (x[TensorIndex.Ellipsis, 1] + x[TensorIndex.Ellipsis, 3]) / 2 / h;// y center
-			y[TensorIndex.Ellipsis, 2] = (x[TensorIndex.Ellipsis, 2] - x[TensorIndex.Ellipsis, 0]) / w;  // width
-			y[TensorIndex.Ellipsis, 3] = (x[TensorIndex.Ellipsis, 3] - x[TensorIndex.Ellipsis, 1]) / h;  // height
-			return y.MoveToOuterDisposeScope();
-		}
+
+
 
 		private Tensor GetOrgLabelTensor(long index)
 		{
-			using var _ = NewDisposeScope();
 			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
+			if (string.IsNullOrEmpty(labelName) || !File.Exists(labelName))
+			{
+				return torch.zeros(new long[] { 0, 5 }, torch.float32); // No labels found, return empty tensor
+			}
 			string[] lines = File.ReadAllLines(labelName);
 
 			float[,] labelArray = new float[lines.Length, 5];
@@ -449,13 +465,17 @@ namespace YoloSharp
 				}
 			}
 			Tensor labelTensor = tensor(labelArray);
-			return labelTensor.MoveToOuterDisposeScope();
+			return labelTensor;
 		}
 
 		private (Tensor, Tensor) GetOrgMaskLabelTensor(long index, int width = 160, int height = 160)
 		{
 			using var _ = NewDisposeScope();
 			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
+			if (string.IsNullOrEmpty(labelName) || !File.Exists(labelName))
+			{
+				return (torch.zeros(new long[] { 0, 5 }, torch.float32).MoveToOuterDisposeScope(), torch.zeros(new long[] { 1, height, width }, torch.uint8).MoveToOuterDisposeScope()); // No labels found, return empty tensors
+			}
 			string[] lines = File.ReadAllLines(labelName);
 
 			List<Tensor> labels = new List<Tensor>();
@@ -517,6 +537,8 @@ namespace YoloSharp
 		private (Tensor, Tensor) random_perspective(Tensor im, Tensor targets, int degrees = 10, float translate = 0.1f, float scale = 0.1f, int shear = 10, float perspective = 0.0f, int borderX = 0, int borderY = 0)
 		{
 			using var _ = NewDisposeScope();
+			using var __ = no_grad();
+
 			Device device = im.device;
 			int height = (int)im.shape[1] + borderY * 2;
 			int width = (int)im.shape[2] + borderX * 2;
@@ -648,7 +670,8 @@ namespace YoloSharp
 
 		public static Tensor GetRotationMatrix2D(float angle, float scale)
 		{
-			using var _ = NewDisposeScope();
+			using var __ = no_grad();
+
 			// 将角度转换为弧度
 			float theta = angle * (float)Math.PI / 180.0f;
 
@@ -657,13 +680,13 @@ namespace YoloSharp
 			float sinTheta = (float)Math.Sin(theta);
 
 			// 创建旋转矩阵
-			var R = tensor(new float[,]
+			Tensor R = tensor(new float[,]
 			{
 				{ scale * cosTheta, -scale * sinTheta, 0 },
 				{ scale * sinTheta, scale * cosTheta, 0 },
 				{ 0, 0, 1 }
 			});
-			return R.MoveToOuterDisposeScope();
+			return R;
 		}
 
 		/// <summary>
@@ -679,6 +702,8 @@ namespace YoloSharp
 		private Tensor box_candidates(Tensor box1, Tensor box2, float wh_thr = 2, float ar_thr = 100, float area_thr = 0.1f, double eps = 1e-16)
 		{
 			using var _ = NewDisposeScope();
+			using var __ = no_grad();
+
 			var (w1, h1) = (box1[2] - box1[0], box1[3] - box1[1]);
 			var (w2, h2) = (box2[2] - box2[0], box2[3] - box2[1]);
 			var ar = maximum(w2 / (h2 + eps), h2 / (w2 + eps)); // aspect ratio

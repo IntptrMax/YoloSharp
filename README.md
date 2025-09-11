@@ -17,7 +17,7 @@ With the help of this project you won't have to transform .pt model to onnx, and
 
 ## Models
 
-You can download yolov5/yolov8 pre-trained models here.
+You can download yolo pre-trained models here.
 
 <details>
   <summary>Prediction Checkpoints</summary>
@@ -47,50 +47,51 @@ You can download the code or add it from nuget.
 
     dotnet add package IntptrMax.YoloSharp
 
+
 > [!NOTE]
 > Please add one of libtorch-cpu, libtorch-cuda-12.1, libtorch-cuda-12.1-win-x64 or libtorch-cuda-12.1-linux-x64 version 2.5.1.0 to execute.
 
-In your code you can use it as below.
+You can use it with the code below:
 
 ### Predict
 
-You can use it with the code below:
+
 
 ```CSharp
-MagickImage predictImage = new MagickImage(predictImagePath);
+	SKBitmap predictImage = SKBitmap.Decode(predictImagePath);
+	
+	// Create predictor
+	Predictor predictor = new Predictor(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
+	predictor.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
-// Create predictor
-Predictor predictor = new Predictor(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
+	// Train model
+	predictor.Train(trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, useMosaic: true);
+	predictor.LoadModel(Path.Combine(outputPath, "best.bin"));
 
-// Train model
-predictor.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
-predictor.Train(trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, useMosaic: true);
-
-//ImagePredict image
-predictor.LoadModel(Path.Combine(outputPath, "best.bin"));
-List<Predictor.PredictResult> predictResult = predictor.ImagePredict(predictImage, predictThreshold, iouThreshold);
+	// ImagePredict image
+	List<Predictor.PredictResult> predictResult = predictor.ImagePredict(predictImage, predictThreshold, iouThreshold);
 ```
+</br>
 Use yolov5n pre-trained model to detect.
 
 ![image](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/zidane.jpg)
 
 ### Segment
 
-You can use it with the code below:
-
 ```CSharp
-MagickImage predictImage = new MagickImage(predictImagePath);
+	SKBitmap predictImage = SKBitmap.Decode(predictImagePath);
 
-// Create segmenter
-Segmenter segmenter = new Segmenter(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
-segmenter.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
+    //Create segmenter
+	Segmenter segmenter = new Segmenter(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
+	segmenter.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
-// Train model
-segmenter.Train(trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, useMosaic: false);
-segmenter.LoadModel(Path.Combine(outputPath, "best.bin"));
+	// Train model
+	segmenter.Train(trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, useMosaic: false);
+	segmenter.LoadModel(Path.Combine(outputPath, "best.bin"));
 
-// ImagePredict image
-var (predictResult, resultImage) = segmenter.ImagePredict(predictImage, predictThreshold, iouThreshold);
+	// ImagePredict image
+	var (predictResult, resultImage) = segmenter.ImagePredict(predictImage, predictThreshold, iouThreshold);
+
 ```
 
 Use yolov8n-seg pre-trained model to detect.

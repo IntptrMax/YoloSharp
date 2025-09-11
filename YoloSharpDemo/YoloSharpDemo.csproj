@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="libtorch-cuda-12.1-win-x64" Version="2.5.1" />
+    <PackageReference Include="TorchSharp-cuda-windows" Version="0.105.1" />
   </ItemGroup>
 
   <ItemGroup>

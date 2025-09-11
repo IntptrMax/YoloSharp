@@ -53,21 +53,7 @@ namespace YoloSharp
 			return state_dict;
 		}
 
-		/// <summary>
-		/// Takes a list of bounding boxes and a shape (height, width) and clips the bounding boxes to the shape.
-		/// </summary>
-		/// <param name="x">The bounding boxes to clip</param>
-		/// <param name="shape">The shape of the image</param>
-		/// <returns>The clipped boxes</returns>
-		internal static Tensor ClipBox(Tensor x, float[] shape)
-		{
-			Tensor box = torch.zeros_like(x);
-			box[TensorIndex.Ellipsis, 0] = x[TensorIndex.Ellipsis, 0].clamp_(0, shape[1]);  // x1
-			box[TensorIndex.Ellipsis, 1] = x[TensorIndex.Ellipsis, 1].clamp_(0, shape[0]);  // y1
-			box[TensorIndex.Ellipsis, 2] = x[TensorIndex.Ellipsis, 2].clamp_(0, shape[1]);  // x2
-			box[TensorIndex.Ellipsis, 3] = x[TensorIndex.Ellipsis, 3].clamp_(0, shape[0]);  // y2
-			return box;
-		}
+		
 
 		internal static Tensor GetTensorFromImage(SKBitmap skBitmap)
 		{
