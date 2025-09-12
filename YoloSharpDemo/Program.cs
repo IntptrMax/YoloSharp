@@ -92,7 +92,6 @@ namespace YoloSharpDemo
 
 			Console.WriteLine();
 			Console.WriteLine("Image Predict done");
-			Console.ReadLine();
 		}
 
 	}
