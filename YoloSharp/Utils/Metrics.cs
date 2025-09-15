@@ -223,10 +223,10 @@ namespace Utils
 							
 							{
 								Tensor alpha = v / (v - iou + (1 + eps));
-								return iou - (rho2 / c2 + v * alpha);  //CIoU
+								return (iou - (rho2 / c2 + v * alpha)).MoveToOuterDisposeScope();  //CIoU
 							}
 						}
-						return iou - rho2 / c2;  // DIoU
+						return (iou - rho2 / c2).MoveToOuterDisposeScope();  // DIoU
 					}
 					Tensor c_area = cw * ch + eps;    // convex area
 					return (iou - (c_area - union) / c_area).MoveToOuterDisposeScope();  // GIoU https://arxiv.org/pdf/1902.09630.pdf

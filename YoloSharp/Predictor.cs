@@ -14,7 +14,7 @@ namespace YoloSharp
 	public class Predictor
 	{
 		private Module<Tensor, Tensor[]> yolo;
-		private Module<Tensor[], Tensor, (Tensor, Tensor)> loss;
+		private Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> loss;
 		private Module<Tensor, float, float, Tensor> predict;
 		private torch.Device device;
 		private torch.ScalarType dtype;
@@ -98,22 +98,37 @@ namespace YoloSharp
 					step++;
 					long[] indexs = data["index"].data<long>().ToArray();
 					Tensor[] images = new Tensor[indexs.Length];
-					Tensor[] labels = new Tensor[indexs.Length];
+					List<float> batch_idx = new List<float>();
+					List<float> cls = new List<float>();
+					List<Tensor> bboxes = new List<Tensor>();
 					for (int i = 0; i < indexs.Length; i++)
 					{
-						var (img, lb) = trainDataSet.GetDataTensor(indexs[i]);
+						(Tensor img, Tensor lb) = trainDataSet.GetDataTensor(indexs[i]);
 						images[i] = img.to(dtype, device);
-						labels[i] = full(new long[] { lb.shape[0], lb.shape[1] + 1 }, i, dtype: dtype, device: lb.device);
-						labels[i].slice(1, 1, lb.shape[1] + 1, 1).copy_(lb);
+						batch_idx.AddRange(Enumerable.Repeat((float)i, (int)lb.shape[0]));
+						cls.AddRange(lb[TensorIndex.Colon, 0].data<float>());
+						bboxes.Add(lb[TensorIndex.Colon, 1..5].to(dtype, device));
 					}
+
+					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+					Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);
+					Tensor bboxes_tensor = torch.cat(bboxes).to(dtype, device);
 					Tensor imageTensor = concat(images);
-					Tensor labelTensor = concat(labels).to(imageTensor.device);
-					if (labelTensor.shape[0] == 0)
+
+					if (batch_idx.Count < 1)
 					{
 						continue;
 					}
+
+					Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
+					{
+						{ "batch_idx", batch_idx_tensor },
+						{ "cls", cls_tensor },
+						{ "bboxes", bboxes_tensor }
+					};
+
 					Tensor[] list = yolo.forward(imageTensor);
-					var (ls, ls_item) = loss.forward(list, labelTensor);
+					(Tensor ls, Tensor ls_item) = loss.forward(list, targets);
 					optimizer.zero_grad();
 					ls.backward();
 					optimizer.step();
@@ -145,24 +160,37 @@ namespace YoloSharp
 				{
 					long[] indexs = data["index"].data<long>().ToArray();
 					Tensor[] images = new Tensor[indexs.Length];
-					Tensor[] labels = new Tensor[indexs.Length];
+					List<float> batch_idx = new List<float>();
+					List<float> cls = new List<float>();
+					List<Tensor> bboxes = new List<Tensor>();
 					for (int i = 0; i < indexs.Length; i++)
 					{
-						var (img, lb) = valDataset.GetDataTensor(indexs[i]);
+						(Tensor img,Tensor lb) = valDataset.GetDataTensor(indexs[i]);
 						images[i] = img.to(this.dtype, device);
-						labels[i] = full(new long[] { lb.shape[0], lb.shape[1] + 1 }, i, dtype: dtype, device: lb.device);
-						labels[i].slice(1, 1, lb.shape[1] + 1, 1).copy_(lb);
+						batch_idx.AddRange(Enumerable.Repeat((float)i, (int)lb.shape[0]));
+						cls.AddRange(lb[TensorIndex.Colon, 0].data<float>());
+						bboxes.Add(lb[TensorIndex.Colon, 1..5].to(dtype, device));
 					}
-					Tensor imageTensor = concat(images);
-					Tensor labelTensor = concat(labels);
+					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+					Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);
+					Tensor bboxes_tensor = torch.cat(bboxes).to(dtype, device);
 
-					if (labelTensor.shape[0] == 0)
+					Tensor imageTensor = concat(images);
+
+					if (batch_idx.Count < 1)
 					{
 						continue;
 					}
 
+					Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
+					{
+						{ "batch_idx", batch_idx_tensor },
+						{ "cls", cls_tensor },
+						{ "bboxes", bboxes_tensor }
+					};
+
 					Tensor[] list = yolo.forward(imageTensor);
-					var (ls, ls_item) = loss.forward(list.ToArray(), labelTensor);
+					var (ls, ls_item) = loss.forward(list.ToArray(), targets);
 					if (lossValue == float.MaxValue)
 					{
 						lossValue = ls.ToSingle();

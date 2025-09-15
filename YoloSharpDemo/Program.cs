@@ -15,7 +15,7 @@ namespace YoloSharpDemo
 			//predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
 			int batchSize = 16;
 			int sortCount = 80;
-			int epochs = 10;
+			int epochs = 100;
 			float predictThreshold = 0.25f;
 			float iouThreshold = 0.7f;
 

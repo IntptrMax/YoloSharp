@@ -14,7 +14,7 @@ namespace YoloSharp
 	public class Segmenter
 	{
 		private Module<Tensor, Tensor[]> yolo;
-		private Module<Tensor[], Tensor, Tensor, (Tensor, Tensor)> loss;
+		private Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> loss;
 		private torch.Device device;
 		private torch.ScalarType dtype;
 		private int sortCount;
@@ -72,26 +72,40 @@ namespace YoloSharp
 					step++;
 					long[] indexs = data["index"].data<long>().ToArray();
 					Tensor[] images = new Tensor[indexs.Length];
-					Tensor[] labels = new Tensor[indexs.Length];
 					Tensor[] masks = new Tensor[indexs.Length];
+					List<float> batch_idx = new List<float>();
+					List<float> cls = new List<float>();
+					List<Tensor> bboxes = new List<Tensor>();
 					for (int i = 0; i < indexs.Length; i++)
 					{
 						(Tensor img, Tensor lb, Tensor mask) = trainDataSet.GetSegmentDataTensor(indexs[i]);
 						images[i] = img.to(dtype, device).unsqueeze(0) / 255.0f;
-						labels[i] = full(new long[] { lb.shape[0], lb.shape[1] + 1 }, i, dtype: dtype, device: lb.device);
-						labels[i].slice(1, 1, lb.shape[1] + 1, 1).copy_(lb);
 						masks[i] = mask.to(dtype, device).unsqueeze(0);
+						batch_idx.AddRange(Enumerable.Repeat((float)i, (int)lb.shape[0]));
+						cls.AddRange(lb[TensorIndex.Colon, 0].data<float>());
+						bboxes.Add(lb[TensorIndex.Colon, 1..5].to(dtype, device));
 					}
+					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+					Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);
+					Tensor bboxes_tensor = torch.cat(bboxes).to(dtype, device);
 					Tensor imageTensor = concat(images);
-					Tensor labelTensor = concat(labels);
 					Tensor maskTensor = concat(masks);
-					if (labelTensor.shape[0] == 0)
+
+					if (batch_idx.Count < 1)
 					{
 						continue;
 					}
 
+					Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
+					{
+						{ "batch_idx", batch_idx_tensor },
+						{ "cls", cls_tensor },
+						{ "bboxes", bboxes_tensor },
+						{ "masks", maskTensor}
+					};
+
 					Tensor[] list = yolo.forward(imageTensor);
-					var (ls, ls_item) = loss.forward(list, labelTensor, maskTensor);
+					var (ls, ls_item) = loss.forward(list, targets);
 					optimizer.zero_grad();
 					ls.backward();
 					optimizer.step();
@@ -125,25 +139,41 @@ namespace YoloSharp
 			{
 				long[] indexs = data["index"].data<long>().ToArray();
 				Tensor[] images = new Tensor[indexs.Length];
-				Tensor[] labels = new Tensor[indexs.Length];
 				Tensor[] masks = new Tensor[indexs.Length];
+				List<float> batch_idx = new List<float>();
+				List<float> cls = new List<float>();
+				List<Tensor> bboxes = new List<Tensor>();
 				for (int i = 0; i < indexs.Length; i++)
 				{
 					var (img, lb, mask) = yoloDataset.GetSegmentDataTensor(indexs[i]);
 					images[i] = img.to(dtype, device).unsqueeze(0) / 255.0f;
-					labels[i] = full(new long[] { lb.shape[0], lb.shape[1] + 1 }, i, dtype: dtype, device: lb.device);
-					labels[i].slice(1, 1, lb.shape[1] + 1, 1).copy_(lb);
 					masks[i] = mask.to(dtype, device).unsqueeze(0);
+					batch_idx.AddRange(Enumerable.Repeat((float)i, (int)lb.shape[0]));
+					cls.AddRange(lb[TensorIndex.Colon, 0].data<float>());
+					bboxes.Add(lb[TensorIndex.Colon, 1..5].to(dtype, device));
+
 				}
+				Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+				Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);
+				Tensor bboxes_tensor = torch.cat(bboxes).to(dtype, device);
 				Tensor imageTensor = concat(images);
-				Tensor labelTensor = concat(labels);
 				Tensor maskTensor = concat(masks);
-				if (labelTensor.shape[0] == 0)
+
+				if (batch_idx.Count < 1)
 				{
 					continue;
 				}
+
+				Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
+					{
+						{ "batch_idx", batch_idx_tensor },
+						{ "cls", cls_tensor },
+						{ "bboxes", bboxes_tensor },
+						{ "masks", maskTensor}
+					};
+
 				Tensor[] list = yolo.forward(imageTensor);
-				var (ls, ls_item) = loss.forward(list, labelTensor, maskTensor);
+				var (ls, ls_item) = loss.forward(list, targets);
 				if (lossValue == float.MaxValue)
 				{
 					lossValue = ls.ToSingle();
