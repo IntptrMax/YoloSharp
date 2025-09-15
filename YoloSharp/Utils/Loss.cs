@@ -13,7 +13,7 @@ namespace Utils
 		/// </summary>
 		/// <param name="eps"></param>
 		/// <returns>pos: `1.0 - 0.5*eps`, neg: `0.5*eps`.</returns>
-		private static (float, float) Smooth_BCE(float eps = 0.1f)
+		private static (float pos, float neg) Smooth_BCE(float eps = 0.1f)
 		{
 			// For details see https://github.com/ultralytics/yolov3/issues/238;  //issuecomment-598028441"""
 			return (1.0f - 0.5f * eps, 0.5f * eps);
@@ -181,7 +181,7 @@ namespace Utils
 			}
 		}
 
-		public class V5DetectionLoss : Module<Tensor[], Tensor, (Tensor, Tensor)>
+		internal class V5DetectionLoss : Module<Tensor[], Tensor, (Tensor, Tensor)>
 		{
 			private readonly float lambda_coord = 5.0f;
 			private readonly float lambda_noobj = 0.5f;
@@ -395,7 +395,7 @@ namespace Utils
 
 		}
 
-		public class V8DetectionLoss : Module<Tensor[], Tensor, (Tensor, Tensor)>
+		internal class V8DetectionLoss : Module<Tensor[], Tensor, (Tensor, Tensor)>
 		{
 			protected readonly int[] stride;
 			protected readonly int nc;
@@ -541,7 +541,7 @@ namespace Utils
 
 		}
 
-		public class V8SegmentationLoss : Module<Tensor[], Tensor, Tensor, (Tensor, Tensor)>
+		internal class V8SegmentationLoss : Module<Tensor[], Tensor, Tensor, (Tensor, Tensor)>
 		{
 			private readonly int[] stride;
 			private readonly int nc;
@@ -574,7 +574,6 @@ namespace Utils
 			{
 				using (NewDisposeScope())
 				{
-
 					device = preds[0].device;
 					dtype = preds[0].dtype;
 
@@ -795,100 +794,99 @@ namespace Utils
 					return (Utils.Ops.crop_mask(loss, xyxy).mean(dimensions: new long[] { 1, 2 }) / area).sum().MoveToOuterDisposeScope();
 				}
 			}
+		}
 
-			public class V8OBBLoss : V8DetectionLoss
+		internal class V8OBBLoss : V8DetectionLoss
+		{
+			private readonly Utils.Tal.RotatedTaskAlignedAssigner assigner;
+			private readonly RotatedBboxLoss bbox_loss;
+
+			public V8OBBLoss(int nc = 80, int reg_max = 16, int tal_topk = 10) : base(nc: nc, reg_max: reg_max, tal_topk: tal_topk)
 			{
-				private readonly Utils.Tal.RotatedTaskAlignedAssigner assigner;
-				private readonly RotatedBboxLoss bbox_loss;
-
-				public V8OBBLoss(int nc = 80, int reg_max = 16, int tal_topk = 10) : base(nc: nc, reg_max: reg_max, tal_topk: tal_topk)
-				{
-					this.assigner = new Utils.Tal.RotatedTaskAlignedAssigner(topk: 10, num_classes: this.nc, alpha: 0.5f, beta: 6.0f);
-					this.bbox_loss = new RotatedBboxLoss(this.reg_max);
-				}
-
-				private Tensor preprocess(Tensor targets, int batch_size, Tensor scale_tensor)
-				{
-					// Preprocess targets for oriented bounding box detection.
-					this.device = targets.device;
-					this.dtype = targets.dtype;
-					Tensor @out = torch.zeros(batch_size, 0, 6, device: this.device);
-					if (targets.shape[0] != 0)
-					{
-						Tensor i = targets[.., 0];  // image index
-						(_, _, Tensor counts) = i.unique(return_counts: true);
-
-						counts = counts.to(torch.int32);
-						@out = torch.zeros(new long[] { batch_size, counts.max().ToInt64(), 6 }, device: this.device);
-
-						for (int j = 0; j < batch_size; j++)
-						{
-							Tensor matches = (i == j);
-							int n = matches.sum().ToInt32();
-							if (n > 0)
-							{
-								Tensor bboxes = targets[TensorIndex.Tensor(matches), 2..];
-								bboxes[.., ..4].mul_(scale_tensor);
-								@out[j, ..n] = torch.cat(new Tensor[] { targets[TensorIndex.Tensor(matches), 1..2], bboxes }, dim: -1);
-							}
-						}
-
-					}
-					return @out; //Preprocess targets for oriented bounding box detection.
-				}
-
-				public override (Tensor, Tensor) forward(Tensor[] preds, Tensor targets)
-				{
-					// Calculate and return the loss for oriented bounding box detection.
-					Tensor loss = torch.zeros(3, device: this.device);  // box, cls, dfl
-					Tensor[] feats = new Tensor[] { preds[1], preds[2], preds[3] };
-					Tensor pred_angle = preds[4];
-
-					long batch_size = pred_angle.shape[0];  // batch size, number of masks, mask height, mask width
-
-					Tensor[] pred_mix = feats.Select(xi => xi.view(new long[] { feats[0].shape[0], this.no, -1 })).ToArray();
-					Tensor[] pred_dist_scores = torch.cat(pred_mix, 2).split(new long[] { this.reg_max * 4, this.nc }, 1);
-					Tensor pred_distri = pred_dist_scores[0];
-					Tensor pred_scores = pred_dist_scores[1];
-
-					// b, grids, ..
-					pred_scores = pred_scores.permute(0, 2, 1).contiguous();
-					pred_distri = pred_distri.permute(0, 2, 1).contiguous();
-					pred_angle = pred_angle.permute(0, 2, 1).contiguous();
-
-					dtype = pred_scores.dtype;
-					device = pred_scores.device;
-					Tensor imgsz = torch.tensor(feats[0].shape[2..], device: device, dtype: dtype) * this.stride[0];  // image size (h,w)
-					(Tensor anchor_points, Tensor stride_tensor) = Utils.Tal.make_anchors(feats, this.stride, 0.5f);
-
-					//	// targets
-					//	try
-					//	{
-					//		Tensor batch_idx = batch["batch_idx"].view(-1, 1);
-					//		targets = torch.cat((batch_idx, batch["cls"].view(-1, 1), batch["bboxes"].view(-1, 5)), 1);
-
-					//		Tensor rw = targets[.., 4] * imgsz[0];
-					//		Tensor rh = targets[.., 5] * imgsz[1];
-
-					//		targets = targets[(rw >= 2) & (rh >= 2)]; // filter rboxes of tiny size to stabilize training
-					//		targets = this.preprocess(targets.to(this.device), batch_size, scale_tensor: imgsz[[1, 0, 1, 0]]);
-
-
-					//		gt_labels, gt_bboxes = targets.split((1, 5), 2)  // cls, xywhr
-
-					//mask_gt = gt_bboxes.sum(2, keepdim: true).gt_(0.0);
-					//	}
-					//	catch (Exception e)
-					//	{
-
-					//	}
-
-
-					return (torch.zeros(0), torch.zeros(0));
-
-				}
+				this.assigner = new Utils.Tal.RotatedTaskAlignedAssigner(topk: 10, num_classes: this.nc, alpha: 0.5f, beta: 6.0f);
+				this.bbox_loss = new RotatedBboxLoss(this.reg_max);
 			}
 
+			private Tensor preprocess(Tensor targets, int batch_size, Tensor scale_tensor)
+			{
+				// Preprocess targets for oriented bounding box detection.
+				this.device = targets.device;
+				this.dtype = targets.dtype;
+				Tensor @out = torch.zeros(batch_size, 0, 6, device: this.device);
+				if (targets.shape[0] != 0)
+				{
+					Tensor i = targets[.., 0];  // image index
+					(_, _, Tensor counts) = i.unique(return_counts: true);
+
+					counts = counts.to(torch.int32);
+					@out = torch.zeros(new long[] { batch_size, counts.max().ToInt64(), 6 }, device: this.device);
+
+					for (int j = 0; j < batch_size; j++)
+					{
+						Tensor matches = (i == j);
+						int n = matches.sum().ToInt32();
+						if (n > 0)
+						{
+							Tensor bboxes = targets[TensorIndex.Tensor(matches), 2..];
+							bboxes[.., ..4].mul_(scale_tensor);
+							@out[j, ..n] = torch.cat(new Tensor[] { targets[TensorIndex.Tensor(matches), 1..2], bboxes }, dim: -1);
+						}
+					}
+
+				}
+				return @out; //Preprocess targets for oriented bounding box detection.
+			}
+
+			public override (Tensor, Tensor) forward(Tensor[] preds, Tensor targets)
+			{
+				// Calculate and return the loss for oriented bounding box detection.
+				Tensor loss = torch.zeros(3, device: this.device);  // box, cls, dfl
+				Tensor[] feats = new Tensor[] { preds[1], preds[2], preds[3] };
+				Tensor pred_angle = preds[4];
+
+				long batch_size = pred_angle.shape[0];  // batch size, number of masks, mask height, mask width
+
+				Tensor[] pred_mix = feats.Select(xi => xi.view(new long[] { feats[0].shape[0], this.no, -1 })).ToArray();
+				Tensor[] pred_dist_scores = torch.cat(pred_mix, 2).split(new long[] { this.reg_max * 4, this.nc }, 1);
+				Tensor pred_distri = pred_dist_scores[0];
+				Tensor pred_scores = pred_dist_scores[1];
+
+				// b, grids, ..
+				pred_scores = pred_scores.permute(0, 2, 1).contiguous();
+				pred_distri = pred_distri.permute(0, 2, 1).contiguous();
+				pred_angle = pred_angle.permute(0, 2, 1).contiguous();
+
+				dtype = pred_scores.dtype;
+				device = pred_scores.device;
+				Tensor imgsz = torch.tensor(feats[0].shape[2..], device: device, dtype: dtype) * this.stride[0];  // image size (h,w)
+				(Tensor anchor_points, Tensor stride_tensor) = Utils.Tal.make_anchors(feats, this.stride, 0.5f);
+
+				// targets
+				//	try
+				//	{
+				//		Tensor batch_idx = batch["batch_idx"].view(-1, 1);
+				//		targets = torch.cat((batch_idx, batch["cls"].view(-1, 1), batch["bboxes"].view(-1, 5)), 1);
+
+				//		Tensor rw = targets[.., 4] * imgsz[0];
+				//		Tensor rh = targets[.., 5] * imgsz[1];
+
+				//		targets = targets[(rw >= 2) & (rh >= 2)]; // filter rboxes of tiny size to stabilize training
+				//		targets = this.preprocess(targets.to(this.device), batch_size, scale_tensor: imgsz[[1, 0, 1, 0]]);
+
+
+				//		gt_labels, gt_bboxes = targets.split((1, 5), 2)  // cls, xywhr
+
+				//mask_gt = gt_bboxes.sum(2, keepdim: true).gt_(0.0);
+				//	}
+				//	catch (Exception e)
+				//	{
+
+				//	}
+
+
+				return (torch.zeros(0), torch.zeros(0));
+
+			}
 		}
 
 	}

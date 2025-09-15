@@ -1,8 +1,9 @@
 ﻿using SkiaSharp;
 using TorchSharp;
+using YoloSharp;
 using static TorchSharp.torch;
 
-namespace YoloSharp
+namespace Data
 {
 	internal class YoloDataset : utils.data.Dataset
 	{
@@ -198,7 +199,7 @@ namespace YoloSharp
 			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
 			if (string.IsNullOrEmpty(labelName))
 			{
-				return torch.zeros(new long[] { 0, 5 }, torch.float32).MoveToOuterDisposeScope(); // No labels found, return empty tensor
+				return zeros(new long[] { 0, 5 }, float32).MoveToOuterDisposeScope(); // No labels found, return empty tensor
 			}
 			string[] lines = File.ReadAllLines(labelName);
 
@@ -248,20 +249,20 @@ namespace YoloSharp
 			float maskHeightScale = scale * originalHeight / imageSize;
 
 			Tensor imgTensor = torchvision.transforms.functional.resize(orgImageTensor, (int)(originalHeight * scale), (int)(originalWidth * scale));
-			imgTensor = torch.nn.functional.pad(imgTensor, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros);
+			imgTensor = nn.functional.pad(imgTensor, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros);
 
-			Tensor outputImg = torch.zeros(new long[] { 3, imageSize, imageSize });
+			Tensor outputImg = zeros(new long[] { 3, imageSize, imageSize });
 			outputImg[TensorIndex.Colon, ..(int)imgTensor.shape[1], ..(int)imgTensor.shape[2]] = imgTensor;
 
 			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
 			if (string.IsNullOrEmpty(labelName))
 			{
-				return (outputImg.MoveToOuterDisposeScope(), torch.zeros(new long[] { 0, 5 }, torch.float32).MoveToOuterDisposeScope(), torch.zeros(new long[] { maskSize, maskSize }).MoveToOuterDisposeScope()); // No labels found, return empty tensors
+				return (outputImg.MoveToOuterDisposeScope(), zeros(new long[] { 0, 5 }, float32).MoveToOuterDisposeScope(), zeros(new long[] { maskSize, maskSize }).MoveToOuterDisposeScope()); // No labels found, return empty tensors
 			}
 			string[] lines = File.ReadAllLines(labelName);
 			float[,] labelArray = new float[lines.Length, 5];
 
-			Tensor mask = torch.zeros(new long[] { maskSize, maskSize });
+			Tensor mask = zeros(new long[] { maskSize, maskSize });
 			for (int i = 0; i < lines.Length; i++)
 			{
 				string[] datas = lines[i].Split(' ');
@@ -450,7 +451,7 @@ namespace YoloSharp
 			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
 			if (string.IsNullOrEmpty(labelName) || !File.Exists(labelName))
 			{
-				return torch.zeros(new long[] { 0, 5 }, torch.float32); // No labels found, return empty tensor
+				return zeros(new long[] { 0, 5 }, float32); // No labels found, return empty tensor
 			}
 			string[] lines = File.ReadAllLines(labelName);
 
@@ -474,7 +475,7 @@ namespace YoloSharp
 			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
 			if (string.IsNullOrEmpty(labelName) || !File.Exists(labelName))
 			{
-				return (torch.zeros(new long[] { 0, 5 }, torch.float32).MoveToOuterDisposeScope(), torch.zeros(new long[] { 1, height, width }, torch.uint8).MoveToOuterDisposeScope()); // No labels found, return empty tensors
+				return (zeros(new long[] { 0, 5 }, float32).MoveToOuterDisposeScope(), zeros(new long[] { 1, height, width }, uint8).MoveToOuterDisposeScope()); // No labels found, return empty tensors
 			}
 			string[] lines = File.ReadAllLines(labelName);
 
@@ -499,7 +500,7 @@ namespace YoloSharp
 				float x_min = points.Min(a => a.X);
 				float y_min = points.Min(a => a.Y);
 
-				labels.Add(torch.tensor(new float[] { x_min, y_min, x_max - x_min, y_max - y_min }).unsqueeze(0));
+				labels.Add(tensor(new float[] { x_min, y_min, x_max - x_min, y_max - y_min }).unsqueeze(0));
 
 				// Create mask using SkiaSharp
 				using (var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Premul))
@@ -524,13 +525,13 @@ namespace YoloSharp
 
 					// Convert SKBitmap to Tensor
 					var bytes = bitmap.Bytes;
-					Tensor ts = torch.tensor(bytes, new long[] { 1, height, width }, torch.uint8);
+					Tensor ts = tensor(bytes, new long[] { 1, height, width }, uint8);
 					masks.Add(ts.unsqueeze(0));
 				}
 			}
 
-			Tensor labelTensor = torch.cat(labels.ToArray());
-			Tensor maskTensor = torch.cat(masks.ToArray());
+			Tensor labelTensor = cat(labels.ToArray());
+			Tensor maskTensor = cat(masks.ToArray());
 			return (labelTensor.MoveToOuterDisposeScope(), maskTensor.MoveToOuterDisposeScope());
 		}
 

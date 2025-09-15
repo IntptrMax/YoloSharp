@@ -15,7 +15,7 @@ namespace YoloSharpDemo
 			//predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
 			int batchSize = 16;
 			int sortCount = 80;
-			int epochs = 100;
+			int epochs = 10;
 			float predictThreshold = 0.25f;
 			float iouThreshold = 0.7f;
 
@@ -27,7 +27,7 @@ namespace YoloSharpDemo
 
 			////Create obber
 			//Obber obber = new Obber(15);
-			//obber.LoadModel(@@"..\..\..\Assets\PreTrainedModels\yolov8n-obb.bin");
+			//obber.LoadModel(@"..\..\..\Assets\PreTrainedModels\yolov8n-obb.bin");
 
 			//var predictResult = obber.ImagePredict(predictImage, IouThreshold: iouThreshold);
 			//var resultImage = predictImage.Copy();

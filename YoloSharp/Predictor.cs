@@ -1,4 +1,5 @@
-﻿using SkiaSharp;
+﻿using Data;
+using SkiaSharp;
 using System.Text.RegularExpressions;
 using TorchSharp;
 using TorchSharp.Modules;
@@ -137,41 +138,43 @@ namespace YoloSharp
 
 		private float Val(YoloDataset valDataset, DataLoader valDataLoader)
 		{
-			using var _ = no_grad();
-			float lossValue = float.MaxValue;
-			foreach (var data in valDataLoader)
+			using (no_grad())
 			{
-				long[] indexs = data["index"].data<long>().ToArray();
-				Tensor[] images = new Tensor[indexs.Length];
-				Tensor[] labels = new Tensor[indexs.Length];
-				for (int i = 0; i < indexs.Length; i++)
+				float lossValue = float.MaxValue;
+				foreach (var data in valDataLoader)
 				{
-					var (img, lb) = valDataset.GetDataTensor(indexs[i]);
-					images[i] = img.to(this.dtype, device);
-					labels[i] = full(new long[] { lb.shape[0], lb.shape[1] + 1 }, i, dtype: dtype, device: lb.device);
-					labels[i].slice(1, 1, lb.shape[1] + 1, 1).copy_(lb);
-				}
-				Tensor imageTensor = concat(images);
-				Tensor labelTensor = concat(labels);
+					long[] indexs = data["index"].data<long>().ToArray();
+					Tensor[] images = new Tensor[indexs.Length];
+					Tensor[] labels = new Tensor[indexs.Length];
+					for (int i = 0; i < indexs.Length; i++)
+					{
+						var (img, lb) = valDataset.GetDataTensor(indexs[i]);
+						images[i] = img.to(this.dtype, device);
+						labels[i] = full(new long[] { lb.shape[0], lb.shape[1] + 1 }, i, dtype: dtype, device: lb.device);
+						labels[i].slice(1, 1, lb.shape[1] + 1, 1).copy_(lb);
+					}
+					Tensor imageTensor = concat(images);
+					Tensor labelTensor = concat(labels);
 
-				if (labelTensor.shape[0] == 0)
-				{
-					continue;
-				}
+					if (labelTensor.shape[0] == 0)
+					{
+						continue;
+					}
 
-				Tensor[] list = yolo.forward(imageTensor);
-				var (ls, ls_item) = loss.forward(list.ToArray(), labelTensor);
-				if (lossValue == float.MaxValue)
-				{
-					lossValue = ls.ToSingle();
+					Tensor[] list = yolo.forward(imageTensor);
+					var (ls, ls_item) = loss.forward(list.ToArray(), labelTensor);
+					if (lossValue == float.MaxValue)
+					{
+						lossValue = ls.ToSingle();
+					}
+					else
+					{
+						lossValue = lossValue + ls.ToSingle();
+					}
 				}
-				else
-				{
-					lossValue = lossValue + ls.ToSingle();
-				}
+				lossValue = lossValue / valDataset.Count;
+				return lossValue;
 			}
-			lossValue = lossValue / valDataset.Count;
-			return lossValue;
 		}
 
 		public List<YoloResult> ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)

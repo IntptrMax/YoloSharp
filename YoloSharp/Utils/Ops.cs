@@ -13,7 +13,6 @@ namespace Utils
 		internal static Tensor xywhr2xyxyxyxy(Tensor x)
 		{
 			using (NewDisposeScope())
-			using (no_grad())
 			{
 				Tensor ctr = x[.., ..2];
 
@@ -44,20 +43,17 @@ namespace Utils
 		/// <returns>Bounding box coordinates in (x1, y1, x2, y2) format.</returns>
 		internal static Tensor xywh2xyxy(Tensor x)
 		{
-			using (no_grad())
+			if (x.shape.Last() != 4)
 			{
-				if (x.shape.Last() != 4)
-				{
-					throw new ArgumentException($"input shape last dimension expected 4 but input shape is {x.shape}");
-				}
-
-				Tensor y = zeros_like(x);
-				y[TensorIndex.Ellipsis, 0] = x[TensorIndex.Ellipsis, 0] - x[TensorIndex.Ellipsis, 2] / 2; // x1
-				y[TensorIndex.Ellipsis, 1] = x[TensorIndex.Ellipsis, 1] - x[TensorIndex.Ellipsis, 3] / 2; // y1
-				y[TensorIndex.Ellipsis, 2] = x[TensorIndex.Ellipsis, 0] + x[TensorIndex.Ellipsis, 2] / 2; // x2
-				y[TensorIndex.Ellipsis, 3] = x[TensorIndex.Ellipsis, 1] + x[TensorIndex.Ellipsis, 3] / 2; // y2
-				return y;
+				throw new ArgumentException($"input shape last dimension expected 4 but input shape is {x.shape}");
 			}
+
+			Tensor y = zeros_like(x);
+			y[TensorIndex.Ellipsis, 0] = x[TensorIndex.Ellipsis, 0] - x[TensorIndex.Ellipsis, 2] / 2; // x1
+			y[TensorIndex.Ellipsis, 1] = x[TensorIndex.Ellipsis, 1] - x[TensorIndex.Ellipsis, 3] / 2; // y1
+			y[TensorIndex.Ellipsis, 2] = x[TensorIndex.Ellipsis, 0] + x[TensorIndex.Ellipsis, 2] / 2; // x2
+			y[TensorIndex.Ellipsis, 3] = x[TensorIndex.Ellipsis, 1] + x[TensorIndex.Ellipsis, 3] / 2; // y2
+			return y;
 		}
 
 		/// <summary>
@@ -67,19 +63,16 @@ namespace Utils
 		/// <returns>The bounding box coordinates in (x, y, width, height) format.</returns>
 		internal static Tensor xyxy2xywh(Tensor x)
 		{
-			using (no_grad())
+			if (x.shape.Last() != 4)
 			{
-				if (x.shape.Last() != 4)
-				{
-					throw new ArgumentException($"input shape last dimension expected 4 but input shape is {x.shape}");
-				}
-				Tensor y = empty_like(x);  // faster than clone/copy
-				y[TensorIndex.Ellipsis, 0] = (x[TensorIndex.Ellipsis, 0] + x[TensorIndex.Ellipsis, 2]) / 2;  // x center
-				y[TensorIndex.Ellipsis, 1] = (x[TensorIndex.Ellipsis, 1] + x[TensorIndex.Ellipsis, 3]) / 2; // y center
-				y[TensorIndex.Ellipsis, 2] = x[TensorIndex.Ellipsis, 2] - x[TensorIndex.Ellipsis, 0]; // width
-				y[TensorIndex.Ellipsis, 3] = x[TensorIndex.Ellipsis, 3] - x[TensorIndex.Ellipsis, 1];  // height
-				return y;
+				throw new ArgumentException($"input shape last dimension expected 4 but input shape is {x.shape}");
 			}
+			Tensor y = empty_like(x);  // faster than clone/copy
+			y[TensorIndex.Ellipsis, 0] = (x[TensorIndex.Ellipsis, 0] + x[TensorIndex.Ellipsis, 2]) / 2;  // x center
+			y[TensorIndex.Ellipsis, 1] = (x[TensorIndex.Ellipsis, 1] + x[TensorIndex.Ellipsis, 3]) / 2; // y center
+			y[TensorIndex.Ellipsis, 2] = x[TensorIndex.Ellipsis, 2] - x[TensorIndex.Ellipsis, 0]; // width
+			y[TensorIndex.Ellipsis, 3] = x[TensorIndex.Ellipsis, 3] - x[TensorIndex.Ellipsis, 1];  // height
+			return y;
 		}
 
 		/// <summary>
@@ -93,19 +86,17 @@ namespace Utils
 		/// <returns></returns>
 		internal static Tensor xyxy2xywhn(Tensor x, int w = 640, int h = 640, bool clip = false, float eps = 0.0f)
 		{
-			using (no_grad())
+			if (clip)
 			{
-				if (clip)
-				{
-					x = clip_boxes(x, new float[] { h - eps, w - eps });
-				}
-				Tensor y = x.clone();
-				y[TensorIndex.Ellipsis, 0] = (x[TensorIndex.Ellipsis, 0] + x[TensorIndex.Ellipsis, 2]) / 2 / w;  // x center
-				y[TensorIndex.Ellipsis, 1] = (x[TensorIndex.Ellipsis, 1] + x[TensorIndex.Ellipsis, 3]) / 2 / h;// y center
-				y[TensorIndex.Ellipsis, 2] = (x[TensorIndex.Ellipsis, 2] - x[TensorIndex.Ellipsis, 0]) / w;  // width
-				y[TensorIndex.Ellipsis, 3] = (x[TensorIndex.Ellipsis, 3] - x[TensorIndex.Ellipsis, 1]) / h;  // height
-				return y;
+				x = clip_boxes(x, new float[] { h - eps, w - eps });
 			}
+			Tensor y = x.clone();
+			y[TensorIndex.Ellipsis, 0] = (x[TensorIndex.Ellipsis, 0] + x[TensorIndex.Ellipsis, 2]) / 2 / w;  // x center
+			y[TensorIndex.Ellipsis, 1] = (x[TensorIndex.Ellipsis, 1] + x[TensorIndex.Ellipsis, 3]) / 2 / h;// y center
+			y[TensorIndex.Ellipsis, 2] = (x[TensorIndex.Ellipsis, 2] - x[TensorIndex.Ellipsis, 0]) / w;  // width
+			y[TensorIndex.Ellipsis, 3] = (x[TensorIndex.Ellipsis, 3] - x[TensorIndex.Ellipsis, 1]) / h;  // height
+			return y;
+
 		}
 
 		/// <summary>
@@ -119,15 +110,12 @@ namespace Utils
 		/// <returns></returns>
 		internal static Tensor xywhn2xyxy(Tensor x, int w = 640, int h = 640, int padw = 0, int padh = 0)
 		{
-			using (no_grad())
-			{
-				Tensor y = x.clone();
-				y[TensorIndex.Ellipsis, 0] = w * (x[TensorIndex.Ellipsis, 0] - x[TensorIndex.Ellipsis, 2] / 2) + padw;  // top left x
-				y[TensorIndex.Ellipsis, 1] = h * (x[TensorIndex.Ellipsis, 1] - x[TensorIndex.Ellipsis, 3] / 2) + padh;  // top left y
-				y[TensorIndex.Ellipsis, 2] = w * (x[TensorIndex.Ellipsis, 0] + x[TensorIndex.Ellipsis, 2] / 2) + padw;  // bottom right x
-				y[TensorIndex.Ellipsis, 3] = h * (x[TensorIndex.Ellipsis, 1] + x[TensorIndex.Ellipsis, 3] / 2) + padh;  // bottom right y
-				return y;
-			}
+			Tensor y = x.clone();
+			y[TensorIndex.Ellipsis, 0] = w * (x[TensorIndex.Ellipsis, 0] - x[TensorIndex.Ellipsis, 2] / 2) + padw;  // top left x
+			y[TensorIndex.Ellipsis, 1] = h * (x[TensorIndex.Ellipsis, 1] - x[TensorIndex.Ellipsis, 3] / 2) + padh;  // top left y
+			y[TensorIndex.Ellipsis, 2] = w * (x[TensorIndex.Ellipsis, 0] + x[TensorIndex.Ellipsis, 2] / 2) + padw;  // bottom right x
+			y[TensorIndex.Ellipsis, 3] = h * (x[TensorIndex.Ellipsis, 1] + x[TensorIndex.Ellipsis, 3] / 2) + padh;  // bottom right y
+			return y;
 		}
 
 		/// <summary>
@@ -138,15 +126,12 @@ namespace Utils
 		/// <returns>The clipped boxes</returns>
 		internal static Tensor clip_boxes(Tensor x, float[] shape)
 		{
-			using (no_grad())
-			{
-				Tensor box = torch.zeros_like(x);
-				box[TensorIndex.Ellipsis, 0] = x[TensorIndex.Ellipsis, 0].clamp_(0, shape[1]);  // x1
-				box[TensorIndex.Ellipsis, 1] = x[TensorIndex.Ellipsis, 1].clamp_(0, shape[0]);  // y1
-				box[TensorIndex.Ellipsis, 2] = x[TensorIndex.Ellipsis, 2].clamp_(0, shape[1]);  // x2
-				box[TensorIndex.Ellipsis, 3] = x[TensorIndex.Ellipsis, 3].clamp_(0, shape[0]);  // y2
-				return box;
-			}
+			Tensor box = torch.zeros_like(x);
+			box[TensorIndex.Ellipsis, 0] = x[TensorIndex.Ellipsis, 0].clamp_(0, shape[1]);  // x1
+			box[TensorIndex.Ellipsis, 1] = x[TensorIndex.Ellipsis, 1].clamp_(0, shape[0]);  // y1
+			box[TensorIndex.Ellipsis, 2] = x[TensorIndex.Ellipsis, 2].clamp_(0, shape[1]);  // x2
+			box[TensorIndex.Ellipsis, 3] = x[TensorIndex.Ellipsis, 3].clamp_(0, shape[0]);  // y2
+			return box;
 		}
 
 		/// <summary>
@@ -174,7 +159,6 @@ namespace Utils
 			bool rotated = false, bool end2end = false)
 		{
 			using (NewDisposeScope())
-			using (no_grad())
 			{
 				// Checks
 				if (conf_thres < 0 || conf_thres > 1)
@@ -307,7 +291,6 @@ namespace Utils
 		internal static Tensor nms_rotated(Tensor boxes, Tensor scores, float threshold = 0.45f, bool use_triu = true)
 		{
 			using (NewDisposeScope())
-			using (no_grad())
 			{
 				Tensor sorted_idx = torch.argsort(scores, descending: true);
 				boxes = boxes[sorted_idx];
@@ -344,7 +327,7 @@ namespace Utils
 		internal static Tensor crop_mask(Tensor masks, Tensor boxes)
 		{
 			using (NewDisposeScope())
-			using (no_grad())
+
 			{
 				long h = masks.shape[1];
 				long w = masks.shape[2];

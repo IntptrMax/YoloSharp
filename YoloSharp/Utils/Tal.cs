@@ -17,7 +17,7 @@ namespace Utils
 			private long bs;
 			private long n_max_boxes;
 
-			public TaskAlignedAssigner(int topk = 13, int num_classes = 80, float alpha = 1.0f, float beta = 6.0f, float eps = 1e-9f) : base("TaskAlignedAssigner")
+			internal TaskAlignedAssigner(int topk = 13, int num_classes = 80, float alpha = 1.0f, float beta = 6.0f, float eps = 1e-9f) : base("TaskAlignedAssigner")
 			{
 				this.topk = topk;
 				this.num_classes = num_classes;
@@ -30,7 +30,6 @@ namespace Utils
 			public override (Tensor, Tensor, Tensor, Tensor, Tensor) forward(Tensor pd_scores, Tensor pd_bboxes, Tensor anc_points, Tensor gt_labels, Tensor gt_bboxes, Tensor mask_gt)
 			{
 				using (NewDisposeScope())
-				using (no_grad())
 				{
 					bs = pd_scores.shape[0];
 					n_max_boxes = gt_bboxes.shape[1];
@@ -64,7 +63,6 @@ namespace Utils
 			private (Tensor, Tensor, Tensor) get_pos_mask(Tensor pd_scores, Tensor pd_bboxes, Tensor gt_labels, Tensor gt_bboxes, Tensor anc_points, Tensor mask_gt)
 			{
 				using (NewDisposeScope())
-				using (no_grad())
 				{
 					Tensor mask_in_gts = select_candidates_in_gts(anc_points, gt_bboxes);
 					(Tensor align_metric, Tensor overlaps) = get_box_metrics(pd_scores, pd_bboxes, gt_labels, gt_bboxes, mask_in_gts * mask_gt);
@@ -77,7 +75,6 @@ namespace Utils
 			private (Tensor, Tensor) get_box_metrics(Tensor pd_scores, Tensor pd_bboxes, Tensor gt_labels, Tensor gt_bboxes, Tensor mask_gt)
 			{
 				using (NewDisposeScope())
-				using (no_grad())
 				{
 					long na = pd_bboxes.shape[1];
 					mask_gt = mask_gt.to_type(torch.ScalarType.Bool);
@@ -116,7 +113,6 @@ namespace Utils
 			private Tensor select_topk_candidates(Tensor metrics, bool largest = true, Tensor topk_mask = null)
 			{
 				using (NewDisposeScope())
-				using (no_grad())
 				{
 					Tensor topk_metrics = torch.topk(metrics, topk, dim: -1, largest: largest).values;
 					Tensor topk_idxs = torch.topk(metrics, topk, dim: -1, largest: largest).indices;
@@ -144,7 +140,6 @@ namespace Utils
 			private (Tensor, Tensor, Tensor) get_targets(Tensor gt_labels, Tensor gt_bboxes, Tensor target_gt_idx, Tensor fg_mask)
 			{
 				using (NewDisposeScope())
-				using (no_grad())
 				{
 					Tensor batch_ind = torch.arange(bs, dtype: torch.int64, device: gt_labels.device).view(-1, 1);
 					target_gt_idx = target_gt_idx + batch_ind * n_max_boxes;
@@ -171,7 +166,6 @@ namespace Utils
 			private Tensor select_candidates_in_gts(Tensor xy_centers, Tensor gt_bboxes, float eps = 1e-9f)
 			{
 				using (NewDisposeScope())
-				using (no_grad())
 				{
 					long n_anchors = xy_centers.shape[0];
 					//var (bs, n_boxes, _) = gt_bboxes.shape;
@@ -191,7 +185,6 @@ namespace Utils
 			private (Tensor, Tensor, Tensor) select_highest_overlaps(Tensor mask_pos, Tensor overlaps, long n_max_boxes)
 			{
 				using (NewDisposeScope())
-				using (no_grad())
 				{
 					Tensor fg_mask = mask_pos.sum(dim: -2);
 
@@ -215,7 +208,6 @@ namespace Utils
 			private Tensor bbox_iou(Tensor box1, Tensor box2, bool xywh = true, bool GIoU = false, bool DIoU = false, bool CIoU = false, float eps = 1e-7f)
 			{
 				using (NewDisposeScope())
-				using (no_grad())
 				{
 					Tensor b1_x1, b1_x2, b1_y1, b1_y2;
 					Tensor b2_x1, b2_x2, b2_y1, b2_y2;
@@ -278,7 +270,7 @@ namespace Utils
 							if (CIoU)  // https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
 							{
 								var v = 4 / (MathF.PI * MathF.PI) * (atan(w2 / h2) - atan(w1 / h1)).pow(2);
-								using (no_grad())
+								
 								{
 									var alpha = v / (v - iou + (1 + eps));
 									return (iou - (rho2 / c2 + v * alpha)).MoveToOuterDisposeScope();  //CIoU
@@ -314,7 +306,6 @@ namespace Utils
 			internal static Tensor select_candidates_in_gts(Tensor xy_centers, Tensor gt_bboxes)
 			{
 				using (NewDisposeScope())
-				using (no_grad())
 				{
 					// (b, n_boxes, 5) --> (b, n_boxes, 4, 2)
 					Tensor corners = Utils.Ops.xywhr2xyxyxyxy(gt_bboxes);
@@ -340,7 +331,6 @@ namespace Utils
 		internal static (Tensor anchor_points, Tensor stride_tensor) make_anchors(Tensor[] feats, int[] strides, float grid_cell_offset = 0.5f)
 		{
 			using (NewDisposeScope())
-			using (no_grad())
 			{
 				torch.ScalarType dtype = feats[0].dtype;
 				Device device = feats[0].device;
@@ -366,7 +356,6 @@ namespace Utils
 		internal static Tensor dist2bbox(Tensor distance, Tensor anchor_points, bool xywh = true, int dim = -1)
 		{
 			using (NewDisposeScope())
-			using (no_grad())
 			{
 				Tensor[] ltrb = distance.chunk(2, dim);
 				Tensor lt = ltrb[0];
@@ -388,7 +377,6 @@ namespace Utils
 		internal static Tensor bbox2dist(Tensor anchor_points, Tensor bbox, int reg_max)
 		{
 			using (NewDisposeScope())
-			using (no_grad())
 			{
 				Tensor[] x1y1x2y2 = bbox.chunk(2, -1);
 				Tensor x1y1 = x1y1x2y2[0];
@@ -408,7 +396,6 @@ namespace Utils
 		internal static Tensor dist2rbox(Tensor pred_dist, Tensor pred_angle, Tensor anchor_points, int dim = -1)
 		{
 			using (NewDisposeScope())
-			using (no_grad())
 			{
 				Tensor[] lt_rb = pred_dist.split(2, dim: dim);
 				Tensor lt = lt_rb[0]; // (bs, h*w, 2)
