@@ -34,12 +34,14 @@ namespace YoloSharp
 			//Dictionary<string, Tensor> dd = new Dictionary<string, Tensor>();
 			//foreach (var ld in ldd)
 			//{
-			//	dd.Add(ld.Key.Remove(0,6),ld.Value);
+			//	dd.Add(ld.Key.Remove(0, 6), ld.Value);
 			//}
 			//var (loadMissing, unexp) = model.load_state_dict(dd, false);
 
 			var (loadMissing, unexp) = model.load_state_dict(dict, false);
 			model.save(outName);
+
+			
 		}
 
 		/// <summary>

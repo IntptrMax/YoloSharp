@@ -169,7 +169,7 @@ namespace Utils
 					// DFL loss
 					if (dfl_loss is not null)
 					{
-						Tensor target_ltrb = Utils.Tal.bbox2dist(anchor_points, torchvision.ops.box_convert(target_bboxes[.., ..4], ops.BoxFormats.xywh, ops.BoxFormats.xyxy), this.dfl_loss.regMax - 1);
+						Tensor target_ltrb = Utils.Tal.bbox2dist(anchor_points, Ops.xywh2xyxy(target_bboxes[TensorIndex.Ellipsis, ..4]), this.dfl_loss.regMax - 1);
 						loss_dfl = this.dfl_loss.forward(pred_dist[fg_mask].view(-1, this.dfl_loss.regMax), target_ltrb[fg_mask]) * weight;
 						loss_dfl = loss_dfl.sum() / target_scores_sum;
 					}
@@ -429,10 +429,11 @@ namespace Utils
 				this.hyp_box = hyp_box;
 				this.hyp_cls = hyp_cls;
 				this.hyp_dfl = hyp_dfl;
+				this.proj = torch.arange(this.reg_max);
 
 				this.assigner = new Utils.Tal.TaskAlignedAssigner(topk: tal_topk, num_classes: this.nc, alpha: 0.5f, beta: 6.0f);
 				this.bbox_loss = new BboxLoss(this.reg_max);
-				this.proj = torch.arange(this.reg_max);
+
 			}
 
 			public override (Tensor loss, Tensor loss_items) forward(Tensor[] preds, Dictionary<string, Tensor> batch)
@@ -738,7 +739,7 @@ namespace Utils
 							}
 						}
 					}
-					return @out; //Preprocess targets for oriented bounding box detection.
+					return @out.MoveToOuterDisposeScope(); //Preprocess targets for oriented bounding box detection.
 				}
 			}
 
@@ -748,8 +749,8 @@ namespace Utils
 				{
 					// Calculate and return the loss for oriented bounding box detection.
 					Tensor loss = torch.zeros(3, device: this.device);  // box, cls, dfl
-					Tensor[] feats = new Tensor[] { preds[1], preds[2], preds[3] };
-					Tensor pred_angle = preds[4];
+					Tensor[] feats = new Tensor[] { preds[0], preds[1], preds[2] };
+					Tensor pred_angle = preds[3];
 
 					int batch_size = (int)pred_angle.shape[0];  // batch size, number of masks, mask height, mask width
 
@@ -781,7 +782,7 @@ namespace Utils
 						Tensor rh = targets[.., 5] * imgsz[1];
 
 						targets = targets[(rw >= 2) & (rh >= 2)]; // filter rboxes of tiny size to stabilize training
-						targets = this.preprocess(targets.to(this.device), batch_size, scale_tensor: imgsz[0][1, 0, 1, 0]);
+						targets = this.preprocess(targets.to(this.device), batch_size, scale_tensor: imgsz.index(new long[] { 1, 0, 1, 0 }));
 
 						Tensor[] gt_labels_bboxes = targets.split(new long[] { 1, 5 }, 2);  // cls, xywhr
 
@@ -798,7 +799,7 @@ namespace Utils
 					Tensor pred_bboxes = this.bbox_decode(anchor_points, pred_distri, pred_angle); // xyxy, (b, h*w, 4)
 					Tensor bboxes_for_assigner = pred_bboxes.clone().detach();
 					// Only the first four elements need to be scaled
-					bboxes_for_assigner[TensorIndex.Colon, ..4] *= stride_tensor;
+					bboxes_for_assigner[TensorIndex.Ellipsis, ..4] *= stride_tensor;
 					(_, Tensor target_bboxes, Tensor target_scores, Tensor fg_mask, _) = this.assigner.forward(pred_scores.detach().sigmoid(), bboxes_for_assigner.type(gt_bboxes.dtype), anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt);
 
 					float target_scores_sum = Math.Max(target_scores.sum().ToSingle(), 1);
@@ -836,7 +837,7 @@ namespace Utils
 				if (this.use_dfl)
 				{
 					long b = pred_dist.shape[0], a = pred_dist.shape[1], c = pred_dist.shape[2]; // batch, anchors, channels
-					pred_dist = pred_dist.view(b, a, 4, c / 4).softmax(3).matmul(this.proj.type(pred_dist.dtype));
+					pred_dist = pred_dist.view(b, a, 4, c / 4).softmax(3).matmul(this.proj.to(pred_dist.dtype, pred_dist.device));
 				}
 				return torch.cat(new Tensor[] { Utils.Tal.dist2rbox(pred_dist, pred_angle, anchor_points), pred_angle }, dim: -1);
 			}

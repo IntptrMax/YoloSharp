@@ -46,10 +46,10 @@ namespace Utils
 		{
 			using (NewDisposeScope())
 			{
-				Tensor x1 = obb1[.., 0];
-				Tensor y1 = obb1[.., 1];
-				Tensor x2 = obb2[.., 0];
-				Tensor y2 = obb2[.., 1];
+				Tensor x1 = obb1[.., 0..1];
+				Tensor y1 = obb1[.., 1..2];
+				Tensor x2 = obb2[.., 0..1];
+				Tensor y2 = obb2[.., 1..2];
 
 				(Tensor a1, Tensor b1, Tensor c1) = _get_covariance_matrix(obb1);
 				(Tensor a2, Tensor b2, Tensor c2) = _get_covariance_matrix(obb2);

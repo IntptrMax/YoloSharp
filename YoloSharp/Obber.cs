@@ -123,5 +123,10 @@ namespace YoloSharp
 			return results;
 		}
 
+		public void Train()
+		{
+
+		}
+
 	}
 }

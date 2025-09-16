@@ -14,11 +14,11 @@ namespace Utils
 		{
 			using (NewDisposeScope())
 			{
-				Tensor ctr = x[.., ..2];
+				Tensor ctr = x[TensorIndex.Ellipsis, ..2];
 
-				Tensor w = x[.., 2];
-				Tensor h = x[.., 3];
-				Tensor angle = x[.., 4];
+				Tensor w = x[TensorIndex.Ellipsis, 2..3];
+				Tensor h = x[TensorIndex.Ellipsis, 3..4];
+				Tensor angle = x[TensorIndex.Ellipsis, 4..5];
 				Tensor cos_value = cos(angle);
 				Tensor sin_value = sin(angle);
 				Tensor[] v1 = new Tensor[] { w / 2 * cos_value, w / 2 * sin_value };

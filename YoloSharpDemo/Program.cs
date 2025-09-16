@@ -25,12 +25,14 @@ namespace YoloSharpDemo
 			YoloSize yoloSize = YoloSize.n;
 			SKBitmap predictImage = SKBitmap.Decode(predictImagePath);
 
-			////Create obber
+			//// Create obber
 			//Obber obber = new Obber(15);
 			//obber.LoadModel(@"..\..\..\Assets\PreTrainedModels\yolov8n-obb.bin");
 
-			//var predictResult = obber.ImagePredict(predictImage, IouThreshold: iouThreshold);
-			//var resultImage = predictImage.Copy();
+			//obber.Train();
+
+			//List<YoloResult> predictResult = obber.ImagePredict(predictImage, IouThreshold: iouThreshold);
+			//SKBitmap resultImage = predictImage.Copy();
 
 			// Create predictor
 			Predictor predictor = new Predictor(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
@@ -44,7 +46,7 @@ namespace YoloSharpDemo
 			List<YoloResult> predictResult = predictor.ImagePredict(predictImage, predictThreshold, iouThreshold);
 			var resultImage = predictImage.Copy();
 
-			////Create segmenter
+			//// Create segmenter
 			//Segmenter segmenter = new Segmenter(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
 			//segmenter.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
@@ -52,7 +54,7 @@ namespace YoloSharpDemo
 			//segmenter.Train(trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, useMosaic: false);
 			//segmenter.LoadModel(Path.Combine(outputPath, "best.bin"));
 
-			//// ImagePredict image
+			// ImagePredict image
 			//var (predictResult, resultImage) = segmenter.ImagePredict(predictImage, predictThreshold, iouThreshold);
 
 			using (var canvas = new SKCanvas(resultImage))

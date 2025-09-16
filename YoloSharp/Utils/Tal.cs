@@ -72,12 +72,22 @@ namespace Utils
 					return (mask_pos.MoveToOuterDisposeScope(), align_metric.MoveToOuterDisposeScope(), overlaps.MoveToOuterDisposeScope());
 				}
 			}
-			private (Tensor, Tensor) get_box_metrics(Tensor pd_scores, Tensor pd_bboxes, Tensor gt_labels, Tensor gt_bboxes, Tensor mask_gt)
+
+			/// <summary>
+			/// Compute alignment metric given predicted and ground truth bounding boxes.
+			/// </summary>
+			/// <param name="pd_scores">Predicted classification scores with shape (bs, num_total_anchors, num_classes).</param>
+			/// <param name="pd_bboxes">Predicted bounding boxes with shape (bs, num_total_anchors, 4).</param>
+			/// <param name="gt_labels">Ground truth labels with shape (bs, n_max_boxes, 1).</param>
+			/// <param name="gt_bboxes">Ground truth boxes with shape (bs, n_max_boxes, 4).</param>
+			/// <param name="mask_gt">Mask for valid ground truth boxes with shape (bs, n_max_boxes, h*w).</param>
+			/// <returns><para>align_metric: Alignment metric combining classification and localization.</para></returns>
+			private (Tensor align_metric, Tensor overlaps) get_box_metrics(Tensor pd_scores, Tensor pd_bboxes, Tensor gt_labels, Tensor gt_bboxes, Tensor mask_gt)
 			{
 				using (NewDisposeScope())
 				{
-					long na = pd_bboxes.shape[1];
-					mask_gt = mask_gt.to_type(torch.ScalarType.Bool);
+					long na = pd_bboxes.shape[pd_bboxes.shape.Length - 2];
+					mask_gt = mask_gt.@bool();
 
 					Tensor overlaps = torch.zeros(bs, n_max_boxes, na, dtype: pd_bboxes.dtype, device: pd_bboxes.device);
 					Tensor bbox_scores = torch.zeros(bs, n_max_boxes, na, dtype: pd_scores.dtype, device: pd_scores.device);
@@ -86,18 +96,10 @@ namespace Utils
 					ind[0] = torch.arange(bs, dtype: torch.int64, device: gt_labels.device).view(-1, 1).expand(-1, n_max_boxes);
 					ind[1] = gt_labels.squeeze(-1);
 
-					Tensor pd_scores_selected = torch.zeros(this.bs, n_max_boxes, na, dtype: pd_scores.dtype, device: pd_scores.device);
-					for (int i = 0; i < ind.shape[1]; i++)
-					{
-						for (int j = 0; j < ind.shape[2]; j++)
-						{
-							pd_scores_selected[i, j] = pd_scores[ind[0][i, j].ToInt64(), TensorIndex.Colon, ind[1][i, j].ToInt64()];
-						}
-					}
+					bbox_scores[mask_gt] = pd_scores[TensorIndex.Tensor(ind[0]), TensorIndex.Ellipsis, TensorIndex.Tensor(ind[1])][mask_gt]; // b, max_num_obj, h*w
 
-					bbox_scores[mask_gt] = pd_scores_selected[mask_gt];
-					Tensor pd_boxes = pd_bboxes.unsqueeze(1).expand(bs, n_max_boxes, na, 4)[mask_gt];
-					Tensor gt_boxes = gt_bboxes.unsqueeze(2).expand(bs, n_max_boxes, na, 4)[mask_gt];
+					Tensor pd_boxes = pd_bboxes.unsqueeze(1).expand(-1, n_max_boxes, -1, -1)[mask_gt];
+					Tensor gt_boxes = gt_bboxes.unsqueeze(2).expand(-1, -1, na, -1)[mask_gt];
 					overlaps[mask_gt] = iou_calculation(gt_boxes, pd_boxes);
 
 					Tensor align_metric = bbox_scores.pow(alpha) * overlaps.pow(beta);
@@ -105,7 +107,7 @@ namespace Utils
 				}
 			}
 
-			private Tensor iou_calculation(Tensor gt_bboxes, Tensor pd_bboxes)
+			internal virtual Tensor iou_calculation(Tensor gt_bboxes, Tensor pd_bboxes)
 			{
 				return bbox_iou(gt_bboxes, pd_bboxes, xywh: false, CIoU: true).squeeze(-1).clamp(0);
 			}
@@ -163,15 +165,13 @@ namespace Utils
 				}
 			}
 
-			private Tensor select_candidates_in_gts(Tensor xy_centers, Tensor gt_bboxes, float eps = 1e-9f)
+			internal virtual Tensor select_candidates_in_gts(Tensor xy_centers, Tensor gt_bboxes, float eps = 1e-9f)
 			{
 				using (NewDisposeScope())
 				{
 					long n_anchors = xy_centers.shape[0];
-					//var (bs, n_boxes, _) = gt_bboxes.shape;
 					long bs = gt_bboxes.shape[0];
 					long n_boxes = gt_bboxes.shape[1];
-					//var (lt, rb) = gt_bboxes.view(-1, 1, 4).chunk(2, dim: 2);
 					Tensor[] lt_rb = gt_bboxes.view(-1, 1, 4).chunk(2, dim: 2);
 					Tensor lt = lt_rb[0].to(xy_centers.device);
 					Tensor rb = lt_rb[1].to(xy_centers.device);
@@ -270,7 +270,7 @@ namespace Utils
 							if (CIoU)  // https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
 							{
 								var v = 4 / (MathF.PI * MathF.PI) * (atan(w2 / h2) - atan(w1 / h1)).pow(2);
-								
+
 								{
 									var alpha = v / (v - iou + (1 + eps));
 									return (iou - (rho2 / c2 + v * alpha)).MoveToOuterDisposeScope();  //CIoU
@@ -292,9 +292,10 @@ namespace Utils
 			{
 
 			}
-			internal static Tensor iou_calculation(Tensor gt_bboxes, Tensor pd_bboxes)
+
+			internal override Tensor iou_calculation(Tensor gt_bboxes, Tensor pd_bboxes)
 			{
-				return Utils.Metrics.probiou(gt_bboxes, pd_bboxes);
+				return Utils.Metrics.probiou(gt_bboxes, pd_bboxes).squeeze(-1).clamp_(0);
 			}
 
 			/// <summary>
@@ -303,7 +304,7 @@ namespace Utils
 			/// <param name="xy_centers">Anchor center coordinates with shape (h*w, 2).</param>
 			/// <param name="gt_bboxes">Ground truth bounding boxes with shape (b, n_boxes, 5).</param>
 			/// <returns>Boolean mask of positive anchors with shape (b, n_boxes, h*w).</returns>
-			internal static Tensor select_candidates_in_gts(Tensor xy_centers, Tensor gt_bboxes)
+			internal override Tensor select_candidates_in_gts(Tensor xy_centers, Tensor gt_bboxes, float eps = 1e-9f)
 			{
 				using (NewDisposeScope())
 				{
