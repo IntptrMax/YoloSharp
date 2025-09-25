@@ -36,3 +36,18 @@ public enum AttentionType
 	FlashAttention = 3,
 }
 
+public enum TaskType
+{
+	Detection = 0,
+	Segmentation = 1,
+	Obb = 2,
+	Pose = 3,
+	Classification = 4,
+}
+
+public enum ImageProcessType
+{
+	Letterbox = 0,
+	Mosiac = 1,
+}
+

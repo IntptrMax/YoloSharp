@@ -1,4 +1,5 @@
 ﻿using Data;
+using OpenCvSharp;
 using SkiaSharp;
 using System.Text.RegularExpressions;
 using TorchSharp;
@@ -62,12 +63,12 @@ namespace YoloSharp
 			//Tools.TransModelFromSafetensors(yolo, @".\yolov11n.safetensors", @".\yolov11n.bin");
 		}
 
-		public void Train(string trainDataPath, string valDataPath = "", string outputPath = "output", int imageSize = 640, int epochs = 100, float lr = 0.0001f, int batchSize = 8, int numWorkers = 0, bool useMosaic = true)
+		public void Train(string trainDataPath, string valDataPath = "", string outputPath = "output", int imageSize = 640, int epochs = 100, float lr = 0.0001f, int batchSize = 8, int numWorkers = 0, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
 		{
 			Console.WriteLine("Model will be write to: " + outputPath);
 			Console.WriteLine("Load model...");
 
-			YoloDataset trainDataSet = new YoloDataset(trainDataPath, imageSize, useMosaic: useMosaic);
+			YoloDataClass trainDataSet = new YoloDataClass(trainDataPath, imageSize, TaskType.Detection, ImageProcessType.Letterbox);
 			if (trainDataSet.Count == 0)
 			{
 				throw new FileNotFoundException("No data found in the path: " + trainDataPath);
@@ -77,7 +78,7 @@ namespace YoloSharp
 
 			valDataPath = string.IsNullOrEmpty(valDataPath) ? trainDataPath : valDataPath;
 
-			YoloDataset valDataSet = new YoloDataset(valDataPath, imageSize, useMosaic: false);
+			YoloDataClass valDataSet = new YoloDataClass(valDataPath, imageSize, TaskType.Detection, ImageProcessType.Letterbox);
 			if (valDataSet.Count == 0)
 			{
 				throw new FileNotFoundException("No data found in the path: " + trainDataPath);
@@ -103,16 +104,16 @@ namespace YoloSharp
 					List<Tensor> bboxes = new List<Tensor>();
 					for (int i = 0; i < indexs.Length; i++)
 					{
-						(Tensor img, Tensor lb) = trainDataSet.GetDataTensor(indexs[i]);
-						images[i] = img.to(dtype, device);
-						batch_idx.AddRange(Enumerable.Repeat((float)i, (int)lb.shape[0]));
-						cls.AddRange(lb[TensorIndex.Colon, 0].data<float>());
-						bboxes.Add(lb[TensorIndex.Colon, 1..5].to(dtype, device));
+						ImageData imageData = trainDataSet.GetImageAndLabelData(indexs[i]);
+						images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
+						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
+						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
+						bboxes.AddRange(imageData.ResizedLabels.Select(x => torch.tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
 					}
 
 					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
 					Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);
-					Tensor bboxes_tensor = torch.cat(bboxes).to(dtype, device);
+					Tensor bboxes_tensor = bboxes.Count == 0 ? torch.zeros(new long[] { 0, 4 }) : torch.stack(bboxes).to(dtype, device) / trainDataSet.ImageSize;
 					Tensor imageTensor = concat(images);
 
 					if (batch_idx.Count < 1)
@@ -151,7 +152,7 @@ namespace YoloSharp
 			Console.WriteLine("Train Done.");
 		}
 
-		private float Val(YoloDataset valDataset, DataLoader valDataLoader)
+		private float Val(YoloDataClass valDataset, DataLoader valDataLoader)
 		{
 			using (no_grad())
 			{
@@ -165,15 +166,15 @@ namespace YoloSharp
 					List<Tensor> bboxes = new List<Tensor>();
 					for (int i = 0; i < indexs.Length; i++)
 					{
-						(Tensor img,Tensor lb) = valDataset.GetDataTensor(indexs[i]);
-						images[i] = img.to(this.dtype, device);
-						batch_idx.AddRange(Enumerable.Repeat((float)i, (int)lb.shape[0]));
-						cls.AddRange(lb[TensorIndex.Colon, 0].data<float>());
-						bboxes.Add(lb[TensorIndex.Colon, 1..5].to(dtype, device));
+						ImageData imageData = valDataset.GetImageAndLabelData(indexs[i]);
+						images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
+						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
+						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
+						bboxes.AddRange(imageData.ResizedLabels.Select(x => torch.tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
 					}
 					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
 					Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);
-					Tensor bboxes_tensor = torch.cat(bboxes).to(dtype, device);
+					Tensor bboxes_tensor = torch.stack(bboxes).to(dtype, device) / valDataset.ImageSize;
 
 					Tensor imageTensor = concat(images);
 
@@ -207,49 +208,68 @@ namespace YoloSharp
 
 		public List<YoloResult> ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
 		{
-			using var _ = no_grad();
 			Tensor orgImage = Lib.GetTensorFromImage(image).to(dtype, device);
-
-			// Change RGB → BGR
-			orgImage = torch.stack(new Tensor[] { orgImage[2], orgImage[1], orgImage[0] }, dim: 0).unsqueeze(0) / 255.0f;
-
-			int w = (int)orgImage.shape[3];
-			int h = (int)orgImage.shape[2];
-			int padHeight = 32 - (int)(orgImage.shape[2] % 32);
-			int padWidth = 32 - (int)(orgImage.shape[3] % 32);
-
-			padHeight = padHeight == 32 ? 0 : padHeight;
-			padWidth = padWidth == 32 ? 0 : padWidth;
-
-			Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros);
-			yolo.eval();
-
-			Tensor[] tensors = yolo.forward(input);
-			Tensor results = predict.forward(tensors[0], PredictThreshold, IouThreshold);
-
-			List<YoloResult> predResults = new List<YoloResult>();
-			for (int i = 0; i < results.shape[0]; i++)
-			{
-				int x = results[i, 0].ToInt32();
-				int y = results[i, 1].ToInt32();
-				int rw = (results[i, 2].ToInt32() - x);
-				int rh = (results[i, 3].ToInt32() - y);
-
-				float score = results[i, 4].ToSingle();
-				int sort = results[i, 5].ToInt32();
-
-				predResults.Add(new YoloResult()
-				{
-					ClassID = sort,
-					Score = score,
-					CenterX = x + rw / 2,
-					CenterY = y + rh / 2,
-					Width = rw,
-					Height = rh
-				});
-			}
-			return predResults;
+			return ImagePredict(orgImage, PredictThreshold, IouThreshold);
 		}
+
+		public List<YoloResult> ImagePredict(string imagePath, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		{
+			Tensor orgImage = Lib.GetTensorFromImage(imagePath).to(dtype, device);
+			return ImagePredict(orgImage, PredictThreshold, IouThreshold);
+		}
+
+		public List<YoloResult> ImagePredict(Mat mat, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		{
+			Tensor orgImage = Lib.GetTensorFromImage(mat).to(dtype, device);
+			return ImagePredict(orgImage, PredictThreshold, IouThreshold);
+		}
+
+		public List<YoloResult> ImagePredict(Tensor orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		{
+			using (no_grad())
+			{
+				// Change RGB → BGR
+				orgImage = orgImage.index_select(0, torch.tensor(new long[] { 2, 1, 0 }, device: device)).unsqueeze(0) / 255.0f;
+
+				int w = (int)orgImage.shape[3];
+				int h = (int)orgImage.shape[2];
+				int padHeight = 32 - (int)(orgImage.shape[2] % 32);
+				int padWidth = 32 - (int)(orgImage.shape[3] % 32);
+
+				padHeight = padHeight == 32 ? 0 : padHeight;
+				padWidth = padWidth == 32 ? 0 : padWidth;
+
+				Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros);
+				yolo.eval();
+
+				Tensor[] tensors = yolo.forward(input);
+				Tensor results = predict.forward(tensors[0], PredictThreshold, IouThreshold);
+
+				List<YoloResult> predResults = new List<YoloResult>();
+				for (int i = 0; i < results.shape[0]; i++)
+				{
+					int x = results[i, 0].ToInt32();
+					int y = results[i, 1].ToInt32();
+					int rw = (results[i, 2].ToInt32() - x);
+					int rh = (results[i, 3].ToInt32() - y);
+
+					float score = results[i, 4].ToSingle();
+					int sort = results[i, 5].ToInt32();
+
+					predResults.Add(new YoloResult()
+					{
+						ClassID = sort,
+						Score = score,
+						CenterX = x + rw / 2,
+						CenterY = y + rh / 2,
+						Width = rw,
+						Height = rh
+					});
+				}
+				return predResults;
+			}
+		}
+
 
 		/// <summary>
 		/// Load model from path.

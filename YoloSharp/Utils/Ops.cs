@@ -1,4 +1,5 @@
-﻿using TorchSharp;
+﻿using OpenCvSharp;
+using TorchSharp;
 using static TorchSharp.torch;
 
 namespace Utils
@@ -34,6 +35,30 @@ namespace Utils
 
 				return stack(new Tensor[] { pt1, pt2, pt3, pt4 }, -2).MoveToOuterDisposeScope();
 			}
+		}
+
+		/// <summary>
+		/// Convert batched Oriented Bounding Boxes (OBB) from [xy1, xy2, xy3, xy4] to [xywh, rotation] format.
+		/// </summary>
+		/// <param name="x">Input box corners with shape (N, 8) in [xy1, xy2, xy3, xy4] format.</param>
+		/// <returns>Converted data in [cx, cy, w, h, rotation] format with shape (N, 5). Rotation values are in radians from 0 to pi/2. </returns>
+		internal static float[] xyxyxyxy2xywhr(float[] x)
+		{
+			RotatedRect rotatedRect = Cv2.MinAreaRect(new Point2f[] 
+			{
+				new Point2f(x[0],x[1]),
+				new Point2f(x[2],x[3]),
+				new Point2f(x[4],x[5]),
+				new Point2f(x[6],x[7]),
+			});
+			return new float[] { rotatedRect.Center.X, rotatedRect.Center.Y, rotatedRect.Size.Width, rotatedRect.Size.Height, rotatedRect.Angle * (float)Math.PI / 180.0f };
+		}
+
+		internal static Tensor xyxyxyxy2xywhr(Tensor x)
+		{
+			float[] xx = x.data<float>().ToArray();
+			float[] re = xyxyxyxy2xywhr(xx);
+			return tensor(re, dtype: x.dtype, device: x.device);
 		}
 
 		/// <summary>
@@ -96,7 +121,6 @@ namespace Utils
 			y[TensorIndex.Ellipsis, 2] = (x[TensorIndex.Ellipsis, 2] - x[TensorIndex.Ellipsis, 0]) / w;  // width
 			y[TensorIndex.Ellipsis, 3] = (x[TensorIndex.Ellipsis, 3] - x[TensorIndex.Ellipsis, 1]) / h;  // height
 			return y;
-
 		}
 
 		/// <summary>

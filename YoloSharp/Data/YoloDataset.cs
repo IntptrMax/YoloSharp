@@ -78,7 +78,6 @@ namespace Data
 		public (Tensor, Tensor) GetTensorByLetterBox(long index)
 		{
 			string file = imageFiles[(int)index];
-
 			SKBitmap bitmap = SKBitmap.Decode(file);
 			(SKBitmap img, float _, int pad, bool isWidthLonger) = Letterbox(bitmap, imageSize, imageSize);
 			Tensor lb = GetLetterBoxLabelTensor(index, pad, isWidthLonger);
@@ -90,7 +89,6 @@ namespace Data
 		public (Tensor image, Tensor label) GetLetterBoxObbData(long index)
 		{
 			string file = imageFiles[(int)index];
-
 			SKBitmap bitmap = SKBitmap.Decode(file);
 			(SKBitmap img, float _, int pad, bool isWidthLonger) = Letterbox(bitmap, imageSize, imageSize);
 			Tensor lb = GetLetterBoxLabelTensor(index, pad, isWidthLonger);
@@ -317,6 +315,86 @@ namespace Data
 			Tensor labelTensor = tensor(labelArray);
 			long p = imgTensor.shape[0];
 			return (imgTensor.MoveToOuterDisposeScope(), labelTensor.MoveToOuterDisposeScope(), mask.MoveToOuterDisposeScope());
+		}
+
+		//public ImageData GetOrgImageData(int index)
+		//{
+		//	ImageData data = new ImageData();
+		//	data.ImagePath = imageFiles[index];
+		//	SKBitmap bitmap = SKBitmap.Decode(data.ImagePath);
+		//	data.OrgWidth = bitmap.Width;
+		//	data.OrgHeight = bitmap.Height;
+		//	data.OrgImage = bitmap;
+		//	(SKBitmap img, float _, int pad, bool isWidthLonger) = Letterbox(bitmap, imageSize, imageSize);
+		//	data.ResizedImage = img;
+		//	string labelName = GetLabelFileNameFromImageName(imageFiles[0]);
+		//	if (string.IsNullOrEmpty(labelName))
+		//	{
+		//		data.OrgLabels = new List<LabelData>();
+		//		return data; // No labels found, return empty tensor
+		//	}
+		//	string[] lines = File.ReadAllLines(labelName);
+		//	data.OrgLabels = new List<LabelData>();
+		//	for (int i = 0; i < lines.Length; i++)
+		//	{
+		//		string[] labels = lines[i].Split(' ');
+		//		LabelData label = new LabelData();
+		//		label.LabelID = int.Parse(labels[0]);
+		//		if (isWidthLonger)
+		//		{
+		//			label.CenterX = float.Parse(labels[1]);
+		//			label.CenterY = (float.Parse(labels[2]) * (imageSize - 2 * pad) + pad) / imageSize;
+		//			label.Width = float.Parse(labels[3]);
+		//			label.Height = float.Parse(labels[4]) * (imageSize - 2 * pad) / imageSize;
+		//		}
+		//		else
+		//		{
+		//			label.CenterX = (float.Parse(labels[1]) * (imageSize - 2 * pad) + pad) / imageSize;
+		//			label.CenterY = float.Parse(labels[2]);
+		//			label.Width = float.Parse(labels[3]) * (imageSize - 2 * pad) / imageSize;
+		//			label.Height = float.Parse(labels[4]);
+		//		}
+		//		data.OrgLabels.Add(label);
+		//	}
+		//	return data;
+		//}
+
+		public Tensor GetLetterBoxObbLabelTensor(long index, int pad, bool isWidthLonger = true)
+		{
+			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
+			if (string.IsNullOrEmpty(labelName))
+			{
+				return zeros(new long[] { 0, 6 }, float32).MoveToOuterDisposeScope(); // No labels found, return empty tensor
+			}
+			string[] lines = File.ReadAllLines(labelName);
+
+			float[,] labelArray = new float[lines.Length, 9];
+
+			for (int i = 0; i < lines.Length; i++)
+			{
+				string[] labels = lines[i].Split(' ');
+				labelArray[i, 0] = float.Parse(labels[0]);
+				if (isWidthLonger)
+				{
+					labelArray[i, 1] = float.Parse(labels[1]);
+					labelArray[i, 3] = float.Parse(labels[3]);
+
+					labelArray[i, 2] = (float.Parse(labels[2]) * (imageSize - 2 * pad) + pad) / imageSize;
+					labelArray[i, 4] = float.Parse(labels[4]) * (imageSize - 2 * pad) / imageSize;
+				}
+				else
+				{
+					labelArray[i, 1] = (float.Parse(labels[1]) * (imageSize - 2 * pad) + pad) / imageSize;
+					labelArray[i, 3] = float.Parse(labels[3]) * (imageSize - 2 * pad) / imageSize;
+
+					labelArray[i, 2] = float.Parse(labels[2]);
+					labelArray[i, 4] = float.Parse(labels[4]);
+				}
+
+			}
+			//Tensor labelTensor = tensor(labelArray);
+			//return labelTensor.MoveToOuterDisposeScope();
+			return tensor(labelArray);
 		}
 
 		public Tensor GetOrgImage(long index)

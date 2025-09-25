@@ -1,9 +1,13 @@
-﻿using SkiaSharp;
+﻿using Data;
+using OpenCvSharp;
+using SkiaSharp;
 using System.Text.RegularExpressions;
 using TorchSharp;
+using TorchSharp.Modules;
 using Utils;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
+using static TorchSharp.torch.optim;
 using static YoloSharp.Yolo;
 
 namespace YoloSharp
@@ -15,6 +19,7 @@ namespace YoloSharp
 		private readonly int sortCount;
 		private readonly YoloType yoloType;
 		private Module<Tensor, Tensor[]> yolo;
+		private Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> loss;
 
 		public Obber(int sortCount = 15, YoloType yoloType = YoloType.Yolov8, YoloSize yoloSize = YoloSize.n, DeviceType deviceType = DeviceType.CUDA, ScalarType dtype = ScalarType.Float32)
 		{
@@ -32,6 +37,12 @@ namespace YoloSharp
 			{
 				YoloType.Yolov8 => new Yolov8Obb(sortCount, yoloSize, device, this.dtype),
 				YoloType.Yolov11 => new Yolov11Obb(sortCount, yoloSize, device, this.dtype),
+				_ => throw new NotImplementedException("Yolo type not supported."),
+			};
+			loss = yoloType switch
+			{
+				YoloType.Yolov8 => new Utils.Loss.V8OBBLoss(this.sortCount),
+				YoloType.Yolov11 => new Utils.Loss.V8OBBLoss(this.sortCount),
 				_ => throw new NotImplementedException("Yolo type not supported."),
 			};
 
@@ -79,54 +90,212 @@ namespace YoloSharp
 			}
 		}
 
-		public List<YoloResult> ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		public List<YoloResult> ImagePredict(SKBitmap orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
 		{
-			using var _ = no_grad();
-			yolo.eval();
-			Tensor orgImage = Lib.GetTensorFromImage(image).to(dtype, device);
+			Tensor imgTensor = Lib.GetTensorFromImage(orgImage).to(dtype, device);
+			return ImagePredict(imgTensor, PredictThreshold, IouThreshold);
+		}
 
-			// Change RGB → BGR
-			orgImage = torch.stack(new Tensor[] { orgImage[2], orgImage[1], orgImage[0] }, dim: 0).unsqueeze(0) / 255.0f;
+		public List<YoloResult> ImagePredict(Mat mat, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		{
+			Tensor imgTensor = Lib.GetTensorFromImage(mat).to(dtype, device);
+			return ImagePredict(imgTensor, PredictThreshold, IouThreshold);
+		}
 
-			int w = (int)orgImage.shape[3];
-			int h = (int)orgImage.shape[2];
-			int padHeight = 32 - (int)(orgImage.shape[2] % 32);
-			int padWidth = 32 - (int)(orgImage.shape[3] % 32);
+		public List<YoloResult> ImagePredict(string imagePath, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		{
+			Tensor imgTensor = Lib.GetTensorFromImage(imagePath).to(dtype, device);
+			return ImagePredict(imgTensor, PredictThreshold, IouThreshold);
+		}
 
-			padHeight = padHeight == 32 ? 0 : padHeight;
-			padWidth = padWidth == 32 ? 0 : padWidth;
 
-			Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros);
-			Tensor[] tensors = yolo.forward(input);
-			(List<Tensor> nms_result, var _) = Ops.non_max_suppression(tensors[0], nc: sortCount, iou_thres: IouThreshold, rotated: true);
-			//List<Tensor> nms_result = NonMaxSuppression(tensors[0], nm: 1, iouThreshold: IouThreshold);
-			List<YoloResult> results = new List<YoloResult>();
-			if (nms_result.Count > 0)
+		public List<YoloResult> ImagePredict(Tensor orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		{
+			using (no_grad())
 			{
-				if (nms_result[0] is not null)
+				yolo.eval();
+				// Change RGB → BGR
+				orgImage = orgImage.index_select(0, torch.tensor(new long[] { 2, 1, 0 }, device: device)).unsqueeze(0) / 255.0f;
+
+				int w = (int)orgImage.shape[3];
+				int h = (int)orgImage.shape[2];
+				int padHeight = 32 - (int)(orgImage.shape[2] % 32);
+				int padWidth = 32 - (int)(orgImage.shape[3] % 32);
+
+				padHeight = padHeight == 32 ? 0 : padHeight;
+				padWidth = padWidth == 32 ? 0 : padWidth;
+
+				Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros);
+				Tensor[] tensors = yolo.forward(input);
+				(List<Tensor> nms_result, var _) = Ops.non_max_suppression(tensors[0], nc: sortCount, iou_thres: IouThreshold, rotated: true);
+				//List<Tensor> nms_result = NonMaxSuppression(tensors[0], nm: 1, iouThreshold: IouThreshold);
+				List<YoloResult> results = new List<YoloResult>();
+				if (nms_result.Count > 0)
 				{
-					for (int i = 0; i < nms_result[0].shape[0]; i++)
+					if (nms_result[0] is not null)
 					{
-						YoloResult result = new YoloResult();
-						result.CenterX = nms_result[0][i][0].ToInt32();
-						result.CenterY = nms_result[0][i][1].ToInt32();
-						result.Width = nms_result[0][i][2].ToInt32();
-						result.Height = nms_result[0][i][3].ToInt32();
-						result.Radian = nms_result[0][i][6].ToSingle();
-						result.ClassID = nms_result[0][i][5].ToInt32();
-						result.Score = nms_result[0][i][4].ToSingle();
-						results.Add(result);
+						for (int i = 0; i < nms_result[0].shape[0]; i++)
+						{
+							YoloResult result = new YoloResult();
+							result.CenterX = nms_result[0][i][0].ToInt32();
+							result.CenterY = nms_result[0][i][1].ToInt32();
+							result.Width = nms_result[0][i][2].ToInt32();
+							result.Height = nms_result[0][i][3].ToInt32();
+							result.Radian = nms_result[0][i][6].ToSingle();
+							result.ClassID = nms_result[0][i][5].ToInt32();
+							result.Score = nms_result[0][i][4].ToSingle();
+							results.Add(result);
+						}
 					}
 				}
+				return results;
+			}
+		}
+
+		public void Train(string trainDataPath, string valDataPath = "", string outputPath = "output", int imageSize = 640, int epochs = 100, float lr = 0.0001f, int batchSize = 8, int numWorkers = 0, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
+		{
+			Console.WriteLine("Model will be write to: " + outputPath);
+			Console.WriteLine("Load model...");
+
+			YoloDataClass trainDataSet = new YoloDataClass(trainDataPath, imageSize, TaskType.Obb, ImageProcessType.Letterbox);
+			if (trainDataSet.Count == 0)
+			{
+				throw new FileNotFoundException("No data found in the path: " + trainDataPath);
 			}
 
-			return results;
+			DataLoader trainDataLoader = new DataLoader(trainDataSet, batchSize, num_worker: numWorkers, shuffle: true, device: device);
+
+			valDataPath = string.IsNullOrEmpty(valDataPath) ? trainDataPath : valDataPath;
+
+			YoloDataClass valDataSet = new YoloDataClass(valDataPath, imageSize, TaskType.Obb, ImageProcessType.Letterbox);
+			if (valDataSet.Count == 0)
+			{
+				throw new FileNotFoundException("No data found in the path: " + trainDataPath);
+			}
+
+			DataLoader valDataLoader = new DataLoader(valDataSet, 4, num_worker: 0, shuffle: true, device: device);
+
+			Optimizer optimizer = new SGD(yolo.parameters(), lr: lr);
+
+			float tempLoss = float.MaxValue;
+			Console.WriteLine("Start Training...");
+			yolo.train(true);
+			for (int epoch = 0; epoch < epochs; epoch++)
+			{
+				int step = 0;
+				foreach (var data in trainDataLoader)
+				{
+					step++;
+					long[] indexs = data["index"].data<long>().ToArray();
+					Tensor[] images = new Tensor[indexs.Length];
+					List<float> batch_idx = new List<float>();
+					List<float> cls = new List<float>();
+					List<Tensor> bboxes = new List<Tensor>();
+					for (int i = 0; i < indexs.Length; i++)
+					{
+						ImageData imageData = trainDataSet.GetImageAndLabelData(indexs[i]);
+						images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
+						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
+						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
+						bboxes.AddRange(imageData.ResizedLabels.Select(x => torch.tensor(new float[] { x.CenterX / trainDataSet.ImageSize, x.CenterY / trainDataSet.ImageSize, x.Width / trainDataSet.ImageSize, x.Height / trainDataSet.ImageSize, x.Radian })));
+					}
+
+					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+					Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);
+					Tensor bboxes_tensor = bboxes.Count == 0 ? torch.zeros(new long[] { 0, 5 }) : torch.stack(bboxes).to(dtype, device);
+					Tensor imageTensor = concat(images);
+
+					if (batch_idx.Count < 1)
+					{
+						continue;
+					}
+
+					Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
+					{
+						{ "batch_idx", batch_idx_tensor },
+						{ "cls", cls_tensor },
+						{ "bboxes", bboxes_tensor }
+					};
+
+					Tensor[] list = yolo.forward(imageTensor);
+					(Tensor ls, Tensor ls_item) = loss.forward(list, targets);
+					optimizer.zero_grad();
+					ls.backward();
+					optimizer.step();
+					Console.WriteLine($"Process: Epoch {epoch}, Step/Total Step  {step}/{trainDataLoader.Count}");
+				}
+				Console.Write("Do val now... ");
+				float valLoss = Val(valDataSet, valDataLoader);
+				Console.WriteLine($"Epoch {epoch}, Val Loss: {valLoss}");
+				if (!Directory.Exists(outputPath))
+				{
+					Directory.CreateDirectory(outputPath);
+				}
+				yolo.save(Path.Combine(outputPath, "last.bin"));
+				if (tempLoss > valLoss)
+				{
+					yolo.save(Path.Combine(outputPath, "best.bin"));
+					tempLoss = valLoss;
+				}
+			}
+			Console.WriteLine("Train Done.");
 		}
 
-		public void Train()
+		private float Val(YoloDataClass valDataset, DataLoader valDataLoader)
 		{
+			using (no_grad())
+			{
+				float lossValue = float.MaxValue;
+				foreach (var data in valDataLoader)
+				{
+					long[] indexs = data["index"].data<long>().ToArray();
+					Tensor[] images = new Tensor[indexs.Length];
+					List<float> batch_idx = new List<float>();
+					List<float> cls = new List<float>();
+					List<Tensor> bboxes = new List<Tensor>();
+					for (int i = 0; i < indexs.Length; i++)
+					{
+						ImageData imageData = valDataset.GetImageAndLabelData(indexs[i]);
+						images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
+						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
+						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
+						bboxes.AddRange(imageData.ResizedLabels.Select(x => torch.tensor(new float[] { x.CenterX/valDataset.ImageSize, x.CenterY / valDataset.ImageSize, x.Width / valDataset.ImageSize, x.Height / valDataset.ImageSize,x.Radian })));
+					}
+					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+					Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);
+					Tensor bboxes_tensor = torch.stack(bboxes).to(dtype, device) ;
 
+					Tensor imageTensor = concat(images);
+
+					if (batch_idx.Count < 1)
+					{
+						continue;
+					}
+
+					Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
+					{
+						{ "batch_idx", batch_idx_tensor },
+						{ "cls", cls_tensor },
+						{ "bboxes", bboxes_tensor }
+					};
+
+					Tensor[] list = yolo.forward(imageTensor);
+					var (ls, ls_item) = loss.forward(list.ToArray(), targets);
+					if (lossValue == float.MaxValue)
+					{
+						lossValue = ls.ToSingle();
+					}
+					else
+					{
+						lossValue = lossValue + ls.ToSingle();
+					}
+				}
+				lossValue = lossValue / valDataset.Count;
+				return lossValue;
+			}
 		}
+
+
 
 	}
 }

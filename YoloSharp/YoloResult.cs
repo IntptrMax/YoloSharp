@@ -9,7 +9,7 @@
 		public int Width;
 		public int Height;
 		public float Radian;
-		public bool[,] Mask;
+		public byte[,] Mask;
 
 		public int X => CenterX - Width / 2;
 		public int Y => CenterY - Height / 2;

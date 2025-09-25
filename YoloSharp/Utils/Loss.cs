@@ -1,9 +1,7 @@
 ﻿using TorchSharp;
 using TorchSharp.Modules;
-using static Tensorboard.TensorShapeProto.Types;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
-using static TorchSharp.torchvision;
 
 namespace Utils
 {
@@ -83,7 +81,7 @@ namespace Utils
 			}
 		}
 
-		private class DFLoss : Module<Tensor, Tensor, Tensor>
+		internal class DFLoss : Module<Tensor, Tensor, Tensor>
 		{
 			private readonly int reg_max;
 			public int regMax => reg_max;
@@ -111,7 +109,7 @@ namespace Utils
 			}
 		}
 
-		private class BboxLoss : Module
+		internal class BboxLoss : Module
 		{
 			protected readonly DFLoss? dfl_loss;
 			protected readonly int reg_max;
@@ -137,7 +135,7 @@ namespace Utils
 					Tensor lossDfl;
 					if (dfl_loss is not null)
 					{
-						Tensor targetLtrb = Utils.Tal.bbox2dist(anchor_points, target_bboxes, reg_max - 1);
+						Tensor targetLtrb = Tal.bbox2dist(anchor_points, target_bboxes, reg_max - 1);
 						lossDfl = dfl_loss.forward(pred_dist[fg_mask].view(-1, reg_max), targetLtrb[fg_mask]) * weight;
 						lossDfl = lossDfl.sum() / target_scores_sum;
 					}
@@ -169,7 +167,7 @@ namespace Utils
 					// DFL loss
 					if (dfl_loss is not null)
 					{
-						Tensor target_ltrb = Utils.Tal.bbox2dist(anchor_points, Ops.xywh2xyxy(target_bboxes[TensorIndex.Ellipsis, ..4]), this.dfl_loss.regMax - 1);
+						Tensor target_ltrb = Tal.bbox2dist(anchor_points, Ops.xywh2xyxy(target_bboxes[TensorIndex.Ellipsis, ..4]), this.dfl_loss.regMax - 1);
 						loss_dfl = this.dfl_loss.forward(pred_dist[fg_mask].view(-1, this.dfl_loss.regMax), target_ltrb[fg_mask]) * weight;
 						loss_dfl = loss_dfl.sum() / target_scores_sum;
 					}
@@ -245,9 +243,9 @@ namespace Utils
 				//var BCEcls = new FocalLoss(BCEWithLogitsLoss(pos_weights: torch.tensor(new float[] { h_cls_pw }, device: this.device)), fl_gamma);
 				//var BCEobj = new FocalLoss(BCEWithLogitsLoss(pos_weights: torch.tensor(new float[] { h_obj_pw }, device: this.device)), fl_gamma);
 
-				var lcls = zeros(1, device: device, dtype: float32);  // class loss
-				var lbox = zeros(1, device: device, dtype: float32);  // box loss
-				var lobj = zeros(1, device: device, dtype: float32);  // object loss
+				Tensor lcls = zeros(1, device: device, dtype: float32);  // class loss
+				Tensor lbox = zeros(1, device: device, dtype: float32);  // box loss
+				Tensor lobj = zeros(1, device: device, dtype: float32);  // object loss
 
 				Tensor targets = torch.cat(new Tensor[] { batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"] }, 1);
 
@@ -413,8 +411,8 @@ namespace Utils
 			protected readonly float hyp_dfl;
 
 			protected readonly BCEWithLogitsLoss bce;
-			protected readonly Utils.Tal.TaskAlignedAssigner assigner;
-			private readonly BboxLoss bbox_loss;
+			protected Tal.TaskAlignedAssigner assigner;
+			protected BboxLoss bbox_loss;
 			protected readonly Tensor proj;
 
 			public V8DetectionLoss(int nc = 80, int reg_max = 16, int tal_topk = 10, int[]? stride = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f) : base(nameof(V8DetectionLoss))
@@ -431,7 +429,7 @@ namespace Utils
 				this.hyp_dfl = hyp_dfl;
 				this.proj = torch.arange(this.reg_max);
 
-				this.assigner = new Utils.Tal.TaskAlignedAssigner(topk: tal_topk, num_classes: this.nc, alpha: 0.5f, beta: 6.0f);
+				this.assigner = new Tal.TaskAlignedAssigner(topk: tal_topk, num_classes: this.nc, alpha: 0.5f, beta: 6.0f);
 				this.bbox_loss = new BboxLoss(this.reg_max);
 
 			}
@@ -456,17 +454,17 @@ namespace Utils
 					long batch_size = pred_scores.shape[0];
 
 					Tensor imgsz = tensor(feats[0].shape[2..], device: device, dtype: dtype) * stride[0]; // image size (h,w)
-					var (anchor_points, stride_tensor) = Utils.Tal.make_anchors(feats, stride, 0.5f);
-					var indices = tensor(new long[] { 1, 0, 1, 0 }, device: device);
+					(Tensor anchor_points, Tensor stride_tensor) = Tal.make_anchors(feats, stride, 0.5f);
+					Tensor indices = tensor(new long[] { 1, 0, 1, 0 }, device: device);
 
 					// Targets
-					Tensor scale_tensor = index_select(imgsz, 0, indices).to(device);
+					Tensor scale_tensor = imgsz.index_select(0, indices).to(device);
 					Tensor targets = torch.cat(new Tensor[] { batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"] }, 1);
 					targets = this.postprocess(targets, batch_size, scale_tensor);
-					var gt_labels_bboxes = targets.split(new long[] { 1, 4 }, 2); // cls, xyxy
-					var gt_labels = gt_labels_bboxes[0];
-					var gt_bboxes = gt_labels_bboxes[1];
-					var mask_gt = gt_bboxes.sum(2, keepdim: true).gt_(0.0);
+					Tensor[] gt_labels_bboxes = targets.split(new long[] { 1, 4 }, 2); // cls, xyxy
+					Tensor gt_labels = gt_labels_bboxes[0];
+					Tensor gt_bboxes = gt_labels_bboxes[1];
+					Tensor mask_gt = gt_bboxes.sum(2, keepdim: true).gt_(0.0);
 
 					// Pboxes
 					Tensor pred_bboxes = this.bbox_decode(anchor_points, pred_distri);  // xyxy, (b, h*w, 4)
@@ -479,7 +477,7 @@ namespace Utils
 					if (fg_mask.sum().ToInt64() > 0)
 					{
 						target_bboxes /= stride_tensor;
-						(loss[0], loss[2]) = new BboxLoss().forward(pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask);
+						(loss[0], loss[2]) = bbox_loss.forward(pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask);
 					}
 					loss[0] *= hyp_box;  // box gain
 					loss[1] *= hyp_cls;// cls gain
@@ -496,7 +494,7 @@ namespace Utils
 					long b = pred_dist.shape[0], a = pred_dist.shape[1], c = pred_dist.shape[2]; // batch, anchors, channels
 					pred_dist = pred_dist.view(b, a, 4, c / 4).softmax(3).matmul(this.proj.to(pred_dist.dtype, pred_dist.device));
 				}
-				return Utils.Tal.dist2bbox(pred_dist, anchor_points, xywh: false);
+				return Tal.dist2bbox(pred_dist, anchor_points, xywh: false);
 			}
 
 			protected Tensor postprocess(Tensor targets, long batch_size, Tensor scale_tensor)
@@ -524,13 +522,13 @@ namespace Utils
 							if (n > 0)
 							{
 								// Get the indices where matches is True
-								var indices = nonzero(matches).squeeze().to(torch.ScalarType.Int64);
+								Tensor indices = nonzero(matches).squeeze().to(torch.ScalarType.Int64);
 
 								// Select the rows from targets
-								var selectedRows = targets.index_select(0, indices.contiguous());
+								Tensor selectedRows = targets.index_select(0, indices.contiguous());
 
 								// Slice the rows to exclude the first column
-								var selectedRowsSliced = selectedRows.narrow(1, 1, ne - 1);
+								Tensor selectedRowsSliced = selectedRows.narrow(1, 1, ne - 1);
 
 								// Assign to the output tensor
 								@out[j, TensorIndex.Slice(0, n)] = selectedRowsSliced;
@@ -580,13 +578,13 @@ namespace Utils
 					pred_masks = pred_masks.permute(0, 2, 1).contiguous();
 
 					Tensor imgsz = tensor(feats[0].shape[2..], device: device, dtype: dtype) * stride[0]; // image size (h,w)
-					(Tensor anchor_points, Tensor stride_tensor) = Utils.Tal.make_anchors(feats, stride, 0.5f);
-					var indices = tensor(new long[] { 1, 0, 1, 0 }, device: device);
+					(Tensor anchor_points, Tensor stride_tensor) = Tal.make_anchors(feats, stride, 0.5f);
+					Tensor indices = tensor(new long[] { 1, 0, 1, 0 }, device: device);
 
 					// Select elements from imgsz
-					var scale_tensor = index_select(imgsz, 0, indices).to(device);
+					Tensor scale_tensor = imgsz.index_select(0, indices).to(device);
 					Tensor targets = torch.cat(new Tensor[] { batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"] }, 1);
-					var tgs = postprocess(targets, batch_size, scale_tensor);
+					Tensor tgs = postprocess(targets, batch_size, scale_tensor);
 					Tensor[] gt_labels_bboxes = tgs.split(new long[] { 1, 4 }, 2);  // cls, xyxy
 					Tensor gt_labels = gt_labels_bboxes[0];
 					Tensor gt_bboxes = gt_labels_bboxes[1];
@@ -595,13 +593,12 @@ namespace Utils
 					// Pboxes
 					Tensor pred_bboxes = bbox_decode(anchor_points, pred_distri);  // xyxy, (b, h*w, 4)
 
-					Utils.Tal.TaskAlignedAssigner assigner = new Utils.Tal.TaskAlignedAssigner(topk: tal_topk, num_classes: nc, alpha: 0.5f, beta: 6.0f);
-					var (_, target_bboxes, target_scores, fg_mask, target_gt_idx) = assigner.forward(pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype), anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt);
-					var target_scores_sum = max(target_scores.sum());
+					(_, Tensor target_bboxes, Tensor target_scores, Tensor fg_mask, Tensor target_gt_idx) = assigner.forward(pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype), anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt);
+					Tensor target_scores_sum = max(target_scores.sum());
 					loss[2] = bce.forward(pred_scores, target_scores).sum() / target_scores_sum; //BCE
 					if (fg_mask.sum().ToSingle() > 0)
 					{
-						(loss[0], loss[3]) = new BboxLoss().forward(pred_distri, pred_bboxes, anchor_points, target_bboxes / stride_tensor, target_scores, target_scores_sum, fg_mask);
+						(loss[0], loss[3]) = this.bbox_loss.forward(pred_distri, pred_bboxes, anchor_points, target_bboxes / stride_tensor, target_scores, target_scores_sum, fg_mask);
 						loss[1] = calculate_segmentation_loss(fg_mask, batch["masks"].@float(), target_gt_idx, target_bboxes, /*batch_idx,*/ proto, pred_masks, imgsz, over_laps);
 					}
 
@@ -702,12 +699,12 @@ namespace Utils
 
 		internal class V8OBBLoss : V8DetectionLoss
 		{
-			private readonly Utils.Tal.RotatedTaskAlignedAssigner assigner;
-			private readonly RotatedBboxLoss bbox_loss;
+			//private readonly Utils.Tal.RotatedTaskAlignedAssigner assigner;
+			//private readonly RotatedBboxLoss bbox_loss;
 
 			public V8OBBLoss(int nc = 80, int reg_max = 16, int tal_topk = 10, int[]? stride = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f) : base(nc: nc, reg_max: reg_max, tal_topk: tal_topk, stride: stride, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl)
 			{
-				this.assigner = new Utils.Tal.RotatedTaskAlignedAssigner(topk: 10, num_classes: this.nc, alpha: 0.5f, beta: 6.0f);
+				this.assigner = new Tal.RotatedTaskAlignedAssigner(topk: 10, num_classes: this.nc, alpha: 0.5f, beta: 6.0f);
 				this.bbox_loss = new RotatedBboxLoss(this.reg_max);
 			}
 
@@ -821,7 +818,7 @@ namespace Utils
 					loss[1] *= this.hyp_cls;  // cls gain
 					loss[2] *= this.hyp_dfl; // dfl gain
 
-					return ((loss * batch_size).MoveToOuterDisposeScope(), loss.MoveToOuterDisposeScope()); // loss(box, cls, dfl)
+					return ((loss.sum() * batch_size).MoveToOuterDisposeScope(), loss.MoveToOuterDisposeScope()); // loss(box, cls, dfl)
 				}
 			}
 
@@ -839,7 +836,7 @@ namespace Utils
 					long b = pred_dist.shape[0], a = pred_dist.shape[1], c = pred_dist.shape[2]; // batch, anchors, channels
 					pred_dist = pred_dist.view(b, a, 4, c / 4).softmax(3).matmul(this.proj.to(pred_dist.dtype, pred_dist.device));
 				}
-				return torch.cat(new Tensor[] { Utils.Tal.dist2rbox(pred_dist, pred_angle, anchor_points), pred_angle }, dim: -1);
+				return torch.cat(new Tensor[] { Tal.dist2rbox(pred_dist, pred_angle, anchor_points), pred_angle }, dim: -1);
 			}
 		}
 
