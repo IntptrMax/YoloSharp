@@ -401,6 +401,31 @@ namespace Utils
 			return masks.gt_(0.0);
 
 		}
+
+		internal static float[] cxcywhr2xyxyxyxy(float[] x)
+		{
+			float cx = x[0];
+			float cy = x[1];
+			float w = x[2];
+			float h = x[3];
+			float r = x[4];
+			float cosR = (float)Math.Cos(r);
+			float sinR = (float)Math.Sin(r);
+			float wHalf = w / 2;
+			float hHalf = h / 2;
+			return new float[]
+			{
+				cx - wHalf * cosR + hHalf * sinR,
+				cy - wHalf * sinR - hHalf * cosR,
+				cx + wHalf * cosR + hHalf * sinR,
+				cy + wHalf * sinR - hHalf * cosR,
+				cx + wHalf * cosR - hHalf * sinR,
+				cy + wHalf * sinR + hHalf * cosR,
+				cx - wHalf * cosR - hHalf * sinR,
+				cy - wHalf * sinR + hHalf * cosR,
+			};
+		}
+
 	}
 }
 

@@ -136,7 +136,7 @@ namespace YoloSharp
 					new Concat(),                                                                               // cat head P5
 					new C3(widths[4], widths[4], depths[0], false, device: device, dtype: dtype),     // 23 (P5/32-large)
 
-					new YolovDetect(nc, ch, device: device, dtype: dtype)                                                               // Detect(P3, P4, P5)
+					new Yolov8Detect(nc, ch, device: device, dtype: dtype)                                                               // Detect(P3, P4, P5)
 				);
 				return mod;
 
@@ -203,7 +203,7 @@ namespace YoloSharp
 					new Concat(),
 					new C2f(widths[4] + widths[3], widths[4], depths[0], device: device, dtype: dtype),
 
-					new YolovDetect(nc, ch, device: device, dtype: dtype)
+					new Yolov8Detect(nc, ch, device: device, dtype: dtype)
 				);
 				return mod;
 			}
@@ -296,7 +296,7 @@ namespace YoloSharp
 					new Concat(),
 					new C3k2(widths[4] + widths[3], widths[4], depthSize, c3k: true, device: device, dtype: dtype),
 
-					new YolovDetect(nc, ch, false, device: device, dtype: dtype)
+					new Yolov8Detect(nc, ch, false, device: device, dtype: dtype)
 				);
 				return mod;
 			}
@@ -353,7 +353,7 @@ namespace YoloSharp
 					new Concat(),                                                                                       // cat head P5
 					new C3k2(widths[4] + widths[3], widths[4], depthSize, c3k: true, device: device, dtype: dtype),                       // 20 (P5/32-large)
 
-					new YolovDetect(nc, ch, false, device: device, dtype: dtype)                                                                       // Detect(P3, P4, P5)
+					new Yolov8Detect(nc, ch, false, device: device, dtype: dtype)                                                                       // Detect(P3, P4, P5)
 					);
 				return mod;
 			}

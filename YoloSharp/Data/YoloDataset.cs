@@ -1,6 +1,5 @@
-﻿using SkiaSharp;
+﻿using OpenCvSharp;
 using TorchSharp;
-using YoloSharp;
 using static TorchSharp.torch;
 
 namespace Data
@@ -8,32 +7,60 @@ namespace Data
 	internal class YoloDataset : utils.data.Dataset
 	{
 		private string rootPath = string.Empty;
+		public int ImageSize => imageSize;
 		private int imageSize = 640;
 		private List<string> imageFiles = new List<string>();
-		private bool useMosaic = true;
-		private Device device;
-		private int[] mosaic_border = new int[] { -320, -320 };
+		private ImageProcessType imageProcessType = ImageProcessType.Letterbox;
+		public ImageProcessType ImageProcessType => imageProcessType;
+		private TaskType taskType = TaskType.Detection;
 
-		public YoloDataset(string rootPath, int imageSize = 640, bool useMosaic = true, TorchSharp.DeviceType deviceType = TorchSharp.DeviceType.CUDA)
+		public YoloDataset(string rootPath, string dataPath = "", int imageSize = 640, TaskType taskType = TaskType.Detection, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
 		{
 			torchvision.io.DefaultImager = new torchvision.io.SkiaImager();
+
 			this.rootPath = rootPath;
-			string imagesFolder = Path.Combine(rootPath, "images");
-			if (!Directory.Exists(imagesFolder))
+
+			if (string.IsNullOrEmpty(dataPath))
 			{
-				throw new DirectoryNotFoundException($"The folder {imagesFolder} does not exist.");
+				string imagesFolder = Path.Combine(rootPath, "images");
+				if (!Directory.Exists(imagesFolder))
+				{
+					throw new DirectoryNotFoundException($"The folder {imagesFolder} does not exist.");
+				}
+
+				string[] imagesFileNames = Directory.GetFiles(imagesFolder, "*.*", SearchOption.AllDirectories).Where(file =>
+				{
+					string extension = Path.GetExtension(file).ToLower();
+					return extension == ".jpg" || extension == ".png" || extension == ".bmp";
+				}).ToArray();
+				imageFiles.AddRange(imagesFileNames);
+			}
+			else
+			{
+				string path = Path.Combine(rootPath, dataPath);
+				if (!File.Exists(path))
+				{
+					throw new FileNotFoundException($"The file {dataPath} does not exist.");
+				}
+
+				string[] imagesFileNames = File.ReadAllLines(dataPath).Where(line =>
+				{
+					string trimmedLine = line.Trim();
+					if (string.IsNullOrEmpty(trimmedLine))
+					{
+						return false;
+					}
+					string extension = Path.GetExtension(trimmedLine).ToLower();
+					return extension == ".jpg" || extension == ".png" || extension == ".bmp";
+				}).Select(line => Path.IsPathRooted(line) ? line : Path.Combine(rootPath, line.Trim())).ToArray();
+
+				imageFiles.AddRange(imagesFileNames);
+
 			}
 
-			string[] imagesFileNames = Directory.GetFiles(imagesFolder, "*.*", SearchOption.AllDirectories).Where(file =>
-			{
-				string extension = Path.GetExtension(file).ToLower();
-				return extension == ".jpg" || extension == ".png" || extension == ".bmp";
-			}).ToArray();
-
-			imageFiles.AddRange(imagesFileNames);
 			this.imageSize = imageSize;
-			this.useMosaic = useMosaic;
-			device = new Device(deviceType);
+			this.imageProcessType = imageProcessType;
+			this.taskType = taskType;
 		}
 
 		private string GetLabelFileNameFromImageName(string imageFileName)
@@ -53,7 +80,7 @@ namespace Data
 
 		public override long Count => imageFiles.Count;
 
-		public string GetFileNameByIndex(long index)
+		private string GetFileNameByIndex(long index)
 		{
 			return imageFiles[(int)index];
 		}
@@ -65,436 +92,262 @@ namespace Data
 			return outputs;
 		}
 
-		//public (Tensor, Tensor) GetTensorByLetterBox(long index)
-		//{
-		//	using var _ = NewDisposeScope();
-		//	string file = imageFiles[(int)index];
-		//	Tensor orgImageTensor = torchvision.io.read_image(file, torchvision.io.ImageReadMode.RGB).to(device);
-		//	var (imgTensor, _, _) = Letterbox(orgImageTensor, imageSize, imageSize);
-		//	Tensor lb = GetLetterBoxLabelTensor(index);
-		//	return (imgTensor.unsqueeze(0).MoveToOuterDisposeScope(), lb.to(imgTensor.device).MoveToOuterDisposeScope());
-		//}
-
-		public (Tensor, Tensor) GetTensorByLetterBox(long index)
+		public static Mat GetMaskFromOutlinePoints(Point2f[] points, int width, int height)
 		{
-			string file = imageFiles[(int)index];
-			SKBitmap bitmap = SKBitmap.Decode(file);
-			(SKBitmap img, float _, int pad, bool isWidthLonger) = Letterbox(bitmap, imageSize, imageSize);
-			Tensor lb = GetLetterBoxLabelTensor(index, pad, isWidthLonger);
-			SKData data = img.Encode(SKEncodedImageFormat.Jpeg, 100);
-			Tensor imgTensor = torchvision.io.read_image(data.AsStream(), torchvision.io.ImageReadMode.RGB);
-			return (imgTensor.unsqueeze(0), lb.to(imgTensor.device));
+			Mat mask = Mat.Zeros(height, width, MatType.CV_8UC1);
+			Point[][] pts = new Point[1][];
+			pts[0] = points.Select(p => new Point((int)p.X, (int)p.Y)).ToArray();
+			Cv2.FillPoly(mask, pts, OpenCvSharp.Scalar.White);
+			return mask;
 		}
 
-		public (Tensor image, Tensor label) GetLetterBoxObbData(long index)
+		public ImageData GetImageAndLabelData(long index)
 		{
-			string file = imageFiles[(int)index];
-			SKBitmap bitmap = SKBitmap.Decode(file);
-			(SKBitmap img, float _, int pad, bool isWidthLonger) = Letterbox(bitmap, imageSize, imageSize);
-			Tensor lb = GetLetterBoxLabelTensor(index, pad, isWidthLonger);
-			SKData data = img.Encode(SKEncodedImageFormat.Jpeg, 100);
-			Tensor imgTensor = torchvision.io.read_image(data.AsStream(), torchvision.io.ImageReadMode.RGB);
-			return (imgTensor.unsqueeze(0), lb.to(imgTensor.device));
-		}
-
-		public (Tensor image, Tensor label) GetTensorByMosaic(long index)
-		{
-			(Tensor img, Tensor lb) = load_mosaic(index);
-			return (img.unsqueeze(0), lb.to(img.device));
-		}
-
-		public (Tensor image, Tensor label) GetDataTensor(long index)
-		{
-			(Tensor image, Tensor label) = useMosaic ? GetTensorByMosaic(index) : GetTensorByLetterBox(index);
-			if (image.shape.Length == 3)
+			return imageProcessType switch
 			{
-				image = image.unsqueeze(0);
-			}
-			image = image / 255.0f;
-			return (image, label);
+				ImageProcessType.Letterbox => GetImageAndLabelDataWithLetterBox(index),
+				ImageProcessType.Mosiac => GetImageAndLabelDataWithMosic4(index),
+				_ => throw new Exception($"The image process type {imageProcessType} is not supported."),
+			};
 		}
 
-
-		public (Tensor image, Tensor label) GetObbDataTensor(long index)
+		public ImageData GetOrgImageAndLabelData(long index)
 		{
-			if (useMosaic)
+			string imageFileName = imageFiles[(int)index];
+			string labelFileName = GetLabelFileNameFromImageName(imageFileName);
+			using (Mat orgImage = Cv2.ImRead(imageFileName))
 			{
-				Console.WriteLine("Mosaic method are not support now, it will come soon.");
-				//load_mosaic(index);
-			}
-			return GetLetterBoxObbData(index);
-		}
+				int orgWidth = orgImage.Width;
+				int orgHeight = orgImage.Height;
 
-		public (Tensor image, Tensor label, Tensor mask) GetSegmentDataTensor(long index)
-		{
-			if (useMosaic)
-			{
-				Console.WriteLine("Mosaic method are not support now, it will come soon.");
-				//load_mosaic(index);
-			}
-			return GetLetterBoxSegmentData(index);
-		}
-
-		private (SKBitmap paddedImage, float scale, int pad, bool isWidthLonger) Letterbox(SKBitmap sourceBitmap, int targetWidth, int targetHeight)
-		{
-			SKBitmap targetBitmap = new SKBitmap(targetWidth, targetHeight);
-			using (SKCanvas canvas = new SKCanvas(targetBitmap))
-			{
-				canvas.Clear(new SKColor(114, 114, 114));
-				float ratio = Math.Min((float)targetWidth / sourceBitmap.Width, (float)targetHeight / sourceBitmap.Height);
-				int scaledWidth = (int)(sourceBitmap.Width * ratio);
-				int scaledHeight = (int)(sourceBitmap.Height * ratio);
-				int offsetX = (targetWidth - scaledWidth) / 2;
-				int offsetY = (targetHeight - scaledHeight) / 2;
-				SKRect destRect = SKRect.Create(offsetX, offsetY, scaledWidth, scaledHeight);
-				canvas.DrawBitmap(sourceBitmap, destRect);
-				return (targetBitmap, ratio, offsetX + offsetY, offsetY > 0);
-			}
-		}
-
-
-		private (Tensor paddedImage, float scale, int pad) Letterbox(Tensor image, int targetWidth, int targetHeight)
-		{
-			using var _ = NewDisposeScope();
-			// 获取图像的原始尺寸
-			int originalWidth = (int)image.shape[2];
-			int originalHeight = (int)image.shape[1];
-
-			// 计算缩放比例
-			float scale = Math.Min((float)targetWidth / originalWidth, (float)targetHeight / originalHeight);
-
-			// 计算缩放后的尺寸
-			int scaledWidth = (int)(originalWidth * scale);
-			int scaledHeight = (int)(originalHeight * scale);
-
-			// 计算填充后的尺寸
-			int padLeft = (targetWidth - scaledWidth) / 2;
-			//int padRight = targetWidth - scaledWidth - padLeft;
-			int padTop = (targetHeight - scaledHeight) / 2;
-			//int padBottom = targetHeight - scaledHeight - padTop;
-
-			// 缩放图像
-			Tensor scaledImage = torchvision.transforms.functional.resize(image, scaledHeight, scaledWidth);
-
-			// 创建一个全零的张量，用于填充
-			Tensor paddedImage = full(new long[] { 3, targetHeight, targetWidth }, 114, image.dtype, image.device);
-
-			// 将缩放后的图像放置在填充后的图像中心
-			paddedImage[TensorIndex.Ellipsis, padTop..(padTop + scaledHeight), padLeft..(padLeft + scaledWidth)].copy_(scaledImage);
-
-			GC.Collect();
-
-			return (paddedImage.MoveToOuterDisposeScope(), scale, Math.Max(padLeft, padTop));
-		}
-
-		public Tensor GetLetterBoxLabelTensor(long index, int pad, bool isWidthLonger = true)
-		{
-			//using var _ = NewDisposeScope();
-			//Tensor orgImageTensor = torchvision.io.read_image(imageFiles[(int)index]);
-			//var (imgTensor, scale, pad) = Letterbox(orgImageTensor, imageSize, imageSize);
-			//bool isWidthLonger = orgImageTensor.shape[2] > orgImageTensor.shape[1];
-
-			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
-			if (string.IsNullOrEmpty(labelName))
-			{
-				return zeros(new long[] { 0, 5 }, float32).MoveToOuterDisposeScope(); // No labels found, return empty tensor
-			}
-			string[] lines = File.ReadAllLines(labelName);
-
-			float[,] labelArray = new float[lines.Length, 5];
-
-			for (int i = 0; i < lines.Length; i++)
-			{
-				string[] labels = lines[i].Split(' ');
-				labelArray[i, 0] = float.Parse(labels[0]);
-				if (isWidthLonger)
+				List<LabelData> labels = new List<LabelData>();
+				if (!string.IsNullOrEmpty(labelFileName))
 				{
-					labelArray[i, 1] = float.Parse(labels[1]);
-					labelArray[i, 3] = float.Parse(labels[3]);
-
-					labelArray[i, 2] = (float.Parse(labels[2]) * (imageSize - 2 * pad) + pad) / imageSize;
-					labelArray[i, 4] = float.Parse(labels[4]) * (imageSize - 2 * pad) / imageSize;
-				}
-				else
-				{
-					labelArray[i, 1] = (float.Parse(labels[1]) * (imageSize - 2 * pad) + pad) / imageSize;
-					labelArray[i, 3] = float.Parse(labels[3]) * (imageSize - 2 * pad) / imageSize;
-
-					labelArray[i, 2] = float.Parse(labels[2]);
-					labelArray[i, 4] = float.Parse(labels[4]);
-				}
-
-			}
-			//Tensor labelTensor = tensor(labelArray);
-			//return labelTensor.MoveToOuterDisposeScope();
-			return tensor(labelArray);
-		}
-
-		public (Tensor image, Tensor label, Tensor mask) GetLetterBoxSegmentData(long index)
-		{
-			using var _ = NewDisposeScope();
-			int maskSize = 160;
-			Tensor orgImageTensor = torchvision.io.read_image(imageFiles[(int)index], torchvision.io.ImageReadMode.RGB);
-
-			int originalWidth = (int)orgImageTensor.shape[2];
-			int originalHeight = (int)orgImageTensor.shape[1];
-
-			float scale = Math.Min((float)imageSize / originalWidth, (float)imageSize / originalHeight);
-			int padWidth = imageSize - (int)(scale * originalWidth);
-			int padHeight = imageSize - (int)(scale * originalHeight);
-
-			float maskWidthScale = scale * originalWidth / imageSize;
-			float maskHeightScale = scale * originalHeight / imageSize;
-
-			Tensor imgTensor = torchvision.transforms.functional.resize(orgImageTensor, (int)(originalHeight * scale), (int)(originalWidth * scale));
-			imgTensor = nn.functional.pad(imgTensor, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros);
-
-			Tensor outputImg = zeros(new long[] { 3, imageSize, imageSize });
-			outputImg[TensorIndex.Colon, ..(int)imgTensor.shape[1], ..(int)imgTensor.shape[2]] = imgTensor;
-
-			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
-			if (string.IsNullOrEmpty(labelName))
-			{
-				return (outputImg.MoveToOuterDisposeScope(), zeros(new long[] { 0, 5 }, float32).MoveToOuterDisposeScope(), zeros(new long[] { maskSize, maskSize }).MoveToOuterDisposeScope()); // No labels found, return empty tensors
-			}
-			string[] lines = File.ReadAllLines(labelName);
-			float[,] labelArray = new float[lines.Length, 5];
-
-			Tensor mask = zeros(new long[] { maskSize, maskSize });
-			for (int i = 0; i < lines.Length; i++)
-			{
-				string[] datas = lines[i].Split(' ');
-				labelArray[i, 0] = float.Parse(datas[0]);
-
-				List<SKPoint> points = new List<SKPoint>();
-				for (int j = 1; j < datas.Length; j = j + 2)
-				{
-					points.Add(new SKPoint(float.Parse(datas[j]) * scale * originalWidth * maskSize / imageSize, float.Parse(datas[j + 1]) * scale * originalHeight * maskSize / imageSize));
-				}
-
-				float maxX = points.Max(p => p.X) / maskSize;
-				float maxY = points.Max(p => p.Y) / maskSize;
-				float minX = points.Min(p => p.X) / maskSize;
-				float minY = points.Min(p => p.Y) / maskSize;
-
-				float width = maxX - minX;
-				float height = maxY - minY;
-				labelArray[i, 1] = minX + width / 2;
-				labelArray[i, 2] = minY + height / 2;
-				labelArray[i, 3] = width;
-				labelArray[i, 4] = height;
-
-				using (var bitmap = new SKBitmap(maskSize, maskSize, SKColorType.Rgba8888, SKAlphaType.Premul))
-				using (var canvas = new SKCanvas(bitmap))
-				{
-					// Fill with black background
-					canvas.Clear(SKColors.Black);
-
-					// Create paint for drawing
-					using (var paint = new SKPaint())
+					string[] strings = File.ReadAllLines(labelFileName);
+					foreach (string line in strings)
 					{
-						paint.Color = SKColors.White;
-						paint.Style = SKPaintStyle.Fill; // Fill the polygon
-						paint.IsAntialias = true;       // Smooth edges
-
-						// Convert points to SKPoint array
-						SKPoint[] skPoints = points.Select(p => new SKPoint((float)p.X, (float)p.Y)).ToArray();
-
-						// Draw polygon
-						using (var path = new SKPath())
+						string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+						if (parts is null)
 						{
-							path.AddPoly(skPoints);
-							canvas.DrawPath(path, paint);
+							throw new Exception($"The label file {labelFileName} format is incorrect.");
+						}
+						switch (taskType)
+						{
+							case TaskType.Detection:
+								{
+									if (parts.Length != 5)
+									{
+										throw new Exception($"The label file {labelFileName} format is incorrect.");
+									}
+									labels.Add(new LabelData()
+									{
+										LabelID = int.Parse(parts[0]),
+										CenterX = float.Parse(parts[1]) * orgWidth,
+										CenterY = float.Parse(parts[2]) * orgHeight,
+										Width = float.Parse(parts[3]) * orgWidth,
+										Height = float.Parse(parts[4]) * orgHeight,
+										Radian = 0,
+									});
+									break;
+								}
+							case TaskType.Obb:
+								{
+									if (parts.Length != 9)
+									{
+										throw new Exception($"The label file {labelFileName} format is incorrect.");
+									}
+									int label = int.Parse(parts[0]);
+									float x1 = float.Parse(parts[1]) * orgWidth;
+									float y1 = float.Parse(parts[2]) * orgHeight;
+									float x2 = float.Parse(parts[3]) * orgWidth;
+									float y2 = float.Parse(parts[4]) * orgHeight;
+									float x3 = float.Parse(parts[5]) * orgWidth;
+									float y3 = float.Parse(parts[6]) * orgHeight;
+									float x4 = float.Parse(parts[7]) * orgWidth;
+									float y4 = float.Parse(parts[8]) * orgHeight;
+									float[] re = Utils.Ops.xyxyxyxy2xywhr(new float[] { x1, y1, x2, y2, x3, y3, x4, y4 });
+									labels.Add(new LabelData()
+									{
+										LabelID = label,
+										CenterX = re[0],
+										CenterY = re[1],
+										Width = re[2],
+										Height = re[3],
+										Radian = re[4],
+									});
+									break;
+								}
+							case TaskType.Segmentation:
+								{
+									if (parts.Length < 5)
+									{
+										throw new Exception($"The label file {labelFileName} format is incorrect.");
+									}
+
+									Point2f[] maskOutlinePoints = new Point2f[(parts.Length - 1) / 2];
+									for (int i = 0; i < maskOutlinePoints.Length; i++)
+									{
+										maskOutlinePoints[i] = new Point2f(float.Parse(parts[1 + i * 2]) * orgWidth, float.Parse(parts[2 + i * 2]) * orgHeight);
+									}
+
+									Rect rect = Cv2.BoundingRect(maskOutlinePoints);
+
+									labels.Add(new LabelData()
+									{
+										LabelID = int.Parse(parts[0]),
+										CenterX = (rect.Left + rect.Right) / 2.0f,
+										CenterY = (rect.Top + rect.Bottom) / 2.0f,
+										Width = rect.Width,
+										Height = rect.Height,
+										Radian = 0,
+										MaskOutLine = maskOutlinePoints
+									});
+									break;
+								}
+							default:
+								throw new Exception($"The task type {taskType} is not supported.");
 						}
 					}
-					Tensor msk = Lib.GetTensorFromImage(bitmap);
-					msk = msk[0] > 0;
-					mask[msk] = i + 1;
+
+
 				}
-			}
-			Tensor labelTensor = tensor(labelArray);
-			long p = imgTensor.shape[0];
-			return (imgTensor.MoveToOuterDisposeScope(), labelTensor.MoveToOuterDisposeScope(), mask.MoveToOuterDisposeScope());
-		}
-
-		//public ImageData GetOrgImageData(int index)
-		//{
-		//	ImageData data = new ImageData();
-		//	data.ImagePath = imageFiles[index];
-		//	SKBitmap bitmap = SKBitmap.Decode(data.ImagePath);
-		//	data.OrgWidth = bitmap.Width;
-		//	data.OrgHeight = bitmap.Height;
-		//	data.OrgImage = bitmap;
-		//	(SKBitmap img, float _, int pad, bool isWidthLonger) = Letterbox(bitmap, imageSize, imageSize);
-		//	data.ResizedImage = img;
-		//	string labelName = GetLabelFileNameFromImageName(imageFiles[0]);
-		//	if (string.IsNullOrEmpty(labelName))
-		//	{
-		//		data.OrgLabels = new List<LabelData>();
-		//		return data; // No labels found, return empty tensor
-		//	}
-		//	string[] lines = File.ReadAllLines(labelName);
-		//	data.OrgLabels = new List<LabelData>();
-		//	for (int i = 0; i < lines.Length; i++)
-		//	{
-		//		string[] labels = lines[i].Split(' ');
-		//		LabelData label = new LabelData();
-		//		label.LabelID = int.Parse(labels[0]);
-		//		if (isWidthLonger)
-		//		{
-		//			label.CenterX = float.Parse(labels[1]);
-		//			label.CenterY = (float.Parse(labels[2]) * (imageSize - 2 * pad) + pad) / imageSize;
-		//			label.Width = float.Parse(labels[3]);
-		//			label.Height = float.Parse(labels[4]) * (imageSize - 2 * pad) / imageSize;
-		//		}
-		//		else
-		//		{
-		//			label.CenterX = (float.Parse(labels[1]) * (imageSize - 2 * pad) + pad) / imageSize;
-		//			label.CenterY = float.Parse(labels[2]);
-		//			label.Width = float.Parse(labels[3]) * (imageSize - 2 * pad) / imageSize;
-		//			label.Height = float.Parse(labels[4]);
-		//		}
-		//		data.OrgLabels.Add(label);
-		//	}
-		//	return data;
-		//}
-
-		public Tensor GetLetterBoxObbLabelTensor(long index, int pad, bool isWidthLonger = true)
-		{
-			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
-			if (string.IsNullOrEmpty(labelName))
-			{
-				return zeros(new long[] { 0, 6 }, float32).MoveToOuterDisposeScope(); // No labels found, return empty tensor
-			}
-			string[] lines = File.ReadAllLines(labelName);
-
-			float[,] labelArray = new float[lines.Length, 9];
-
-			for (int i = 0; i < lines.Length; i++)
-			{
-				string[] labels = lines[i].Split(' ');
-				labelArray[i, 0] = float.Parse(labels[0]);
-				if (isWidthLonger)
+				ImageData imageData = new ImageData
 				{
-					labelArray[i, 1] = float.Parse(labels[1]);
-					labelArray[i, 3] = float.Parse(labels[3]);
-
-					labelArray[i, 2] = (float.Parse(labels[2]) * (imageSize - 2 * pad) + pad) / imageSize;
-					labelArray[i, 4] = float.Parse(labels[4]) * (imageSize - 2 * pad) / imageSize;
-				}
-				else
-				{
-					labelArray[i, 1] = (float.Parse(labels[1]) * (imageSize - 2 * pad) + pad) / imageSize;
-					labelArray[i, 3] = float.Parse(labels[3]) * (imageSize - 2 * pad) / imageSize;
-
-					labelArray[i, 2] = float.Parse(labels[2]);
-					labelArray[i, 4] = float.Parse(labels[4]);
-				}
+					ImagePath = imageFileName,
+					OrgWidth = orgWidth,
+					OrgHeight = orgHeight,
+					OrgLabels = labels
+				};
+				return imageData;
 
 			}
-			//Tensor labelTensor = tensor(labelArray);
-			//return labelTensor.MoveToOuterDisposeScope();
-			return tensor(labelArray);
 		}
 
-		public Tensor GetOrgImage(long index)
+		public ImageData GetImageAndLabelDataWithLetterBox(long index)
 		{
-			return torchvision.io.read_image(imageFiles[(int)index], torchvision.io.ImageReadMode.RGB);
+			ImageData imageData = GetOrgImageAndLabelData(index);
+			LetterBox(imageData, imageSize);
+			return imageData;
 		}
 
-
-
-		/// <summary>
-		/// Loads a 4-image mosaic for YOLO, combining 1 selected and 3 random images, with labels and segments.
-		/// </summary>
-		/// <param name="index">The index in datasets</param>
-		/// <returns></returns>
-		public (Tensor, Tensor) load_mosaic(long index)
+		private void LetterBox(ImageData imageData, int size)
 		{
-			using var _ = NewDisposeScope();
-			using var __ = no_grad();
-			long[] indexs = Sample(index, 0, (int)Count, 4);
+			float r = Math.Min((float)size / imageData.OrgWidth, (float)size / imageData.OrgHeight);
+			int newUnpadW = (int)Math.Round(imageData.OrgWidth * r);
+			int newUnpadH = (int)Math.Round(imageData.OrgHeight * r);
+			int dw = size - newUnpadW;
+			int dh = size - newUnpadH;
+			dw /= 2;
+			dh /= 2;
+			Mat resized = new Mat();
+			Cv2.Resize(imageData.OrgImage, resized, new OpenCvSharp.Size(newUnpadW, newUnpadH));
+			Cv2.CopyMakeBorder(resized, resized, dh, size - newUnpadH - dh, dw, size - newUnpadW - dw, BorderTypes.Constant, new OpenCvSharp.Scalar(114, 114, 114));
+			imageData.ResizedImage = resized;
+
+			// Adjust labels
+			if (imageData.OrgLabels is not null)
+			{
+				imageData.ResizedLabels = new List<LabelData>();
+				foreach (var label in imageData.OrgLabels)
+				{
+					LabelData resizedLabel = new LabelData();
+					resizedLabel.CenterX = label.CenterX * r + dw;
+					resizedLabel.CenterY = label.CenterY * r + dh;
+					resizedLabel.Width = label.Width * r;
+					resizedLabel.Height = label.Height * r;
+					resizedLabel.Radian = label.Radian;
+					resizedLabel.LabelID = label.LabelID;
+					if (label.MaskOutLine is not null)
+					{
+						resizedLabel.MaskOutLine = new Point2f[label.MaskOutLine.Length];
+						for (int i = 0; i < label.MaskOutLine.Length; i++)
+						{
+							resizedLabel.MaskOutLine[i].X = label.MaskOutLine[i].X * r + dw;
+							resizedLabel.MaskOutLine[i].Y = label.MaskOutLine[i].Y * r + dh;
+						}
+					}
+					imageData.ResizedLabels.Add(resizedLabel);
+				}
+			}
+		}
+
+		public ImageData GetImageAndLabelDataWithMosic4(long index)
+		{
+			int imgCount = 4;
+			long[] indices = Sample(index, 0, (int)Count, imgCount);
+
+			ImageData[] imageDatas = new ImageData[imgCount];
+
 			Random random = new Random();
-			int xc = random.Next(-mosaic_border[0], 2 * imageSize + mosaic_border[0]);
-			int yc = random.Next(-mosaic_border[1], 2 * imageSize + mosaic_border[1]);
+			int w = random.Next(1, imageSize - 1);
+			int h = random.Next(1, imageSize - 1);
+			Mat mosaicMat = new Mat(imageSize, imageSize, MatType.CV_8UC3, new OpenCvSharp.Scalar(114, 114, 114));
 
-			var img4 = full(new long[] { 3, imageSize * 2, imageSize * 2 }, 114, torch.ScalarType.Byte, device); // base image with 4 tiles
-			List<Tensor> label4 = new List<Tensor>();
-			for (int i = 0; i < 4; i++)
+			for (int i = 0; i < imgCount; i++)
 			{
-				int x1a = 0, y1a = 0, x2a = 0, y2a = 0, x1b = 0, y1b = 0, x2b = 0, y2b = 0;
-				Tensor img = GetOrgImage(indexs[i]).to(device);
-				//img = ResizeImage(img, resizeHeight);
-				int h = (int)img.shape[1];
-				int w = (int)img.shape[2];
-				if (i == 0)  // top left
-				{
-					(x1a, y1a, x2a, y2a) = (Math.Max(xc - w, 0), Math.Max(yc - h, 0), xc, yc);  // xmin, ymin, xmax, ymax (large image))
-					(x1b, y1b, x2b, y2b) = (w - (x2a - x1a), h - (y2a - y1a), w, h); // xmin, ymin, xmax, ymax (small image);
-				}
-				else if (i == 1)  // top right
-				{
-					(x1a, y1a, x2a, y2a) = (xc, Math.Max(yc - h, 0), Math.Min(xc + w, imageSize * 2), yc);
-					(x1b, y1b, x2b, y2b) = (0, h - (y2a - y1a), Math.Min(w, x2a - x1a), h);
-				}
-				else if (i == 2)  // bottom left
-				{
-					(x1a, y1a, x2a, y2a) = (Math.Max(xc - w, 0), yc, xc, Math.Min(imageSize * 2, yc + h));
-					(x1b, y1b, x2b, y2b) = (w - (x2a - x1a), 0, w, Math.Min(y2a - y1a, h));
-				}
-				else if (i == 3) // bottom right
-				{
-					(x1a, y1a, x2a, y2a) = (xc, yc, Math.Min(xc + w, imageSize * 2), Math.Min(imageSize * 2, yc + h));
-					(x1b, y1b, x2b, y2b) = (0, 0, Math.Min(w, x2a - x1a), Math.Min(y2a - y1a, h));
-				}
-				img4[0..3, y1a..y2a, x1a..x2a] = img[0..3, y1b..y2b, x1b..x2b];
+				imageDatas[i] = GetOrgImageAndLabelData(indices[i]);
+				Mat tempMat = imageDatas[i].OrgImage;
 
-				int padw = x1a - x1b;
-				int padh = y1a - y1b;
+				int tempX = (i == 0 || i == 2) ? 0 : w;
+				int tempY = (i == 0 || i == 1) ? 0 : h;
+				int tempW = (i == 0 || i == 2) ? w : imageSize - w;
+				int tempH = (i == 0 || i == 1) ? h : imageSize - h;
+				int randomX = random.Next(0, Math.Max(0, tempMat.Width - tempW));
+				int randomY = random.Next(0, Math.Max(0, tempMat.Height - tempH));
+				Rect roi = new Rect(randomX, randomY, Math.Min(tempW, tempMat.Width - randomX), Math.Min(tempH, tempMat.Height - randomY));
+				Mat cropped = new Mat(tempMat, roi);
+				cropped.CopyTo(mosaicMat[new Rect(tempX, tempY, roi.Width, roi.Height)]);
 
-				Tensor labels = GetOrgLabelTensor(indexs[i]).to(device);
-				labels[TensorIndex.Ellipsis, 1..5] = Utils.Ops.xywhn2xyxy(labels[TensorIndex.Ellipsis, 1..5], w, h, padw, padh);
-				label4.Add(labels);
+				imageDatas[0].ResizedImage = mosaicMat;
+				for (int j = 0; j < imageDatas[i].OrgLabels.Count; j++)
+				{
+					LabelData label = imageDatas[i].OrgLabels[j];
+					float x1 = label.CenterX - label.Width / 2.0f;
+					float y1 = label.CenterY - label.Height / 2.0f;
+					float x2 = label.CenterX + label.Width / 2.0f;
+					float y2 = label.CenterY + label.Height / 2.0f;
+					
+					// Calc the insection.
+					float interX1 = Math.Max(x1, roi.Left);
+					float interY1 = Math.Max(y1, roi.Top);
+					float interX2 = Math.Min(x2, roi.Right);
+					float interY2 = Math.Min(y2, roi.Bottom);
+					if (interX1 < interX2 && interY1 < interY2)
+					{
+						LabelData newLabel = new LabelData();
+						newLabel.LabelID = label.LabelID;
+						newLabel.CenterX = (interX1 + interX2) / 2.0f - roi.Left + tempX;
+						newLabel.CenterY = (interY1 + interY2) / 2.0f - roi.Top + tempY;
+						newLabel.Width = interX2 - interX1;
+						newLabel.Height = interY2 - interY1;
+						newLabel.Radian = label.Radian;
+						if (label.MaskOutLine is not null)
+						{
+							List<Point2f> newPoints = new List<Point2f>();
+							foreach (var point in label.MaskOutLine)
+							{
+								float clampedX = Math.Clamp(point.X, roi.Left, roi.Right);
+								float clampedY = Math.Clamp(point.Y, roi.Top, roi.Bottom);
+								newPoints.Add(new Point2f(clampedX - roi.Left + tempX, clampedY - roi.Top + tempY));
+							}
+							if (newPoints.Count >= 3)
+							{
+								newLabel.MaskOutLine = newPoints.ToArray();
+							}
+						}
+						if (imageDatas[0].ResizedLabels is null)
+						{
+							imageDatas[0].ResizedLabels = new List<LabelData>();
+						}
+						imageDatas[0].ResizedLabels.Add(newLabel);
+					}
+				}
+
 			}
-			var labels4 = concat(label4, 0);
 
-			labels4[TensorIndex.Ellipsis, 1..5] = labels4[TensorIndex.Ellipsis, 1..5].clip(0, 2 * imageSize);
-
-			var (im, targets) = random_perspective(img4, labels4, degrees: 0, translate: 0.1f, scale: 0.5f, shear: 0, perspective: 0.0f, mosaic_border[0], mosaic_border[1]);
-
-			targets[TensorIndex.Ellipsis, 1..5] = Utils.Ops.xyxy2xywhn(targets[TensorIndex.Ellipsis, 1..5], w: (int)im.shape[1], h: (int)im.shape[2], clip: true, eps: 1e-3f);
-			return (im.MoveToOuterDisposeScope(), targets.MoveToOuterDisposeScope());
+			return imageDatas[0];
 		}
 
-		private Tensor ResizeImage(Tensor image, int targetWidth, int targetHeight)
-		{
-			// 获取图像的原始尺寸
-			int originalWidth = (int)image.shape[2];
-			int originalHeight = (int)image.shape[1];
-
-			// 计算缩放比例
-			float scale = Math.Min((float)targetWidth / originalWidth, (float)targetHeight / originalHeight);
-
-			// 计算缩放后的尺寸
-			int scaledWidth = (int)(originalWidth * scale);
-			int scaledHeight = (int)(originalHeight * scale);
-
-			return torchvision.transforms.functional.resize(image, scaledWidth, scaledHeight);
-		}
-
-		private Tensor ResizeImage(Tensor image, int targetSize)
-		{
-			return ResizeImage(image, targetSize, targetSize);
-		}
-
-		/// <summary>
-		/// Get several random numbers between min and max, and contains orgIndex.
-		/// </summary>
-		/// <param name="orgIndex"></param>
-		/// <param name="min"></param>
-		/// <param name="max"></param>
-		/// <param name="count"></param>
-		/// <returns></returns>
 		private long[] Sample(long orgIndex, int min, int max, int count)
 		{
 			Random random = new Random();
@@ -520,275 +373,7 @@ namespace Data
 			return list.ToArray();
 		}
 
-
-
-
-
-		private Tensor GetOrgLabelTensor(long index)
-		{
-			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
-			if (string.IsNullOrEmpty(labelName) || !File.Exists(labelName))
-			{
-				return zeros(new long[] { 0, 5 }, float32); // No labels found, return empty tensor
-			}
-			string[] lines = File.ReadAllLines(labelName);
-
-			float[,] labelArray = new float[lines.Length, 5];
-
-			for (int i = 0; i < lines.Length; i++)
-			{
-				string[] labels = lines[i].Split(' ');
-				for (int j = 0; j < labels.Length; j++)
-				{
-					labelArray[i, j] = float.Parse(labels[j]);
-				}
-			}
-			Tensor labelTensor = tensor(labelArray);
-			return labelTensor;
-		}
-
-		private (Tensor, Tensor) GetOrgMaskLabelTensor(long index, int width = 160, int height = 160)
-		{
-			using var _ = NewDisposeScope();
-			string labelName = GetLabelFileNameFromImageName(imageFiles[(int)index]);
-			if (string.IsNullOrEmpty(labelName) || !File.Exists(labelName))
-			{
-				return (zeros(new long[] { 0, 5 }, float32).MoveToOuterDisposeScope(), zeros(new long[] { 1, height, width }, uint8).MoveToOuterDisposeScope()); // No labels found, return empty tensors
-			}
-			string[] lines = File.ReadAllLines(labelName);
-
-			List<Tensor> labels = new List<Tensor>();
-			List<Tensor> masks = new List<Tensor>();
-
-			foreach (string line in lines)
-			{
-				// Parse points from label file
-				List<SKPoint> points = new List<SKPoint>();
-				string[] strs = line.Split(' ');
-				for (int i = 0; i < strs.Length / 2; i++)
-				{
-					float x = float.Parse(strs[i * 2 + 1]) * width;
-					float y = float.Parse(strs[i * 2 + 2]) * height;
-					points.Add(new SKPoint(x, y));
-				}
-
-				// Calculate bounding box
-				float x_max = points.Max(a => a.X);
-				float y_max = points.Max(a => a.Y);
-				float x_min = points.Min(a => a.X);
-				float y_min = points.Min(a => a.Y);
-
-				labels.Add(tensor(new float[] { x_min, y_min, x_max - x_min, y_max - y_min }).unsqueeze(0));
-
-				// Create mask using SkiaSharp
-				using (var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Premul))
-				using (var canvas = new SKCanvas(bitmap))
-				{
-					// Fill with black background
-					canvas.Clear(SKColors.Black);
-
-					// Draw white polygon
-					using (var paint = new SKPaint())
-					{
-						paint.Color = SKColors.White;
-						paint.Style = SKPaintStyle.Fill;
-						paint.IsAntialias = true;
-
-						using (var path = new SKPath())
-						{
-							path.AddPoly(points.ToArray());
-							canvas.DrawPath(path, paint);
-						}
-					}
-
-					// Convert SKBitmap to Tensor
-					var bytes = bitmap.Bytes;
-					Tensor ts = tensor(bytes, new long[] { 1, height, width }, uint8);
-					masks.Add(ts.unsqueeze(0));
-				}
-			}
-
-			Tensor labelTensor = cat(labels.ToArray());
-			Tensor maskTensor = cat(masks.ToArray());
-			return (labelTensor.MoveToOuterDisposeScope(), maskTensor.MoveToOuterDisposeScope());
-		}
-
-		private (Tensor, Tensor) random_perspective(Tensor im, Tensor targets, int degrees = 10, float translate = 0.1f, float scale = 0.1f, int shear = 10, float perspective = 0.0f, int borderX = 0, int borderY = 0)
-		{
-			using var _ = NewDisposeScope();
-			using var __ = no_grad();
-
-			Device device = im.device;
-			int height = (int)im.shape[1] + borderY * 2;
-			int width = (int)im.shape[2] + borderX * 2;
-
-			// Center
-			Tensor C = eye(3).to(device);
-			C[0, 2] = -im.shape[2] / 2; // x translation (pixels)
-			C[1, 2] = -im.shape[1] / 2; // y translation (pixels)
-
-			//Perspective
-			Tensor P = eye(3).to(device);
-			P[2, 0] = rand(1).ToSingle() * 2 * perspective - perspective;   // x perspective (about y)
-			P[2, 1] = rand(1).ToSingle() * 2 * perspective - perspective;   // y perspective (about x)
-
-			// Rotation and Scale
-			float a = rand(1).ToSingle() * 2 * degrees - degrees;
-			float s = 1 + scale - rand(1).ToSingle() * 2 * scale;
-
-			Tensor R = GetRotationMatrix2D(angle: a, scale: s).to(device);
-
-			// Shear
-			Tensor S = eye(3).to(device);
-			S[0, 1] = Math.Tan((rand(1).ToSingle() * 2 * shear - shear) * Math.PI / 180); // x shear (deg)
-			S[1, 0] = Math.Tan((rand(1).ToSingle() * 2 * shear - shear) * Math.PI / 180); // y shear (deg)
-
-			// Translation
-			Tensor T = eye(3).to(device);
-			T[0, 2] = (0.5f + translate - rand(1).ToSingle() * 2 * translate) * width;    // x translation(pixels)
-			T[1, 2] = (0.5f + translate - rand(1).ToSingle() * 2 * translate) * height;   // y translation(pixels)
-
-			//var M = T.mm(S).mm(R).mm(P).mm(C);
-			var M = T.matmul(S).matmul(R).matmul(P).matmul(C);
-
-			Tensor outTensor = zeros(new long[] { imageSize, imageSize, 3 }, torch.ScalarType.Byte).to(device);
-			if (borderX != 0 || borderY != 0 || M.bytes != eye(3).bytes)
-			{
-				if (perspective != 0)
-				{
-					//im = WarpPerspective(im, M, width, height, (114, 114, 114));
-
-					// 定义原始图像的四个角点
-					var corners = tensor(new float[,]
-										{{ 0, 0, 1 },					// 左上
-										{ width - 1, 0, 1 },			// 右上
-										{ 0, height - 1, 1 },			// 左下
-										{ width - 1, height - 1, 1 }	// 右下
-										}).to(device);
-
-					// 将角点与变换矩阵 M 相乘
-					var transformedCorners = corners.matmul(M.T);
-
-					// 透视变换后，需要将齐次坐标归一化
-					transformedCorners = transformedCorners[TensorIndex.Ellipsis, 0..2] / transformedCorners[TensorIndex.Ellipsis, 2..3];
-
-					// 提取变换后的四个角点
-					var topLeft = transformedCorners[0];      // 左上
-					var topRight = transformedCorners[1];     // 右上
-					var bottomLeft = transformedCorners[2];   // 左下
-					var bottomRight = transformedCorners[3];  // 右下
-
-					// 定义填充颜色 (R, G, B)
-					var fillColor = new List<float> { 114, 114, 114 };
-
-					// 定义原始图像的四个角点
-					var startpoints = new List<List<int>>
-									{
-										new List<int> { 0, 0 },					// 左上
-										new List<int> { width - 1, 0 },			// 右上
-										new List<int> { 0, height - 1 },		// 左下
-										new List<int> { width - 1, height - 1 } // 右下
-									};
-
-					// 定义变换后的四个角点
-					List<List<int>> endpoints = new List<List<int>>
-									{
-										new List<int> { transformedCorners[0, 0].ToInt32(), transformedCorners[0, 1].ToInt32() }, // 左上
-										new List<int> { transformedCorners[1, 0].ToInt32(), transformedCorners[1, 1].ToInt32() }, // 右上
-										new List<int> { transformedCorners[2, 0].ToInt32(), transformedCorners[2, 1].ToInt32() }, // 左下
-										new List<int> { transformedCorners[3, 0].ToInt32(), transformedCorners[3, 1].ToInt32() }  // 右下
-									};
-
-					// 显式转换为 IList<IList<int>>
-					IList<IList<int>> startpointsIList = startpoints.Select(list => (IList<int>)list).ToList();
-					IList<IList<int>> endpointsIList = endpoints.Select(list => (IList<int>)list).ToList();
-
-					// 调用透视变换函数
-					im = torchvision.transforms.functional.perspective(
-						im,                         // 输入图像
-						startpointsIList,           // 原始图像的四个角点
-						endpointsIList,             // 变换后的四个角点
-						InterpolationMode.Bilinear, // 插值方式
-						fillColor                   // 填充颜色
-					);
-
-				}
-				else
-				{
-					// 提取仿射变换的参数
-					var shearParams = new List<float> { S[0, 1].ToSingle(), S[1, 0].ToSingle() };
-					var translateParams = new List<int> { T[0, 2].ToInt32(), T[1, 2].ToInt32() };
-
-					outTensor = torchvision.transforms.functional.affine(im, shearParams, a, translateParams, s);
-					outTensor = torchvision.transforms.functional.crop(outTensor, (int)im.shape[1] - imageSize, (int)im.shape[2] - imageSize, imageSize, imageSize).contiguous();
-				}
-			}
-
-			long n = targets.shape[0];
-			if (n > 0)
-			{
-				Tensor newT = zeros(new long[] { n, 4 }).to(device);
-				Tensor xy = ones(new long[] { n * 4, 3 }).to(device);
-				xy[TensorIndex.Ellipsis, 0..2] = targets.index_select(1, tensor(new long[] { 1, 2, 3, 4, 1, 4, 3, 2 }).to(device)).reshape(n * 4, 2).to(device);  // x1y1, x2y2, x1y2, x2y1
-				xy = xy.mm(M.T);
-				xy = perspective == 0 ? xy[TensorIndex.Ellipsis, 0..2].reshape(n, 8) : xy[TensorIndex.Ellipsis, 0..2] / xy[TensorIndex.Ellipsis, 2..3];
-				Tensor x = xy.index_select(1, tensor(new long[] { 0, 2, 4, 6 }).to(device));
-				Tensor y = xy.index_select(1, tensor(new long[] { 1, 3, 5, 7 }).to(device));
-				newT = concatenate(new Tensor[] { x.min(1).values, y.min(1).values, x.max(1).values, y.max(1).values }).reshape(4, n).T;
-
-				newT = newT.index_put_(newT.index_select(1, tensor(new long[] { 0, 2 }).to(device)).clip(0, imageSize), new TensorIndex[] { TensorIndex.Ellipsis, TensorIndex.Slice(0, 3, 2) });
-				newT = newT.index_put_(newT.index_select(1, tensor(new long[] { 1, 3 }).to(device)).clip(0, imageSize), new TensorIndex[] { TensorIndex.Ellipsis, TensorIndex.Slice(1, 4, 2) });
-
-				Tensor idx = box_candidates(box1: targets[TensorIndex.Ellipsis, 1..5].T * s, box2: newT.T, area_thr: 0.1f);
-				targets = targets[idx];
-				targets[TensorIndex.Ellipsis, 1..5] = newT[idx];
-			}
-
-			return (outTensor.contiguous().MoveToOuterDisposeScope(), targets.MoveToOuterDisposeScope());
-		}
-
-		public static Tensor GetRotationMatrix2D(float angle, float scale)
-		{
-			using var __ = no_grad();
-
-			// 将角度转换为弧度
-			float theta = angle * (float)Math.PI / 180.0f;
-
-			// 计算旋转矩阵的元素
-			float cosTheta = (float)Math.Cos(theta);
-			float sinTheta = (float)Math.Sin(theta);
-
-			// 创建旋转矩阵
-			Tensor R = tensor(new float[,]
-			{
-				{ scale * cosTheta, -scale * sinTheta, 0 },
-				{ scale * sinTheta, scale * cosTheta, 0 },
-				{ 0, 0, 1 }
-			});
-			return R;
-		}
-
-		/// <summary>
-		/// Filters bounding box candidates by minimum width-height threshold `wh_thr` (pixels), aspect ratio threshold `ar_thr`, and area ratio threshold `area_thr`.
-		/// </summary>
-		/// <param name="box1">(4,n) is before augmentation</param>
-		/// <param name="box2">(4,n) is after augmentation</param>
-		/// <param name="wh_thr"></param>
-		/// <param name="ar_thr"></param>
-		/// <param name="area_thr"></param>
-		/// <param name="eps"></param>
-		/// <returns></returns>
-		private Tensor box_candidates(Tensor box1, Tensor box2, float wh_thr = 2, float ar_thr = 100, float area_thr = 0.1f, double eps = 1e-16)
-		{
-			using var _ = NewDisposeScope();
-			using var __ = no_grad();
-
-			var (w1, h1) = (box1[2] - box1[0], box1[3] - box1[1]);
-			var (w2, h2) = (box2[2] - box2[0], box2[3] - box2[1]);
-			var ar = maximum(w2 / (h2 + eps), h2 / (w2 + eps)); // aspect ratio
-			Tensor result = w2 > wh_thr & h2 > wh_thr & w2 * h2 / (w1 * h1 + eps) > area_thr & ar < ar_thr; // candidates
-			return result.MoveToOuterDisposeScope();
-		}
+		
 
 	}
 }

@@ -1,0 +1,12 @@
+﻿images\train2017\000000000472.jpg
+images\train2017\000000000332.jpg
+images\train2017\000000000459.jpg
+images\train2017\000000000110.jpg
+images\train2017\000000000194.jpg
+images\train2017\000000000321.jpg
+images\train2017\000000000438.jpg
+images\train2017\000000000263.jpg
+images\train2017\000000000572.jpg
+images\train2017\000000000094.jpg
+images\train2017\000000000510.jpg
+images\train2017\000000000208.jpg

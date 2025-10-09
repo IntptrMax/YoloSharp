@@ -479,9 +479,9 @@ namespace Utils
 						target_bboxes /= stride_tensor;
 						(loss[0], loss[2]) = bbox_loss.forward(pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask);
 					}
-					loss[0] *= hyp_box;  // box gain
-					loss[1] *= hyp_cls;// cls gain
-					loss[2] *= hyp_dfl;// dfl gain
+					loss[0] *= hyp_box;		// box gain
+					loss[1] *= hyp_cls;		// cls gain
+					loss[2] *= hyp_dfl;		// dfl gain
 					return ((loss.sum() * batch_size).MoveToOuterDisposeScope(), loss.MoveToOuterDisposeScope());
 				}
 			}

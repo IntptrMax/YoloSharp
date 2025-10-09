@@ -7,14 +7,17 @@ namespace YoloSharpDemo
 	{
 		static void Main(string[] args)
 		{
-			string trainDataPath = @"..\..\..\Assets\DataSets\DOTAv1"; // Training data path, it should be the same as coco dataset.
-			string valDataPath = string.Empty; // If valDataPath is "", it will use trainDataPath as validation data.
+			string rootPath = @"..\..\..\Assets\DataSets\coco128"; // Training data path, it should be the same as coco dataset.
+			string trainDataPath = Path.Combine(rootPath, "train.txt"); // If trainDataPath is "", it will use rootPath as training data.
+			string valDataPath = Path.Combine(rootPath, "val.txt");// If valDataPath is "", it will use rootPath as validation data.
 			string outputPath = "result";    // Trained model output path.
-			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-obb.bin"; // Pretrained model path.
-			string predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
-			int batchSize = 4;
-			int sortCount = 15;
-			int epochs = 10;
+			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n.bin"; // Pretrained model path.
+			string predictImagePath = @"..\..\..\Assets\TestImage\zidane.jpg";
+			int batchSize = 16;
+
+			// number of classes
+			int sortCount = 80;
+			int epochs = 100;
 			float predictThreshold = 0.25f;
 			float iouThreshold = 0.7f;
 
@@ -22,38 +25,41 @@ namespace YoloSharpDemo
 			DeviceType deviceType = DeviceType.CUDA;
 			ScalarType dtype = ScalarType.Float32;
 			YoloSize yoloSize = YoloSize.n;
-			ImageProcessType imageProcessType = ImageProcessType.Letterbox;
+			ImageProcessType imageProcessType = ImageProcessType.Mosiac;
 
 			Mat predictImage = Cv2.ImRead(predictImagePath);
 
-			// Create obber
-			Obber obber = new Obber(batchSize);
-			obber.LoadModel(preTrainedModelPath);
-			obber.Train(trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
+			//// Create obber
+			//Obber obber = new Obber(sortCount);
+			//obber.LoadModel(preTrainedModelPath);
 
-			obber.LoadModel(Path.Combine(outputPath, "best.bin"));
-			List<YoloResult> predictResult = obber.ImagePredict(predictImage, IouThreshold: iouThreshold);
+			//// Train obb
+			//obber.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
-			//// Create predictor
-			//Predictor predictor = new Predictor(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
-			//predictor.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
+			//// Predict image
+			//obber.LoadModel(Path.Combine(outputPath, "best.bin"));
+			//List<YoloResult> predictResult = obber.ImagePredict(predictImage, IouThreshold: iouThreshold);
+
+			// Create predictor
+			Predictor predictor = new Predictor(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
+			predictor.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
 			//// Train model
-			//predictor.Train(trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs,imageProcessType: imageProcessType);
-			//predictor.LoadModel(Path.Combine(outputPath, "best.bin"));
+			predictor.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
-			//// ImagePredict image
-			//List<YoloResult> predictResult = predictor.ImagePredict(predictImage, predictThreshold, iouThreshold);
+			// Predict image
+			predictor.LoadModel(Path.Combine(outputPath, "best.bin"));
+			List<YoloResult> predictResult = predictor.ImagePredict(predictImage, predictThreshold, iouThreshold);
 
 			//// Create segmenter
 			//Segmenter segmenter = new Segmenter(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
 			//segmenter.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
 			//// Train model
-			//segmenter.Train(trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
-			//segmenter.LoadModel(Path.Combine(outputPath, "best.bin"));
+			//segmenter.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
-			//// ImagePredict image
+			//// Predict image
+			//segmenter.LoadModel(Path.Combine(outputPath, "best.bin"));
 			//List<YoloResult> predictResult = segmenter.ImagePredict(predictImage, predictThreshold, iouThreshold);
 
 			// rand for mask color

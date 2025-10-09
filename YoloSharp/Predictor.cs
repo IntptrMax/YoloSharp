@@ -63,36 +63,37 @@ namespace YoloSharp
 			//Tools.TransModelFromSafetensors(yolo, @".\yolov11n.safetensors", @".\yolov11n.bin");
 		}
 
-		public void Train(string trainDataPath, string valDataPath = "", string outputPath = "output", int imageSize = 640, int epochs = 100, float lr = 0.0001f, int batchSize = 8, int numWorkers = 0, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
+		public void Train(string rootPath, string trainDataPath = "", string valDataPath = "", string outputPath = "output", int imageSize = 640, int epochs = 100, float lr = 0.0001f, int batchSize = 8, int numWorkers = 0, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
 		{
 			Console.WriteLine("Model will be write to: " + outputPath);
 			Console.WriteLine("Load model...");
 
-			YoloDataClass trainDataSet = new YoloDataClass(trainDataPath, imageSize, TaskType.Detection, ImageProcessType.Letterbox);
+			YoloDataset trainDataSet = new YoloDataset(rootPath, trainDataPath, imageSize, TaskType.Detection, imageProcessType);
 			if (trainDataSet.Count == 0)
 			{
-				throw new FileNotFoundException("No data found in the path: " + trainDataPath);
+				throw new FileNotFoundException("No data found in the path: " + rootPath);
 			}
 
 			DataLoader trainDataLoader = new DataLoader(trainDataSet, batchSize, num_worker: numWorkers, shuffle: true, device: device);
 
 			valDataPath = string.IsNullOrEmpty(valDataPath) ? trainDataPath : valDataPath;
 
-			YoloDataClass valDataSet = new YoloDataClass(valDataPath, imageSize, TaskType.Detection, ImageProcessType.Letterbox);
+			YoloDataset valDataSet = new YoloDataset(rootPath, valDataPath, imageSize, TaskType.Detection, imageProcessType);
 			if (valDataSet.Count == 0)
 			{
-				throw new FileNotFoundException("No data found in the path: " + trainDataPath);
+				throw new FileNotFoundException("No data found in the path: " + rootPath);
 			}
 
 			DataLoader valDataLoader = new DataLoader(valDataSet, 4, num_worker: 0, shuffle: true, device: device);
 
-			Optimizer optimizer = new SGD(yolo.parameters(), lr: lr);
+			Optimizer optimizer = new SGD(yolo.parameters(), lr: lr, momentum: 0.9, weight_decay: 5e-4);
 
 			float tempLoss = float.MaxValue;
 			Console.WriteLine("Start Training...");
 			yolo.train(true);
 			for (int epoch = 0; epoch < epochs; epoch++)
 			{
+				yolo.train();
 				int step = 0;
 				foreach (var data in trainDataLoader)
 				{
@@ -106,9 +107,12 @@ namespace YoloSharp
 					{
 						ImageData imageData = trainDataSet.GetImageAndLabelData(indexs[i]);
 						images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
-						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
-						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
-						bboxes.AddRange(imageData.ResizedLabels.Select(x => torch.tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
+						if (imageData.ResizedLabels is not null)
+						{
+							batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
+							cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
+							bboxes.AddRange(imageData.ResizedLabels.Select(x => torch.tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
+						}
 					}
 
 					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
@@ -130,6 +134,8 @@ namespace YoloSharp
 
 					Tensor[] list = yolo.forward(imageTensor);
 					(Tensor ls, Tensor ls_item) = loss.forward(list, targets);
+
+					
 					optimizer.zero_grad();
 					ls.backward();
 					optimizer.step();
@@ -152,7 +158,7 @@ namespace YoloSharp
 			Console.WriteLine("Train Done.");
 		}
 
-		private float Val(YoloDataClass valDataset, DataLoader valDataLoader)
+		private float Val(YoloDataset valDataset, DataLoader valDataLoader)
 		{
 			using (no_grad())
 			{
@@ -166,11 +172,14 @@ namespace YoloSharp
 					List<Tensor> bboxes = new List<Tensor>();
 					for (int i = 0; i < indexs.Length; i++)
 					{
-						ImageData imageData = valDataset.GetImageAndLabelData(indexs[i]);
+						ImageData imageData = valDataset.GetImageAndLabelDataWithLetterBox(indexs[i]);
 						images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
-						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
-						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
-						bboxes.AddRange(imageData.ResizedLabels.Select(x => torch.tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
+						if (imageData.ResizedLabels is not null)
+						{
+							batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
+							cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
+							bboxes.AddRange(imageData.ResizedLabels.Select(x => torch.tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
+						}
 					}
 					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
 					Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);

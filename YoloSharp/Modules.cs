@@ -1,6 +1,7 @@
 ﻿using System.Numerics;
 using TorchSharp;
 using TorchSharp.Modules;
+using static Tensorboard.TensorShapeProto.Types;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
 
@@ -863,12 +864,12 @@ namespace YoloSharp
 			}
 		}
 
-		internal class YolovDetect : Module<Tensor[], Tensor[]>
+		internal class Yolov8Detect : Module<Tensor[], Tensor[]>
 		{
 			private int max_det = 300; // max_det
 			private long[] shape = null;
-			private Tensor anchors = torch.empty(0); // init
-			private Tensor strides = torch.empty(0); // init
+			protected Tensor anchors = torch.empty(0); // init
+			protected Tensor strides = torch.empty(0); // init
 
 			private readonly int nc;
 			protected readonly int nl;
@@ -879,7 +880,7 @@ namespace YoloSharp
 			private readonly ModuleList<Sequential> cv3 = new ModuleList<Sequential>();
 			private readonly Module<Tensor, Tensor> dfl;
 
-			internal YolovDetect(int nc, int[] ch, bool legacy = true, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(YolovDetect))
+			internal Yolov8Detect(int nc, int[] ch, bool legacy = true, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(Yolov8Detect))
 			{
 				this.nc = nc; // number of classes
 				this.nl = ch.Length;// number of detection layers
@@ -1034,7 +1035,7 @@ namespace YoloSharp
 			}
 		}
 
-		public class Segment : YolovDetect
+		public class Segment : Yolov8Detect
 		{
 			private readonly int nm;
 			private readonly int npr;
@@ -1081,7 +1082,7 @@ namespace YoloSharp
 		/// <summary>
 		/// YOLO OBB detection head for detection with rotation models.
 		/// </summary>
-		public class OBB : YolovDetect
+		public class OBB : Yolov8Detect
 		{
 			private readonly int ne;
 			private readonly ModuleList<Sequential> cv4 = new ModuleList<Sequential>();
@@ -1131,6 +1132,69 @@ namespace YoloSharp
 
 
 		}
+
+
+		public class Pose : Yolov8Detect
+		{
+			private readonly int[] kpt_shape;
+			private readonly int nk;
+			private readonly ModuleList<Sequential> cv4 = new ModuleList<Sequential>();
+
+			/// <summary>
+			/// YOLO Pose head for keypoints models.
+			/// </summary>
+			/// <remarks>This class extends the Detect head to include keypoint prediction capabilities for pose estimation tasks.</remarks>
+			/// <param name="nc">Number of classes.</param>
+			/// <param name="kpt_shape">Number of keypoints, number of dims (2 for x,y or 3 for x,y,visible).</param>
+			/// <param name="ch">Tuple of channel sizes from backbone feature maps.</param>
+			/// <param name="legacy"></param>
+			/// <param name="device"></param>
+			/// <param name="dtype"></param>
+			public Pose(int nc = 80, int[] kpt_shape = null, int[] ch = null, bool legacy = true, Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, ch: ch, legacy: legacy, device: device, dtype: dtype)
+			{
+				this.kpt_shape = kpt_shape ?? new int[] { 17, 3 }; // number of keypoints, number of dims (2 for x,y or 3 for x,y,visible)
+				this.nk = kpt_shape[0] * kpt_shape[1];  // number of keypoints total
+				int c4 = Math.Max(ch[0] / 4, this.nk);
+
+				// cv4 = nn.ModuleList(nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nk, 1)) for x in ch)
+				foreach (int x in ch)
+				{
+					cv4.append(nn.Sequential(new Conv(x, c4, 3, device: device, dtype: dtype), new Conv(c4, c4, 3, device: device, dtype: dtype), nn.Conv2d(c4, this.nk, 1, device: device, dtype: dtype)));
+				}
+				RegisterComponents();
+			}
+
+			public override Tensor[] forward(Tensor[] x)
+			{
+				long bs = x[0].shape[0];  // batch size
+				Tensor kpt = torch.cat(this.cv4.Select((module, i) => module.forward(x[i]).view(bs, this.nk, -1)).ToArray(), dim: -1);  // (bs, 17*3, h*w)
+				x = base.forward(x);
+
+				if (training)
+				{
+					return x.Append(kpt).ToArray();
+				}
+
+				Tensor pred_kpt = this.kpts_decode(bs, kpt);
+				return new Tensor[] { torch.cat(new Tensor[] { x[0], pred_kpt }, 1), x[1], kpt };
+			}
+
+			private Tensor kpts_decode(long bs, Tensor kpts)
+			{
+				Tensor y = kpts.clone();
+				int ndim = this.kpt_shape[1];
+				if (ndim == 3)
+				{
+					y[.., TensorIndex.Slice(2, step: ndim)] = y[.., TensorIndex.Slice(2, step: ndim)].sigmoid();  // sigmoid (WARNING: inplace .sigmoid_() Apple MPS bug)
+				}
+				y[.., TensorIndex.Slice(0, step: ndim)] = (y[.., TensorIndex.Slice(0, step: ndim)] * 2.0 + (this.anchors[0] - 0.5)) * this.strides;
+				y[.., TensorIndex.Slice(1, step: ndim)] = (y[.., TensorIndex.Slice(1, step: ndim)] * 2.0 + (this.anchors[1] - 0.5)) * this.strides;
+
+				return y;
+			}
+
+		}
+
 
 	}
 }
