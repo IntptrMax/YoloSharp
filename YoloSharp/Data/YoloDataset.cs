@@ -52,7 +52,7 @@ namespace Data
 					}
 					string extension = Path.GetExtension(trimmedLine).ToLower();
 					return extension == ".jpg" || extension == ".png" || extension == ".bmp";
-				}).Select(line => Path.IsPathRooted(line) ? line : Path.Combine(rootPath, line.Trim())).ToArray();
+				}).Select(line => Path.IsPathRooted(line) ? Path.GetFullPath(line) : Path.GetFullPath(Path.Combine(rootPath, line.Trim()))).ToArray();
 
 				imageFiles.AddRange(imagesFileNames);
 
@@ -65,8 +65,8 @@ namespace Data
 
 		private string GetLabelFileNameFromImageName(string imageFileName)
 		{
-			string imagesFolder = Path.Combine(rootPath, "images");
-			string labelsFolder = Path.Combine(rootPath, "labels");
+			string imagesFolder = Path.GetFullPath(Path.Combine(rootPath, "images"));
+			string labelsFolder = Path.GetFullPath(Path.Combine(rootPath, "labels"));
 			string labelFileName = Path.ChangeExtension(imageFileName, ".txt").Replace(imagesFolder, labelsFolder);
 			if (File.Exists(labelFileName))
 			{
@@ -275,30 +275,48 @@ namespace Data
 		{
 			int imgCount = 4;
 			long[] indices = Sample(index, 0, (int)Count, imgCount);
-
 			ImageData[] imageDatas = new ImageData[imgCount];
-
 			Random random = new Random();
-			int w = random.Next(1, imageSize - 1);
-			int h = random.Next(1, imageSize - 1);
+			int ind = indices.ToList().IndexOf(index);
+			ImageData result = new ImageData();
+
+			int w = (ind == 0 || ind == 2) ? random.Next(imageSize / 2, imageSize - 1) : random.Next(1, imageSize / 2);
+			int h = (ind == 0 || ind == 1) ? random.Next(imageSize / 2, imageSize - 1) : random.Next(1, imageSize / 2);
+
 			Mat mosaicMat = new Mat(imageSize, imageSize, MatType.CV_8UC3, new OpenCvSharp.Scalar(114, 114, 114));
 
 			for (int i = 0; i < imgCount; i++)
 			{
 				imageDatas[i] = GetOrgImageAndLabelData(indices[i]);
-				Mat tempMat = imageDatas[i].OrgImage;
+				Mat eachOrgMat = imageDatas[i].OrgImage;
 
-				int tempX = (i == 0 || i == 2) ? 0 : w;
-				int tempY = (i == 0 || i == 1) ? 0 : h;
-				int tempW = (i == 0 || i == 2) ? w : imageSize - w;
-				int tempH = (i == 0 || i == 1) ? h : imageSize - h;
-				int randomX = random.Next(0, Math.Max(0, tempMat.Width - tempW));
-				int randomY = random.Next(0, Math.Max(0, tempMat.Height - tempH));
-				Rect roi = new Rect(randomX, randomY, Math.Min(tempW, tempMat.Width - randomX), Math.Min(tempH, tempMat.Height - randomY));
-				Mat cropped = new Mat(tempMat, roi);
-				cropped.CopyTo(mosaicMat[new Rect(tempX, tempY, roi.Width, roi.Height)]);
+				// mosaic cropped background x, y, w, h
+				int croppedX = (i == 0 || i == 2) ? 0 : w;
+				int croppedY = (i == 0 || i == 1) ? 0 : h;
+				int croppedW = (i == 0 || i == 2) ? w : imageSize - w;
+				int croppedH = (i == 0 || i == 1) ? h : imageSize - h;
 
-				imageDatas[0].ResizedImage = mosaicMat;
+				int randomX = random.Next(0, Math.Max(0, eachOrgMat.Width - croppedW));
+				int randomY = random.Next(0, Math.Max(0, eachOrgMat.Height - croppedH));
+
+				if (i == ind)
+				{
+					if (imageDatas[i].OrgLabels.Count > 0)
+					{
+						int ii = random.Next(0, imageDatas[i].OrgLabels.Count);
+						int cx = (int)imageDatas[i].OrgLabels[ii].CenterX;
+						int cy = (int)imageDatas[i].OrgLabels[ii].CenterY;
+
+						randomX = Math.Clamp(randomX, cx - croppedW, cx + croppedW);
+						randomY = Math.Clamp(randomY, cy - croppedH, cy + croppedH);
+
+					}
+				}
+
+				Rect roi = new Rect(randomX, randomY, Math.Min(croppedW, eachOrgMat.Width - randomX), Math.Min(croppedH, eachOrgMat.Height - randomY));
+				Mat cropped = new Mat(eachOrgMat, roi);
+				cropped.CopyTo(mosaicMat[new Rect(croppedX, croppedY, roi.Width, roi.Height)]);
+
 				for (int j = 0; j < imageDatas[i].OrgLabels.Count; j++)
 				{
 					LabelData label = imageDatas[i].OrgLabels[j];
@@ -306,7 +324,7 @@ namespace Data
 					float y1 = label.CenterY - label.Height / 2.0f;
 					float x2 = label.CenterX + label.Width / 2.0f;
 					float y2 = label.CenterY + label.Height / 2.0f;
-					
+
 					// Calc the insection.
 					float interX1 = Math.Max(x1, roi.Left);
 					float interY1 = Math.Max(y1, roi.Top);
@@ -316,8 +334,8 @@ namespace Data
 					{
 						LabelData newLabel = new LabelData();
 						newLabel.LabelID = label.LabelID;
-						newLabel.CenterX = (interX1 + interX2) / 2.0f - roi.Left + tempX;
-						newLabel.CenterY = (interY1 + interY2) / 2.0f - roi.Top + tempY;
+						newLabel.CenterX = (interX1 + interX2) / 2.0f - roi.Left + croppedX;
+						newLabel.CenterY = (interY1 + interY2) / 2.0f - roi.Top + croppedY;
 						newLabel.Width = interX2 - interX1;
 						newLabel.Height = interY2 - interY1;
 						newLabel.Radian = label.Radian;
@@ -328,24 +346,26 @@ namespace Data
 							{
 								float clampedX = Math.Clamp(point.X, roi.Left, roi.Right);
 								float clampedY = Math.Clamp(point.Y, roi.Top, roi.Bottom);
-								newPoints.Add(new Point2f(clampedX - roi.Left + tempX, clampedY - roi.Top + tempY));
+								newPoints.Add(new Point2f(clampedX - roi.Left + croppedX, clampedY - roi.Top + croppedY));
 							}
 							if (newPoints.Count >= 3)
 							{
 								newLabel.MaskOutLine = newPoints.ToArray();
 							}
 						}
-						if (imageDatas[0].ResizedLabels is null)
+						if (result.ResizedLabels is null)
 						{
-							imageDatas[0].ResizedLabels = new List<LabelData>();
+							result.ResizedLabels = new List<LabelData>();
 						}
-						imageDatas[0].ResizedLabels.Add(newLabel);
+						result.ResizedLabels.Add(newLabel);
 					}
 				}
 
 			}
-
-			return imageDatas[0];
+			result.ResizedImage = mosaicMat;
+			result.OrgLabels = imageDatas[ind].OrgLabels;
+			result.ImagePath = imageDatas[ind].ImagePath;
+			return result;
 		}
 
 		private long[] Sample(long orgIndex, int min, int max, int count)
@@ -373,7 +393,42 @@ namespace Data
 			return list.ToArray();
 		}
 
-		
+
+		private void DrawResizedLabels(ImageData data, bool drawSegment = false)
+		{
+			Mat resizedImage = data.ResizedImage;
+
+			// Draw segment
+			if (drawSegment)
+			{
+				foreach (var result in data.ResizedLabels)
+				{
+					Cv2.FillPoly(resizedImage, new Point[][] { result.MaskOutLine.Select(x => new Point(x.X, x.Y)).ToArray() }, OpenCvSharp.Scalar.Red);
+					resizedImage.SaveImage("segment.jpg");
+				}
+			}
+			// Draw box
+			else
+			{
+				foreach (var result in data.ResizedLabels)
+				{
+					float[] cxcywhr = new float[] { result.CenterX, result.CenterY, result.Width, result.Height, result.Radian };
+					float[] points = Utils.Ops.cxcywhr2xyxyxyxy(cxcywhr);
+					Point[] pts = new Point[4]
+					{
+						new Point(points[0], points[1]),
+						new Point(points[2], points[3]),
+						new Point(points[4], points[5]),
+						new Point(points[6], points[7]),
+					};
+					Cv2.Polylines(resizedImage, new Point[][] { pts }, true, OpenCvSharp.Scalar.Red, 2);
+					resizedImage.SaveImage("box.jpg");
+				}
+			}
+
+		}
+
+
 
 	}
 }

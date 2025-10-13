@@ -1,7 +1,6 @@
 ﻿using System.Numerics;
 using TorchSharp;
 using TorchSharp.Modules;
-using static Tensorboard.TensorShapeProto.Types;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
 
@@ -37,7 +36,7 @@ namespace YoloSharp
 				}
 				else
 				{
-					using var _ = NewDisposeScope();
+					using (NewDisposeScope())
 					using (no_grad())
 					{
 						// Prepare filters
@@ -92,7 +91,7 @@ namespace YoloSharp
 			internal readonly Conv cv1;
 			internal readonly Conv cv2;
 			internal readonly Conv cv3;
-			internal Sequential m = Sequential();
+			protected Sequential m;
 
 			internal C3(int inChannels, int outChannels, int n = 1, bool shortcut = true, int groups = 1, float e = 0.5f, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(C3))
 			{
@@ -101,11 +100,12 @@ namespace YoloSharp
 				cv2 = new Conv(inChannels, c, 1, 1, device: device, dtype: dtype);
 				cv3 = new Conv(2 * c, outChannels, 1, device: device, dtype: dtype);
 
-				for (int i = 0; i < n; i++)
-				{
-					m.append(new Bottleneck(c, c, (1, 3), shortcut, groups, e: 1.0f, device: device, dtype: dtype));
-				}
-				RegisterComponents();
+				m = Sequential(Enumerable.Range(0, n).Select(i => new Bottleneck(c, c, (1, 3), shortcut, groups, e: 1.0f, device: device, dtype: dtype)).ToArray());
+				//for (int i = 0; i < n; i++)
+				//{
+				//	m.append(new Bottleneck(c, c, (1, 3), shortcut, groups, e: 1.0f, device: device, dtype: dtype));
+				//}
+				//RegisterComponents();
 			}
 
 			public override Tensor forward(Tensor input)
@@ -116,21 +116,10 @@ namespace YoloSharp
 
 		internal class C3k : C3
 		{
-			internal new Sequential m = Sequential();
 			internal C3k(int inChannels, int outChannels, int n = 1, bool shortcut = true, int groups = 1, float e = 0.5f, Device? device = null, torch.ScalarType? dtype = null) : base(inChannels, outChannels, n, shortcut, groups, e, device, dtype)
 			{
 				int c = (int)(outChannels * e);
-
-				for (int i = 0; i < n; i++)
-				{
-					this.m.append(new Bottleneck(c, c, (3, 3), shortcut, groups, e: 1.0f, device: device, dtype: dtype));
-				}
-				RegisterComponents();
-			}
-
-			public override Tensor forward(Tensor input)
-			{
-				return base.cv3.forward(cat(new Tensor[] { this.m.forward(base.cv1.forward(input)), base.cv2.forward(input) }, 1));
+				this.m = Sequential(Enumerable.Range(0, n).Select(_ => new Bottleneck(c, c, (3, 3), shortcut, groups, e: 1.0f, device: device, dtype: dtype)).ToArray());
 			}
 		}
 
@@ -194,15 +183,16 @@ namespace YoloSharp
 
 			public override Tensor forward(Tensor input)
 			{
-				using var _ = NewDisposeScope();
-
-				List<Tensor> y = this.cv1.forward(input).chunk(2, 1).ToList();
-				for (int i = 0; i < m.Count; i++)
+				using (NewDisposeScope())
 				{
-					y.Add(((Module<Tensor, Tensor>)m[i]).forward(y.Last()));
+					List<Tensor> y = this.cv1.forward(input).chunk(2, 1).ToList();
+					for (int i = 0; i < m.Count; i++)
+					{
+						y.Add(((Module<Tensor, Tensor>)m[i]).forward(y.Last()));
+					}
+					Tensor result = cv2.forward(cat(y, 1));
+					return result.MoveToOuterDisposeScope();
 				}
-				Tensor result = cv2.forward(cat(y, 1));
-				return result.MoveToOuterDisposeScope();
 			}
 		}
 
@@ -251,6 +241,7 @@ namespace YoloSharp
 				this.cv1 = new Conv(inChannel, 2 * c, 1, 1, device: device, dtype: dtype);
 				this.cv2 = new Conv(2 * c, outChannel, 1, device: device, dtype: dtype);
 				m = Sequential();
+
 				for (int i = 0; i < n; i++)
 				{
 					m = m.append(new PSABlock(c, attn_ratio: 0.5f, num_heads: c / 64, device: device, dtype: dtype));
@@ -779,11 +770,14 @@ namespace YoloSharp
 				this.anchors = anchors;
 				this.ch = ch;
 				//grid = new List<Tensor>(nl);
-				m = Sequential();
-				for (int i = 0; i < ch.Length; i++)
-				{
-					m = m.append(Conv2d(ch[i], no * na, 1, device: device, dtype: dtype));
-				}
+
+				m = Sequential(ch.Select(x => Conv2d(x, no * na, 1, device: device, dtype: dtype)).ToArray());
+
+				//m = Sequential();
+				//for (int i = 0; i < ch.Length; i++)
+				//{
+				//	m = m.append(Conv2d(ch[i], no * na, 1, device: device, dtype: dtype));
+				//}
 				RegisterComponents();
 			}
 
@@ -891,23 +885,50 @@ namespace YoloSharp
 				int c2 = Math.Max(Math.Max(16, ch[0] / 4), this.reg_max * 4);
 				int c3 = Math.Max(ch[0], Math.Min(this.nc, 100));// channels
 
-				foreach (int x in ch)
-				{
-					cv2.append(Sequential(new Conv(x, c2, 3, device: device, dtype: dtype), new Conv(c2, c2, 3, device: device, dtype: dtype), nn.Conv2d(c2, 4 * this.reg_max, 1, device: device, dtype: dtype)));
 
-					if (legacy)
-					{
-						cv3.append(Sequential(new Conv(x, c3, 3, device: device, dtype: dtype), new Conv(c3, c3, 3, device: device, dtype: dtype), nn.Conv2d(c3, this.nc, 1, device: device, dtype: dtype)));
-					}
-					else
-					{
-						cv3.append(Sequential(
-							Sequential(new DWConv(x, x, 3, device: device, dtype: dtype), new Conv(x, c3, 1, device: device, dtype: dtype)),
-							Sequential(new DWConv(c3, c3, 3, device: device, dtype: dtype), new Conv(c3, c3, 1, device: device, dtype: dtype)),
+				this.cv2 = new ModuleList<Sequential>(ch.Select(x =>
+					Sequential(
+						new Conv(x, c2, 3, device: device, dtype: dtype),
+						new Conv(c2, c2, 3, device: device, dtype: dtype),
+						nn.Conv2d(c2, 4 * this.reg_max, 1, device: device, dtype: dtype)
+					)).ToArray());
+
+				if (legacy)
+				{
+					this.cv3 = new ModuleList<Sequential>(ch.Select(x =>
+						Sequential(
+							new Conv(x, c3, 3, device: device, dtype: dtype),
+							new Conv(c3, c3, 3, device: device, dtype: dtype),
 							nn.Conv2d(c3, this.nc, 1, device: device, dtype: dtype)
-							));
-					}
+						)).ToArray());
 				}
+				else
+				{
+					this.cv3 = new ModuleList<Sequential>(ch.Select(x =>
+						Sequential(
+								Sequential(new DWConv(x, x, 3, device: device, dtype: dtype), new Conv(x, c3, 1, device: device, dtype: dtype)),
+								Sequential(new DWConv(c3, c3, 3, device: device, dtype: dtype), new Conv(c3, c3, 1, device: device, dtype: dtype)),
+								nn.Conv2d(c3, this.nc, 1, device: device, dtype: dtype)
+						)).ToArray());
+				}
+
+				//foreach (int x in ch)
+				//{
+				//	//cv2.append(Sequential(new Conv(x, c2, 3, device: device, dtype: dtype), new Conv(c2, c2, 3, device: device, dtype: dtype), nn.Conv2d(c2, 4 * this.reg_max, 1, device: device, dtype: dtype)));
+
+				//	if (legacy)
+				//	{
+				//		//cv3.append(Sequential(new Conv(x, c3, 3, device: device, dtype: dtype), new Conv(c3, c3, 3, device: device, dtype: dtype), nn.Conv2d(c3, this.nc, 1, device: device, dtype: dtype)));
+				//	}
+				//	else
+				//	{
+				//		cv3.append(Sequential(
+				//			Sequential(new DWConv(x, x, 3, device: device, dtype: dtype), new Conv(x, c3, 1, device: device, dtype: dtype)),
+				//			Sequential(new DWConv(c3, c3, 3, device: device, dtype: dtype), new Conv(c3, c3, 1, device: device, dtype: dtype)),
+				//			nn.Conv2d(c3, this.nc, 1, device: device, dtype: dtype)
+				//			));
+				//	}
+				//}
 
 				this.dfl = this.reg_max > 1 ? new DFL(this.reg_max, device: device, dtype: dtype) : nn.Identity();
 				// RegisterComponents();
@@ -941,16 +962,16 @@ namespace YoloSharp
 			{
 				long[] shape = x[0].shape;  // BCHW
 
-				List<Tensor> xi_mix = new List<Tensor>();
-				foreach (var xi in x)
-				{
-					xi_mix.Add(xi.view(shape[0], this.no, -1));
-				}
-				Tensor x_cat = torch.cat(xi_mix, 2);
+				//List<Tensor> xi_mix = new List<Tensor>();
+				//foreach (var xi in x)
+				//{
+				//	xi_mix.Add(xi.view(shape[0], this.no, -1));
+				//}
+				Tensor x_cat = torch.cat(x.Select(xi => xi.view(shape[0], this.no, -1)).ToArray(), 2);
 
 				if (this.shape != shape)
 				{
-					var (anchors, strides) = make_anchors(x, this.stride, 0.5f);
+					(Tensor anchors, Tensor strides) = make_anchors(x, this.stride, 0.5f);
 					this.anchors = anchors.transpose(0, 1);
 					this.strides = strides.transpose(0, 1);
 					this.shape = shape;
@@ -1050,10 +1071,17 @@ namespace YoloSharp
 				this.proto = new Proto(ch[0], this.npr, this.nm, device: device, dtype: dtype);  // protos
 				c4 = Math.Max(ch[0] / 4, this.nm);
 
-				foreach (int x in ch)
-				{
-					cv4.append(Sequential(new Conv(x, c4, 3, device: device, dtype: dtype), new Conv(c4, c4, 3, device: device, dtype: dtype), nn.Conv2d(c4, this.nm, 1, device: device, dtype: dtype)));
-				}
+				this.cv4 = new ModuleList<Sequential>(ch.Select(x =>
+					Sequential(
+						new Conv(x, c4, 3, device: device, dtype: dtype),
+						new Conv(c4, c4, 3, device: device, dtype: dtype),
+						nn.Conv2d(c4, this.nm, 1, device: device, dtype: dtype)
+					)).ToArray());
+
+				//foreach (int x in ch)
+				//{
+				//	cv4.append(Sequential(new Conv(x, c4, 3, device: device, dtype: dtype), new Conv(c4, c4, 3, device: device, dtype: dtype), nn.Conv2d(c4, this.nm, 1, device: device, dtype: dtype)));
+				//}
 				RegisterComponents();
 			}
 
@@ -1093,10 +1121,17 @@ namespace YoloSharp
 				this.ne = ne;  // number of extra parameters
 				int c4 = Math.Max(ch[0] / 4, this.ne);
 
-				foreach (int x in ch)
-				{
-					cv4.append(nn.Sequential(new Conv(x, c4, 3, device: device, dtype: dtype), new Conv(c4, c4, 3, device: device, dtype: dtype), nn.Conv2d(c4, this.ne, 1, device: device, dtype: dtype)));
-				}
+				this.cv4 = new ModuleList<Sequential>(ch.Select(x =>
+					Sequential(
+						new Conv(x, c4, 3, device: device, dtype: dtype),
+						new Conv(c4, c4, 3, device: device, dtype: dtype),
+						nn.Conv2d(c4, this.ne, 1, device: device, dtype: dtype)
+					)).ToArray());
+
+				//foreach (int x in ch)
+				//{
+				//	cv4.append(nn.Sequential(new Conv(x, c4, 3, device: device, dtype: dtype), new Conv(c4, c4, 3, device: device, dtype: dtype), nn.Conv2d(c4, this.ne, 1, device: device, dtype: dtype)));
+				//}
 				RegisterComponents();
 			}
 
@@ -1157,10 +1192,18 @@ namespace YoloSharp
 				int c4 = Math.Max(ch[0] / 4, this.nk);
 
 				// cv4 = nn.ModuleList(nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nk, 1)) for x in ch)
-				foreach (int x in ch)
-				{
-					cv4.append(nn.Sequential(new Conv(x, c4, 3, device: device, dtype: dtype), new Conv(c4, c4, 3, device: device, dtype: dtype), nn.Conv2d(c4, this.nk, 1, device: device, dtype: dtype)));
-				}
+
+				this.cv4 = new ModuleList<Sequential>(ch.Select(x =>
+					Sequential(
+						new Conv(x, c4, 3, device: device, dtype: dtype),
+						new Conv(c4, c4, 3, device: device, dtype: dtype),
+						nn.Conv2d(c4, this.nk, 1, device: device, dtype: dtype)
+					)).ToArray());
+
+				//foreach (int x in ch)
+				//{
+				//	cv4.append(nn.Sequential(new Conv(x, c4, 3, device: device, dtype: dtype), new Conv(c4, c4, 3, device: device, dtype: dtype), nn.Conv2d(c4, this.nk, 1, device: device, dtype: dtype)));
+				//}
 				RegisterComponents();
 			}
 

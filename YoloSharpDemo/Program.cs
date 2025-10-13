@@ -12,13 +12,13 @@ namespace YoloSharpDemo
 			string valDataPath = Path.Combine(rootPath, "val.txt");// If valDataPath is "", it will use rootPath as validation data.
 			string outputPath = "result";    // Trained model output path.
 			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n.bin"; // Pretrained model path.
-			string predictImagePath = @"..\..\..\Assets\TestImage\zidane.jpg";
+			string predictImagePath = @"..\..\..\Assets\TestImage\bus.jpg";
 			int batchSize = 16;
 
 			// number of classes
 			int sortCount = 80;
 			int epochs = 100;
-			float predictThreshold = 0.25f;
+			float predictThreshold = 0.3f;
 			float iouThreshold = 0.7f;
 
 			YoloType yoloType = YoloType.Yolov8;
@@ -31,31 +31,31 @@ namespace YoloSharpDemo
 
 			//// Create obber
 			//Obber obber = new Obber(sortCount);
-			//obber.LoadModel(preTrainedModelPath);
 
 			//// Train obb
+			//obber.LoadModel(preTrainedModelPath);
 			//obber.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
 			//// Predict image
 			//obber.LoadModel(Path.Combine(outputPath, "best.bin"));
-			//List<YoloResult> predictResult = obber.ImagePredict(predictImage, IouThreshold: iouThreshold);
+			//List<YoloResult> predictResult = obber.ImagePredict(predictImage, PredictThreshold: predictThreshold, IouThreshold: iouThreshold);
 
-			// Create predictor
-			Predictor predictor = new Predictor(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
-			predictor.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
+			// Create detector
+			Detector detector = new Detector(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
 
-			//// Train model
-			predictor.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
+			// Train model
+			detector.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
+			detector.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
 			// Predict image
-			predictor.LoadModel(Path.Combine(outputPath, "best.bin"));
-			List<YoloResult> predictResult = predictor.ImagePredict(predictImage, predictThreshold, iouThreshold);
+			detector.LoadModel(Path.Combine(outputPath, "best.bin"));
+			List<YoloResult> predictResult = detector.ImagePredict(predictImage, predictThreshold, iouThreshold);
 
 			//// Create segmenter
 			//Segmenter segmenter = new Segmenter(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
-			//segmenter.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
 			//// Train model
+			//segmenter.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 			//segmenter.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
 			//// Predict image

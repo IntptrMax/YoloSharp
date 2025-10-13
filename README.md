@@ -8,7 +8,7 @@ With the help of this project you won't have to transform .pt model to onnx, and
 - Written in C# only.
 - Train and predict your own model.
 - Support Yolov5, Yolov5u, Yolov8, Yolov11 and Yolov12 now.
-- Support Predict and Segment now.
+- Support Predict, Segment and Obb now.
 - Support n/s/m/l/x size.
 - Support LetterBox and Mosaic4 method for preprocessing images.
 - Support NMS with GPU.
@@ -49,51 +49,70 @@ You can download the code or add it from nuget.
 
 
 > [!NOTE]
-> Please add one of libtorch-cpu, libtorch-cuda-12.1, libtorch-cuda-12.1-win-x64 or libtorch-cuda-12.1-linux-x64 version 2.5.1.0 to execute.
+> Please add one of libtorch-cpu, libtorch-cuda-12.1, libtorch-cuda-12.1-win-x64 or libtorch-cuda-12.1-linux-x64 version 2.5.1.0 and OpenCvSharp4.runtime to execute.
 
 You can use it with the code below:
 
-### Predict
-
-
+### Detect
 
 ```CSharp
-	SKBitmap predictImage = SKBitmap.Decode(predictImagePath);
-	
-	// Create predictor
-	Predictor predictor = new Predictor(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
-	predictor.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
+
+	// Create detector
+	Detector detector = new Detector(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
 
 	// Train model
-	predictor.Train(trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, useMosaic: true);
-	predictor.LoadModel(Path.Combine(outputPath, "best.bin"));
+	detector.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
+	detector.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
-	// ImagePredict image
-	List<Predictor.PredictResult> predictResult = predictor.ImagePredict(predictImage, predictThreshold, iouThreshold);
+	// Predict image
+	detector.LoadModel(Path.Combine(outputPath, "best.bin"));
+	List<YoloResult> predictResult = detector.ImagePredict(predictImage, predictThreshold, iouThreshold);
+
 ```
 </br>
-Use yolov5n pre-trained model to detect.
+Use yolov8n pre-trained model to detect.
 
 ![image](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/zidane.jpg)
 
 ### Segment
 
 ```CSharp
-	SKBitmap predictImage = SKBitmap.Decode(predictImagePath);
 
-    //Create segmenter
+	// Create segmenter
 	Segmenter segmenter = new Segmenter(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
-	segmenter.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
 	// Train model
-	segmenter.Train(trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, useMosaic: false);
-	segmenter.LoadModel(Path.Combine(outputPath, "best.bin"));
+	segmenter.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
+	segmenter.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
-	// ImagePredict image
-	var (predictResult, resultImage) = segmenter.ImagePredict(predictImage, predictThreshold, iouThreshold);
+	// Predict image
+	segmenter.LoadModel(Path.Combine(outputPath, "best.bin"));
+	List<YoloResult> predictResult = segmenter.ImagePredict(predictImage, predictThreshold, iouThreshold);
 
 ```
 
 Use yolov8n-seg pre-trained model to detect.
 
 ![pred_seg](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/bus.jpg)
+
+### Obb
+
+```CSharp
+
+	// Create obber
+	Obber obber = new Obber(sortCount);
+
+	// Train obb
+	obber.LoadModel(preTrainedModelPath);
+	obber.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
+
+	// Predict image
+	obber.LoadModel(Path.Combine(outputPath, "best.bin"));
+	List<YoloResult> predictResult = obber.ImagePredict(predictImage, PredictThreshold: predictThreshold, IouThreshold: iouThreshold);
+
+
+```
+
+Use yolov8n-obb pre-trained model to detect.
+
+![pred_seg](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/trucks.jpg)

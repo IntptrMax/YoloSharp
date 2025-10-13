@@ -12,7 +12,7 @@ using static YoloSharp.Yolo;
 
 namespace YoloSharp
 {
-	public class Predictor
+	public class Detector
 	{
 		private Module<Tensor, Tensor[]> yolo;
 		private Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> loss;
@@ -22,7 +22,7 @@ namespace YoloSharp
 		private int socrCount;
 		private YoloType yoloType;
 
-		public Predictor(int socrCount = 80, YoloType yoloType = YoloType.Yolov8, YoloSize yoloSize = YoloSize.n, DeviceType deviceType = DeviceType.CUDA, ScalarType dtype = ScalarType.Float32)
+		public Detector(int socrCount = 80, YoloType yoloType = YoloType.Yolov8, YoloSize yoloSize = YoloSize.n, DeviceType deviceType = DeviceType.CUDA, ScalarType dtype = ScalarType.Float32)
 		{
 			torchvision.io.DefaultImager = new torchvision.io.SkiaImager();
 
