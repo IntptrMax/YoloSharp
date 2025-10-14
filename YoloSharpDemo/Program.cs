@@ -30,7 +30,7 @@ namespace YoloSharpDemo
 
 			Mat predictImage = Cv2.ImRead(predictImagePath);
 
-			// Create segmenter
+			// Create Yolo Task
 			YoloTask yoloTask = new YoloTask(taskType, numberClass, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
 
 			// Train model
