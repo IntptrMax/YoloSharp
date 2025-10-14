@@ -1,6 +1,6 @@
 ﻿using OpenCvSharp;
 
-namespace Data
+namespace YoloSharp.Data
 {
 	internal class ImageData
 	{
@@ -22,6 +22,6 @@ namespace Data
 		public float Height;
 		public float Radian;
 		public int LabelID;
-		public Point2f[] MaskOutLine;
+		public Point[] MaskOutLine;
 	}
 }

@@ -1,53 +1,51 @@
-﻿using Data;
-using OpenCvSharp;
-using SkiaSharp;
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using TorchSharp;
 using TorchSharp.Modules;
-using Utils;
+using YoloSharp.Data;
+using YoloSharp.Types;
+using YoloSharp.Utils;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
 using static TorchSharp.torch.optim;
-using static YoloSharp.Yolo;
 
-namespace YoloSharp
+namespace YoloSharp.Models
 {
-	public class Detector
+	public class Detector : YoloBaseTaskModel
 	{
 		private Module<Tensor, Tensor[]> yolo;
 		private Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> loss;
 		private Module<Tensor, float, float, Tensor> predict;
-		private torch.Device device;
+		private Device device;
 		private torch.ScalarType dtype;
-		private int socrCount;
+		private int sortCount;
 		private YoloType yoloType;
 
-		public Detector(int socrCount = 80, YoloType yoloType = YoloType.Yolov8, YoloSize yoloSize = YoloSize.n, DeviceType deviceType = DeviceType.CUDA, ScalarType dtype = ScalarType.Float32)
+		public Detector(int numberClasses = 80, YoloType yoloType = YoloType.Yolov8, YoloSize yoloSize = YoloSize.n, Types.DeviceType deviceType = Types.DeviceType.CUDA, Types.ScalarType dtype = Types.ScalarType.Float32)
 		{
 			torchvision.io.DefaultImager = new torchvision.io.SkiaImager();
 
-			this.device = new torch.Device((TorchSharp.DeviceType)deviceType);
+			device = new Device((TorchSharp.DeviceType)deviceType);
 			this.dtype = (torch.ScalarType)dtype;
-			this.socrCount = socrCount;
+			this.sortCount = numberClasses;
 			this.yoloType = yoloType;
 
 			yolo = yoloType switch
 			{
-				YoloType.Yolov5 => new Yolov5(socrCount, yoloSize, device, this.dtype),
-				YoloType.Yolov5u => new Yolov5u(socrCount, yoloSize, device, this.dtype),
-				YoloType.Yolov8 => new Yolov8(socrCount, yoloSize, device, this.dtype),
-				YoloType.Yolov11 => new Yolov11(socrCount, yoloSize, device, this.dtype),
-				YoloType.Yolov12 => new Yolov12(socrCount, yoloSize, device, this.dtype),
+				YoloType.Yolov5 => new Yolo.Yolov5(numberClasses, yoloSize, device, this.dtype),
+				YoloType.Yolov5u => new Yolo.Yolov5u(numberClasses, yoloSize, device, this.dtype),
+				YoloType.Yolov8 => new Yolo.Yolov8(numberClasses, yoloSize, device, this.dtype),
+				YoloType.Yolov11 => new Yolo.Yolov11(numberClasses, yoloSize, device, this.dtype),
+				YoloType.Yolov12 => new Yolo.Yolov12(numberClasses, yoloSize, device, this.dtype),
 				_ => throw new NotImplementedException(),
 			};
 
 			loss = yoloType switch
 			{
-				YoloType.Yolov5 => new Utils.Loss.V5DetectionLoss(this.socrCount),
-				YoloType.Yolov5u => new Utils.Loss.V8DetectionLoss(this.socrCount),
-				YoloType.Yolov8 => new Utils.Loss.V8DetectionLoss(this.socrCount),
-				YoloType.Yolov11 => new Utils.Loss.V8DetectionLoss(this.socrCount),
-				YoloType.Yolov12 => new Utils.Loss.V8DetectionLoss(this.socrCount),
+				YoloType.Yolov5 => new Loss.V5DetectionLoss(this.sortCount),
+				YoloType.Yolov5u => new Loss.V8DetectionLoss(this.sortCount),
+				YoloType.Yolov8 => new Loss.V8DetectionLoss(this.sortCount),
+				YoloType.Yolov11 => new Loss.V8DetectionLoss(this.sortCount),
+				YoloType.Yolov12 => new Loss.V8DetectionLoss(this.sortCount),
 				_ => throw new NotImplementedException(),
 			};
 			predict = yoloType switch
@@ -111,13 +109,13 @@ namespace YoloSharp
 						{
 							batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
 							cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
-							bboxes.AddRange(imageData.ResizedLabels.Select(x => torch.tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
+							bboxes.AddRange(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
 						}
 					}
 
-					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
-					Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);
-					Tensor bboxes_tensor = bboxes.Count == 0 ? torch.zeros(new long[] { 0, 4 }) : torch.stack(bboxes).to(dtype, device) / trainDataSet.ImageSize;
+					Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+					Tensor cls_tensor = tensor(cls, dtype: dtype, device: device).view(-1, 1);
+					Tensor bboxes_tensor = bboxes.Count == 0 ? zeros(new long[] { 0, 4 }) : stack(bboxes).to(dtype, device) / trainDataSet.ImageSize;
 					Tensor imageTensor = concat(images);
 
 					if (batch_idx.Count < 1)
@@ -135,7 +133,7 @@ namespace YoloSharp
 					Tensor[] list = yolo.forward(imageTensor);
 					(Tensor ls, Tensor ls_item) = loss.forward(list, targets);
 
-					
+
 					optimizer.zero_grad();
 					ls.backward();
 					optimizer.step();
@@ -172,18 +170,18 @@ namespace YoloSharp
 					List<Tensor> bboxes = new List<Tensor>();
 					for (int i = 0; i < indexs.Length; i++)
 					{
-						ImageData imageData = valDataset.GetImageAndLabelDataWithLetterBox(indexs[i]);
+						ImageData imageData = valDataset.GetImageAndLabelData(indexs[i]);
 						images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
 						if (imageData.ResizedLabels is not null)
 						{
 							batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
 							cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
-							bboxes.AddRange(imageData.ResizedLabels.Select(x => torch.tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
+							bboxes.AddRange(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
 						}
 					}
-					Tensor batch_idx_tensor = torch.tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
-					Tensor cls_tensor = torch.tensor(cls, dtype: dtype, device: device).view(-1, 1);
-					Tensor bboxes_tensor = torch.stack(bboxes).to(dtype, device) / valDataset.ImageSize;
+					Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+					Tensor cls_tensor = tensor(cls, dtype: dtype, device: device).view(-1, 1);
+					Tensor bboxes_tensor = stack(bboxes).to(dtype, device) / valDataset.ImageSize;
 
 					Tensor imageTensor = concat(images);
 
@@ -215,31 +213,12 @@ namespace YoloSharp
 			}
 		}
 
-		public List<YoloResult> ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
-		{
-			Tensor orgImage = Lib.GetTensorFromImage(image).to(dtype, device);
-			return ImagePredict(orgImage, PredictThreshold, IouThreshold);
-		}
-
-		public List<YoloResult> ImagePredict(string imagePath, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
-		{
-			Tensor orgImage = Lib.GetTensorFromImage(imagePath).to(dtype, device);
-			return ImagePredict(orgImage, PredictThreshold, IouThreshold);
-		}
-
-		public List<YoloResult> ImagePredict(Mat mat, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
-		{
-			Tensor orgImage = Lib.GetTensorFromImage(mat).to(dtype, device);
-			return ImagePredict(orgImage, PredictThreshold, IouThreshold);
-		}
-
 		public List<YoloResult> ImagePredict(Tensor orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
 		{
 			using (no_grad())
 			{
 				// Change RGB → BGR
-				orgImage = orgImage.index_select(0, torch.tensor(new long[] { 2, 1, 0 }, device: device)).unsqueeze(0) / 255.0f;
-
+				orgImage = orgImage.to(dtype, device).unsqueeze(0);
 				int w = (int)orgImage.shape[3];
 				int h = (int)orgImage.shape[2];
 				int padHeight = 32 - (int)(orgImage.shape[2] % 32);
@@ -248,22 +227,21 @@ namespace YoloSharp
 				padHeight = padHeight == 32 ? 0 : padHeight;
 				padWidth = padWidth == 32 ? 0 : padWidth;
 
-				Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros);
+				Tensor input = functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros, 114) / 255.0f;
 				yolo.eval();
 
 				Tensor[] tensors = yolo.forward(input);
-				Tensor results = predict.forward(tensors[0], PredictThreshold, IouThreshold);
-
+				Tensor outputs = predict.forward(tensors[0], PredictThreshold, IouThreshold);
 				List<YoloResult> predResults = new List<YoloResult>();
-				for (int i = 0; i < results.shape[0]; i++)
+				for (int i = 0; i < outputs.shape[0]; i++)
 				{
-					int x = results[i, 0].ToInt32();
-					int y = results[i, 1].ToInt32();
-					int rw = (results[i, 2].ToInt32() - x);
-					int rh = (results[i, 3].ToInt32() - y);
+					int x = outputs[i][0].ToInt32();
+					int y = outputs[i][1].ToInt32();
+					int rw = outputs[i][2].ToInt32() - x;
+					int rh = outputs[i][3].ToInt32() - y;
 
-					float score = results[i, 4].ToSingle();
-					int sort = results[i, 5].ToInt32();
+					float score = outputs[i][4].ToSingle();
+					int sort = outputs[i][5].ToInt32();
 
 					predResults.Add(new YoloResult()
 					{
@@ -278,7 +256,6 @@ namespace YoloSharp
 				return predResults;
 			}
 		}
-
 
 		/// <summary>
 		/// Load model from path.
@@ -322,7 +299,7 @@ namespace YoloSharp
 						};
 					}
 
-					if (nc == socrCount)
+					if (nc == sortCount)
 					{
 						skipList.Clear();
 					}
@@ -400,7 +377,7 @@ namespace YoloSharp
 
 					var conf = x[TensorIndex.Colon, TensorIndex.Slice(5, mi)].max(1, true);
 					var j = conf.indexes;
-					x = torch.cat(new Tensor[] { box, conf.values, j.to_type(scalType) }, 1)[conf.values.view(-1) > confThreshold];
+					x = cat(new Tensor[] { box, conf.values, j.to_type(scalType) }, 1)[conf.values.view(-1) > confThreshold];
 
 					var n = x.shape[0]; // number of boxes
 					if (n == 0)

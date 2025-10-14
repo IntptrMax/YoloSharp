@@ -5,7 +5,7 @@ using YoloSharp.ModelLoader;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
 
-namespace YoloSharp
+namespace YoloSharp.Utils
 {
 	internal class Tools
 	{
@@ -23,7 +23,7 @@ namespace YoloSharp
 
 			foreach (CommonTensor li in safetensorTensors)
 			{
-				Tensor t = torch.zeros(li.Shape.ToArray(), dtype: li.Type);
+				Tensor t = zeros(li.Shape.ToArray(), dtype: li.Type);
 				byte[] dt = safetensorLoader.ReadByteFromFile(li);
 				t.bytes = dt;
 				dict.Add(li.Name, t);
@@ -41,7 +41,7 @@ namespace YoloSharp
 			var (loadMissing, unexp) = model.load_state_dict(dict, false);
 			model.save(outName);
 
-			
+
 		}
 
 		/// <summary>
@@ -100,7 +100,7 @@ namespace YoloSharp
 				}
 			}
 
-			Tensor tensor = torch.zeros(shape.ToArray(), dtype: dtype);
+			Tensor tensor = zeros(shape.ToArray(), dtype: dtype);
 			ZipArchiveEntry dataEntry = zip.Entries.First(e => e.Name == "0");
 
 			using Stream dataStream = dataEntry.Open();

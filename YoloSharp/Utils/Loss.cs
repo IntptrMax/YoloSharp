@@ -3,7 +3,7 @@ using TorchSharp.Modules;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
 
-namespace Utils
+namespace YoloSharp.Utils
 {
 	internal class Loss
 	{
@@ -479,9 +479,9 @@ namespace Utils
 						target_bboxes /= stride_tensor;
 						(loss[0], loss[2]) = bbox_loss.forward(pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask);
 					}
-					loss[0] *= hyp_box;		// box gain
-					loss[1] *= hyp_cls;		// cls gain
-					loss[2] *= hyp_dfl;		// dfl gain
+					loss[0] *= hyp_box;     // box gain
+					loss[1] *= hyp_cls;     // cls gain
+					loss[2] *= hyp_dfl;     // dfl gain
 					return ((loss.sum() * batch_size).MoveToOuterDisposeScope(), loss.MoveToOuterDisposeScope());
 				}
 			}
@@ -692,7 +692,7 @@ namespace Utils
 				{
 					Tensor pred_mask = einsum("in,nhw->ihw", pred, proto); //(n, 32) @ (32, 80, 80) -> (n, 80, 80)
 					Tensor loss = functional.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction: Reduction.None);
-					return (Utils.Ops.crop_mask(loss, xyxy).mean(dimensions: new long[] { 1, 2 }) / area).sum().MoveToOuterDisposeScope();
+					return (Ops.crop_mask(loss, xyxy).mean(dimensions: new long[] { 1, 2 }) / area).sum().MoveToOuterDisposeScope();
 				}
 			}
 		}

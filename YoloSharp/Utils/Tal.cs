@@ -2,7 +2,7 @@
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
 
-namespace Utils
+namespace YoloSharp.Utils
 {
 	internal class Tal
 	{

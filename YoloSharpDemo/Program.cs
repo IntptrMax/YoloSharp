@@ -1,5 +1,6 @@
 ﻿using OpenCvSharp;
-using YoloSharp;
+using YoloSharp.Models;
+using YoloSharp.Types;
 
 namespace YoloSharpDemo
 {
@@ -14,10 +15,9 @@ namespace YoloSharpDemo
 			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n.bin"; // Pretrained model path.
 			string predictImagePath = @"..\..\..\Assets\TestImage\bus.jpg";
 			int batchSize = 16;
-
-			// number of classes
-			int sortCount = 80;
+			int numberClass = 80;
 			int epochs = 100;
+			int imageSize = 640;
 			float predictThreshold = 0.3f;
 			float iouThreshold = 0.7f;
 
@@ -25,45 +25,24 @@ namespace YoloSharpDemo
 			DeviceType deviceType = DeviceType.CUDA;
 			ScalarType dtype = ScalarType.Float32;
 			YoloSize yoloSize = YoloSize.n;
-			ImageProcessType imageProcessType = ImageProcessType.Mosiac;
+			ImageProcessType imageProcessType = ImageProcessType.Letterbox;
+			TaskType taskType = TaskType.Detection;
 
 			Mat predictImage = Cv2.ImRead(predictImagePath);
 
-			//// Create obber
-			//Obber obber = new Obber(sortCount);
-
-			//// Train obb
-			//obber.LoadModel(preTrainedModelPath);
-			//obber.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
-
-			//// Predict image
-			//obber.LoadModel(Path.Combine(outputPath, "best.bin"));
-			//List<YoloResult> predictResult = obber.ImagePredict(predictImage, PredictThreshold: predictThreshold, IouThreshold: iouThreshold);
-
-			// Create detector
-			Detector detector = new Detector(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
+			// Create segmenter
+			YoloTask yoloTask = new YoloTask(taskType, numberClass, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
 
 			// Train model
-			detector.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
-			detector.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
+			yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
+			yoloTask.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, imageSize: imageSize, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
 			// Predict image
-			detector.LoadModel(Path.Combine(outputPath, "best.bin"));
-			List<YoloResult> predictResult = detector.ImagePredict(predictImage, predictThreshold, iouThreshold);
-
-			//// Create segmenter
-			//Segmenter segmenter = new Segmenter(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
-
-			//// Train model
-			//segmenter.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
-			//segmenter.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
-
-			//// Predict image
-			//segmenter.LoadModel(Path.Combine(outputPath, "best.bin"));
-			//List<YoloResult> predictResult = segmenter.ImagePredict(predictImage, predictThreshold, iouThreshold);
+			yoloTask.LoadModel(Path.Combine(outputPath, "best.bin"));
+			List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage, predictThreshold, iouThreshold);
 
 			// rand for mask color
-			Random rand = new Random(1000);
+			Random rand = new Random(1024);
 
 			foreach (YoloResult result in predictResult)
 			{

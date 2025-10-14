@@ -1,4 +1,4 @@
-﻿namespace YoloSharp
+﻿namespace YoloSharp.Types
 {
 	public class YoloResult
 	{

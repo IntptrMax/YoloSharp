@@ -1,7 +1,7 @@
 ﻿using TorchSharp;
 using static TorchSharp.torch;
 
-namespace Utils
+namespace YoloSharp.Utils
 {
 	internal class Metrics
 	{

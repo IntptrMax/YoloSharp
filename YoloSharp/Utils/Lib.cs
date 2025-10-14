@@ -1,10 +1,9 @@
 ﻿using OpenCvSharp;
 using SkiaSharp;
-using System.IO;
 using TorchSharp;
 using static TorchSharp.torch;
 
-namespace YoloSharp
+namespace YoloSharp.Utils
 {
 	internal class Lib
 	{
@@ -48,7 +47,7 @@ namespace YoloSharp
 				{
 					shape[j] = Decode(reader);
 				}
-				Tensor tensor = torch.zeros(shape, dtype: dtype);
+				Tensor tensor = zeros(shape, dtype: dtype);
 				tensor.ReadBytesFromStream(reader.BaseStream);
 				state_dict.Add(tensorName, tensor);
 			}

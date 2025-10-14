@@ -1,8 +1,9 @@
 ﻿using OpenCvSharp;
 using TorchSharp;
+using YoloSharp.Types;
 using static TorchSharp.torch;
 
-namespace Data
+namespace YoloSharp.Data
 {
 	internal class YoloDataset : utils.data.Dataset
 	{
@@ -92,7 +93,7 @@ namespace Data
 			return outputs;
 		}
 
-		public static Mat GetMaskFromOutlinePoints(Point2f[] points, int width, int height)
+		public static Mat GetMaskFromOutlinePoints(Point[] points, int width, int height)
 		{
 			Mat mask = Mat.Zeros(height, width, MatType.CV_8UC1);
 			Point[][] pts = new Point[1][];
@@ -184,10 +185,10 @@ namespace Data
 										throw new Exception($"The label file {labelFileName} format is incorrect.");
 									}
 
-									Point2f[] maskOutlinePoints = new Point2f[(parts.Length - 1) / 2];
+									Point[] maskOutlinePoints = new Point[(parts.Length - 1) / 2];
 									for (int i = 0; i < maskOutlinePoints.Length; i++)
 									{
-										maskOutlinePoints[i] = new Point2f(float.Parse(parts[1 + i * 2]) * orgWidth, float.Parse(parts[2 + i * 2]) * orgHeight);
+										maskOutlinePoints[i] = new Point(float.Parse(parts[1 + i * 2]) * orgWidth, float.Parse(parts[2 + i * 2]) * orgHeight);
 									}
 
 									Rect rect = Cv2.BoundingRect(maskOutlinePoints);
@@ -259,11 +260,10 @@ namespace Data
 					resizedLabel.LabelID = label.LabelID;
 					if (label.MaskOutLine is not null)
 					{
-						resizedLabel.MaskOutLine = new Point2f[label.MaskOutLine.Length];
+						resizedLabel.MaskOutLine = new Point[label.MaskOutLine.Length];
 						for (int i = 0; i < label.MaskOutLine.Length; i++)
 						{
-							resizedLabel.MaskOutLine[i].X = label.MaskOutLine[i].X * r + dw;
-							resizedLabel.MaskOutLine[i].Y = label.MaskOutLine[i].Y * r + dh;
+							resizedLabel.MaskOutLine[i] = new Point(label.MaskOutLine[i].X * r + dw, label.MaskOutLine[i].Y * r + dh);
 						}
 					}
 					imageData.ResizedLabels.Add(resizedLabel);
@@ -341,12 +341,12 @@ namespace Data
 						newLabel.Radian = label.Radian;
 						if (label.MaskOutLine is not null)
 						{
-							List<Point2f> newPoints = new List<Point2f>();
+							List<Point> newPoints = new List<Point>();
 							foreach (var point in label.MaskOutLine)
 							{
 								float clampedX = Math.Clamp(point.X, roi.Left, roi.Right);
 								float clampedY = Math.Clamp(point.Y, roi.Top, roi.Bottom);
-								newPoints.Add(new Point2f(clampedX - roi.Left + croppedX, clampedY - roi.Top + croppedY));
+								newPoints.Add(new Point(clampedX - roi.Left + croppedX, clampedY - roi.Top + croppedY));
 							}
 							if (newPoints.Count >= 3)
 							{

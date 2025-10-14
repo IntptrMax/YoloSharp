@@ -1,9 +1,8 @@
 ﻿using System.Collections.ObjectModel;
 using System.IO.Compression;
 using TorchSharp;
-using YoloSharp.ModelLoader;
 
-namespace ModelLoader
+namespace YoloSharp.ModelLoader
 {
 	public class PickleLoader
 	{

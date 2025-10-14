@@ -1,10 +1,11 @@
 ﻿using TorchSharp;
 using TorchSharp.Modules;
+using YoloSharp.Types;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
-using static YoloSharp.Modules;
+using static YoloSharp.Modules.Modules;
 
-namespace YoloSharp
+namespace YoloSharp.Models
 {
 	internal class Yolo
 	{
