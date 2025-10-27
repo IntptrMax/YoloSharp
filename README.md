@@ -53,65 +53,33 @@ You can download the code or add it from nuget.
 
 You can use it with the code below:
 
-### Detect
+### Yolo Task
 
 ```CSharp
 
-	// Create detector
-	Detector detector = new Detector(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
+// Create Yolo Task
+YoloTask yoloTask = new YoloTask(taskType, numberClass, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
 
-	// Train model
-	detector.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
-	detector.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
+// Train model
+yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
+yoloTask.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, imageSize: imageSize, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
-	// Predict image
-	detector.LoadModel(Path.Combine(outputPath, "best.bin"));
-	List<YoloResult> predictResult = detector.ImagePredict(predictImage, predictThreshold, iouThreshold);
+// Predict image
+yoloTask.LoadModel(Path.Combine(outputPath, "best.bin"));
+List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage, predictThreshold, iouThreshold);
 
 ```
 </br>
+
 Use yolov8n pre-trained model to detect.
 
 ![image](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/zidane.jpg)
 
-### Segment
-
-```CSharp
-
-	// Create segmenter
-	Segmenter segmenter = new Segmenter(sortCount, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
-
-	// Train model
-	segmenter.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
-	segmenter.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
-
-	// Predict image
-	segmenter.LoadModel(Path.Combine(outputPath, "best.bin"));
-	List<YoloResult> predictResult = segmenter.ImagePredict(predictImage, predictThreshold, iouThreshold);
-
-```
 
 Use yolov8n-seg pre-trained model to detect.
 
 ![pred_seg](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/bus.jpg)
 
-### Obb
-
-```CSharp
-
-	// Create obber
-	Obber obber = new Obber(sortCount);
-
-	// Train obb
-	obber.LoadModel(preTrainedModelPath);
-	obber.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
-
-	// Predict image
-	obber.LoadModel(Path.Combine(outputPath, "best.bin"));
-	List<YoloResult> predictResult = obber.ImagePredict(predictImage, PredictThreshold: predictThreshold, IouThreshold: iouThreshold);
-
-
-```
 
 Use yolov8n-obb pre-trained model to detect.
 
