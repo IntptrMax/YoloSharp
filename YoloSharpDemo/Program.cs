@@ -8,42 +8,48 @@ namespace YoloSharpDemo
 	{
 		static void Main(string[] args)
 		{
-			string rootPath = @"..\..\..\Assets\DataSets\coco128"; // Training data path, it should be the same as coco dataset.
+			string rootPath = @"..\..\..\Assets\DataSets\coco8-pose"; // Training data path, it should be the same as coco dataset.
 			string trainDataPath = Path.Combine(rootPath, "train.txt"); // If trainDataPath is "", it will use rootPath as training data.
 			string valDataPath = Path.Combine(rootPath, "val.txt");// If valDataPath is "", it will use rootPath as validation data.
 			string outputPath = "result";    // Trained model output path.
-			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n.bin"; // Pretrained model path.
-			string predictImagePath = @"..\..\..\Assets\TestImage\bus.jpg";
+			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-pose.bin"; // Pretrained model path.
+
+			string predictImagePath = @"..\..\..\Assets\TestImage\zidane.jpg";
 			int batchSize = 16;
-			int numberClass = 80;
+			int numberClass = 1;
 			int epochs = 100;
 			int imageSize = 640;
 			float predictThreshold = 0.3f;
 			float iouThreshold = 0.7f;
+
+			// For pose estimation, number of keypoints and each keypoint has (x, y, visibility score)
+			int[] keyPointShape = new int[] { 17, 3 };
 
 			YoloType yoloType = YoloType.Yolov8;
 			DeviceType deviceType = DeviceType.CUDA;
 			ScalarType dtype = ScalarType.Float32;
 			YoloSize yoloSize = YoloSize.n;
 			ImageProcessType imageProcessType = ImageProcessType.Letterbox;
-			TaskType taskType = TaskType.Detection;
+			TaskType taskType = TaskType.Pose;
 
 			Mat predictImage = Cv2.ImRead(predictImagePath);
 
-			// Create segmenter
-			YoloTask yoloTask = new YoloTask(taskType, numberClass, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
+			// Create a yolo task.
+			YoloTask yoloTask = new YoloTask(taskType, numberClass, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype, keyPointShape: keyPointShape);
+
+			// Load pre-trained model, if you don't want to load the model, you can skip this step.
+			yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
 			// Train model
-			yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 			yoloTask.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, imageSize: imageSize, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
-			// Predict image
-			yoloTask.LoadModel(Path.Combine(outputPath, "best.bin"));
+			// Predict image, if the model is not trained or loaded, it will use random weight to predict.
 			List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage, predictThreshold, iouThreshold);
 
-			// rand for mask color
+			// Rand for mask color.
 			Random rand = new Random(1024);
 
+			// Draw results
 			foreach (YoloResult result in predictResult)
 			{
 				float[] cxcywhr = new float[] { result.CenterX, result.CenterY, result.Width, result.Height, result.Radian };
@@ -79,6 +85,14 @@ namespace YoloSharpDemo
 					Scalar color = new Scalar(R, G, B, 200);
 					Mat backColor = new Mat(maskMat.Rows, maskMat.Cols, MatType.CV_8UC3, color);
 					Cv2.Add(predictImage, backColor, predictImage, maskMat);
+				}
+
+				if (result.KeyPoints is not null)
+				{
+					foreach (YoloSharp.Types.KeyPoint keyPoint in result.KeyPoints)
+					{
+						Cv2.Circle(predictImage, (int)keyPoint.X, (int)keyPoint.Y, 2, Scalar.Red);
+					}
 				}
 			}
 			predictImage.SaveImage("result.jpg");

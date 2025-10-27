@@ -1,0 +1,4 @@
+.\images\train\000000000036.jpg
+.\images\train\000000000049.jpg
+.\images\train\000000000077.jpg
+.\images\train\000000000086.jpg

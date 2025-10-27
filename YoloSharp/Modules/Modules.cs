@@ -216,7 +216,7 @@ namespace YoloSharp.Modules
 				Tensor x = cv1.forward(input);
 				Tensor y1 = m.forward(x);
 				Tensor y2 = m.forward(y1);
-				Tensor result = cv2.forward(cat(new[] { x, y1, y2, m.forward(y2) }, 1));
+				Tensor result = cv2.forward(torch.cat(new[] { x, y1, y2, m.forward(y2) }, 1));
 				return result.MoveToOuterDisposeScope();
 
 			}
@@ -877,7 +877,6 @@ namespace YoloSharp.Modules
 				int c2 = Math.Max(Math.Max(16, ch[0] / 4), reg_max * 4);
 				int c3 = Math.Max(ch[0], Math.Min(this.nc, 100));// channels
 
-
 				cv2 = new ModuleList<Sequential>(ch.Select(x =>
 					Sequential(
 						new Conv(x, c2, 3, device: device, dtype: dtype),
@@ -905,6 +904,8 @@ namespace YoloSharp.Modules
 				}
 
 				dfl = reg_max > 1 ? new DFL(reg_max, device: device, dtype: dtype) : nn.Identity();
+				this.strides.requires_grad = false;
+				this.anchors.requires_grad = false;
 				// RegisterComponents();
 			}
 
@@ -946,8 +947,8 @@ namespace YoloSharp.Modules
 				if (this.shape != shape)
 				{
 					(Tensor anchors, Tensor strides) = make_anchors(x, stride, 0.5f);
-					this.anchors = anchors.transpose(0, 1);
-					this.strides = strides.transpose(0, 1);
+					this.anchors = anchors.transpose(0, 1).MoveToOuterDisposeScope();
+					this.strides = strides.transpose(0, 1).MoveToOuterDisposeScope();
 					this.shape = shape;
 				}
 
@@ -1136,7 +1137,7 @@ namespace YoloSharp.Modules
 			//Decode rotated bounding boxes.
 			protected override Tensor decode_bboxes(Tensor bboxes, Tensor anchors)
 			{
-				return YoloSharp.Utils.Tal.dist2rbox(bboxes, angle, anchors, dim: 1);
+				return Utils.Tal.dist2rbox(bboxes, angle, anchors, dim: 1);
 			}
 		}
 
@@ -1159,7 +1160,7 @@ namespace YoloSharp.Modules
 			public Pose(int nc = 80, int[] kpt_shape = null, int[] ch = null, bool legacy = true, Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, ch: ch, legacy: legacy, device: device, dtype: dtype)
 			{
 				this.kpt_shape = kpt_shape ?? new int[] { 17, 3 }; // number of keypoints, number of dims (2 for x,y or 3 for x,y,visible)
-				nk = kpt_shape[0] * kpt_shape[1];  // number of keypoints total
+				nk = this.kpt_shape[0] * this.kpt_shape[1];  // number of keypoints total
 				int c4 = Math.Max(ch[0] / 4, nk);
 
 				cv4 = new ModuleList<Sequential>(ch.Select(x =>
@@ -1177,7 +1178,6 @@ namespace YoloSharp.Modules
 				long bs = x[0].shape[0];  // batch size
 				Tensor kpt = cat(cv4.Select((module, i) => module.forward(x[i]).view(bs, nk, -1)).ToArray(), dim: -1);  // (bs, 17*3, h*w)
 				x = base.forward(x);
-
 				if (training)
 				{
 					return x.Append(kpt).ToArray();
@@ -1195,8 +1195,8 @@ namespace YoloSharp.Modules
 				{
 					y[.., TensorIndex.Slice(2, step: ndim)] = y[.., TensorIndex.Slice(2, step: ndim)].sigmoid();  // sigmoid (WARNING: inplace .sigmoid_() Apple MPS bug)
 				}
-				y[.., TensorIndex.Slice(0, step: ndim)] = (y[.., TensorIndex.Slice(0, step: ndim)] * 2.0 + (anchors[0] - 0.5)) * strides;
-				y[.., TensorIndex.Slice(1, step: ndim)] = (y[.., TensorIndex.Slice(1, step: ndim)] * 2.0 + (anchors[1] - 0.5)) * strides;
+				y[.., TensorIndex.Slice(0, step: ndim)] = (y[.., TensorIndex.Slice(0, step: ndim)] * 2.0 + (anchors[0] - 0.5)) * base.strides;
+				y[.., TensorIndex.Slice(1, step: ndim)] = (y[.., TensorIndex.Slice(1, step: ndim)] * 2.0 + (anchors[1] - 0.5)) * base.strides;
 
 				return y;
 			}

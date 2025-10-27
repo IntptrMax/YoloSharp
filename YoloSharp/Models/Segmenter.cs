@@ -1,26 +1,16 @@
 ﻿using OpenCvSharp;
-using System.Text.RegularExpressions;
 using TorchSharp;
-using TorchSharp.Modules;
 using YoloSharp.Data;
 using YoloSharp.Types;
 using YoloSharp.Utils;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
-using static TorchSharp.torch.optim;
 
 namespace YoloSharp.Models
 {
-	public class Segmenter : YoloBaseTaskModel
+	internal class Segmenter : YoloBaseTaskModel
 	{
-		private Module<Tensor, Tensor[]> yolo;
-		private Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> loss;
-		private Device device;
-		private torch.ScalarType dtype;
-		private int sortCount;
-		private YoloType yoloType;
-
-		public Segmenter(int numberClasses = 80, YoloType yoloType = YoloType.Yolov8, YoloSize yoloSize = YoloSize.n, Types.DeviceType deviceType = Types.DeviceType.CUDA, Types.ScalarType dtype = Types.ScalarType.Float32)
+		internal Segmenter(int numberClasses = 80, YoloType yoloType = YoloType.Yolov8, YoloSize yoloSize = YoloSize.n, Types.DeviceType deviceType = Types.DeviceType.CUDA, Types.ScalarType dtype = Types.ScalarType.Float32)
 		{
 			torchvision.io.DefaultImager = new torchvision.io.SkiaImager();
 			if (yoloType == YoloType.Yolov5 || yoloType == YoloType.Yolov5u || yoloType == YoloType.Yolov12)
@@ -32,6 +22,8 @@ namespace YoloSharp.Models
 			this.dtype = (torch.ScalarType)dtype;
 			this.sortCount = numberClasses;
 			this.yoloType = yoloType;
+			this.taskType = TaskType.Segmentation;
+
 			yolo = yoloType switch
 			{
 				YoloType.Yolov8 => new Yolo.Yolov8Segment(numberClasses, yoloSize, device, this.dtype),
@@ -47,6 +39,7 @@ namespace YoloSharp.Models
 			//Tools.TransModelFromSafetensors(yolo, @".\yolov8n-seg.safetensors", @".\PreTrainedModels\yolov11x-seg.bin");
 		}
 
+		/*
 		public void Train(string rootPath, string trainDataPath = "", string valDataPath = "", string outputPath = "output", int imageSize = 640, int epochs = 100, float lr = 0.0001f, int batchSize = 8, int numWorkers = 0, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
 		{
 			int maskSize = imageSize / 4;
@@ -74,47 +67,49 @@ namespace YoloSharp.Models
 				int step = 0;
 				foreach (var data in trainDataLoader)
 				{
-					step++;
-					long[] indexs = data["index"].data<long>().ToArray();
-					Tensor[] images = new Tensor[indexs.Length];
-					Tensor[] masks = new Tensor[indexs.Length];
-					List<float> batch_idx = new List<float>();
-					List<float> cls = new List<float>();
-					List<Tensor> bboxes = new List<Tensor>();
-					for (int i = 0; i < indexs.Length; i++)
+					using (NewDisposeScope())
 					{
-						ImageData imageData = trainDataSet.GetImageAndLabelData(indexs[i]);
-						images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
-						if (imageData.ResizedLabels is not null)
+						step++;
+						long[] indexs = data["index"].data<long>().ToArray();
+						Tensor[] images = new Tensor[indexs.Length];
+						Tensor[] masks = new Tensor[indexs.Length];
+						List<float> batch_idx = new List<float>();
+						List<float> cls = new List<float>();
+						List<Tensor> bboxes = new List<Tensor>();
+						for (int i = 0; i < indexs.Length; i++)
 						{
-							batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
-							cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
-							bboxes.AddRange(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
-
-							Mat maskMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(0));
-							for (int j = 0; j < imageData.ResizedLabels.Count; j++)
+							ImageData imageData = trainDataSet.GetImageAndLabelData(indexs[i]);
+							images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
+							if (imageData.ResizedLabels is not null)
 							{
-								Point[] points = imageData.ResizedLabels[j].MaskOutLine.Select(p => p.Multiply((float)maskSize / imageSize)).ToArray();
-								Mat eachMaskMat = YoloDataset.GetMaskFromOutlinePoints(points, maskSize, maskSize);
-								Mat foreMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(j + 1f));
-								foreMat.CopyTo(maskMat, eachMaskMat);
+								batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
+								cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
+								bboxes.AddRange(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
+
+								Mat maskMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(0));
+								for (int j = 0; j < imageData.ResizedLabels.Count; j++)
+								{
+									Point[] points = imageData.ResizedLabels[j].MaskOutLine.Select(p => p.Multiply((float)maskSize / imageSize)).ToArray();
+									Mat eachMaskMat = YoloDataset.GetMaskFromOutlinePoints(points, maskSize, maskSize);
+									Mat foreMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(j + 1f));
+									foreMat.CopyTo(maskMat, eachMaskMat);
+								}
+								masks[i] = Lib.GetTensorFromImage(maskMat, torchvision.io.ImageReadMode.GRAY).to(device).unsqueeze(0);
 							}
-							masks[i] = Lib.GetTensorFromImage(maskMat, torchvision.io.ImageReadMode.GRAY).to(device).unsqueeze(0);
 						}
-					}
 
-					Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
-					Tensor cls_tensor = tensor(cls, dtype: dtype, device: device).view(-1, 1);
-					Tensor bboxes_tensor = stack(bboxes).to(dtype, device) / imageSize;
-					Tensor imageTensor = concat(images);
+						Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+						Tensor cls_tensor = tensor(cls, dtype: dtype, device: device).view(-1, 1);
+						Tensor bboxes_tensor = stack(bboxes).to(dtype, device) / imageSize;
+						Tensor imageTensor = concat(images);
 
-					Tensor maskTensor = concat(masks);
-					if (batch_idx.Count < 1)
-					{
-						continue;
-					}
+						Tensor maskTensor = concat(masks);
+						if (batch_idx.Count < 1)
+						{
+							continue;
+						}
 
-					Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
+						Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
 					{
 						{ "batch_idx", batch_idx_tensor },
 						{ "cls", cls_tensor },
@@ -122,12 +117,13 @@ namespace YoloSharp.Models
 						{ "masks", maskTensor}
 					};
 
-					Tensor[] list = yolo.forward(imageTensor);
-					var (ls, ls_item) = loss.forward(list, targets);
-					optimizer.zero_grad();
-					ls.backward();
-					optimizer.step();
-					Console.WriteLine($"Process: Epoch {epoch}, Step/Total Step  {step}/{trainDataLoader.Count}");
+						Tensor[] list = yolo.forward(imageTensor);
+						var (ls, ls_item) = loss.forward(list, targets);
+						optimizer.zero_grad();
+						ls.backward();
+						optimizer.step();
+						Console.WriteLine($"Process: Epoch {epoch}, Step/Total Step  {step}/{trainDataLoader.Count}");
+					}
 				}
 
 				Console.Write("Do val now... ");
@@ -152,46 +148,49 @@ namespace YoloSharp.Models
 			float lossValue = float.MaxValue;
 			foreach (var data in loader)
 			{
-				long[] indexs = data["index"].data<long>().ToArray();
-				Tensor[] images = new Tensor[indexs.Length];
-				Tensor[] masks = new Tensor[indexs.Length];
-				List<float> batch_idx = new List<float>();
-				List<float> cls = new List<float>();
-				List<Tensor> bboxes = new List<Tensor>();
-				for (int i = 0; i < indexs.Length; i++)
+				using (NewDisposeScope())
+				using (no_grad())
 				{
-					ImageData imageData = valDataSet.GetImageAndLabelData(indexs[i]);
-					images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
-					if (imageData.ResizedLabels is not null)
+					long[] indexs = data["index"].data<long>().ToArray();
+					Tensor[] images = new Tensor[indexs.Length];
+					Tensor[] masks = new Tensor[indexs.Length];
+					List<float> batch_idx = new List<float>();
+					List<float> cls = new List<float>();
+					List<Tensor> bboxes = new List<Tensor>();
+					for (int i = 0; i < indexs.Length; i++)
 					{
-						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
-						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
-						bboxes.AddRange(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
-
-						Mat maskMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(0));
-						for (int j = 0; j < imageData.ResizedLabels.Count; j++)
+						ImageData imageData = valDataSet.GetImageAndLabelData(indexs[i]);
+						images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
+						if (imageData.ResizedLabels is not null)
 						{
-							Point[] points = imageData.ResizedLabels[j].MaskOutLine.Select(p => p.Multiply((float)maskSize / imageSize)).ToArray();
-							Mat eachMaskMat = YoloDataset.GetMaskFromOutlinePoints(points, maskSize, maskSize);
-							Mat foreMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(j + 1f));
-							foreMat.CopyTo(maskMat, eachMaskMat);
+							batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
+							cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
+							bboxes.AddRange(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
+
+							Mat maskMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(0));
+							for (int j = 0; j < imageData.ResizedLabels.Count; j++)
+							{
+								Point[] points = imageData.ResizedLabels[j].MaskOutLine.Select(p => p.Multiply((float)maskSize / imageSize)).ToArray();
+								Mat eachMaskMat = YoloDataset.GetMaskFromOutlinePoints(points, maskSize, maskSize);
+								Mat foreMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(j + 1f));
+								foreMat.CopyTo(maskMat, eachMaskMat);
+							}
+							masks[i] = Lib.GetTensorFromImage(maskMat, torchvision.io.ImageReadMode.GRAY).to(device).unsqueeze(0);
 						}
-						masks[i] = Lib.GetTensorFromImage(maskMat, torchvision.io.ImageReadMode.GRAY).to(device).unsqueeze(0);
 					}
-				}
 
-				Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
-				Tensor cls_tensor = tensor(cls, dtype: dtype, device: device).view(-1, 1);
-				Tensor bboxes_tensor = stack(bboxes).to(dtype, device) / imageSize;
-				Tensor imageTensor = concat(images);
-				Tensor maskTensor = concat(masks);
+					Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+					Tensor cls_tensor = tensor(cls, dtype: dtype, device: device).view(-1, 1);
+					Tensor bboxes_tensor = stack(bboxes).to(dtype, device) / imageSize;
+					Tensor imageTensor = concat(images);
+					Tensor maskTensor = concat(masks);
 
-				if (batch_idx.Count < 1)
-				{
-					continue;
-				}
+					if (batch_idx.Count < 1)
+					{
+						continue;
+					}
 
-				Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
+					Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
 					{
 						{ "batch_idx", batch_idx_tensor },
 						{ "cls", cls_tensor },
@@ -199,22 +198,24 @@ namespace YoloSharp.Models
 						{ "masks", maskTensor}
 					};
 
-				Tensor[] list = yolo.forward(imageTensor);
-				var (ls, ls_item) = loss.forward(list, targets);
-				if (lossValue == float.MaxValue)
-				{
-					lossValue = ls.ToSingle();
-				}
-				else
-				{
-					lossValue = lossValue + ls.ToSingle();
+					Tensor[] list = yolo.forward(imageTensor);
+					var (ls, ls_item) = loss.forward(list, targets);
+					if (lossValue == float.MaxValue)
+					{
+						lossValue = ls.ToSingle();
+					}
+					else
+					{
+						lossValue = lossValue + ls.ToSingle();
+					}
 				}
 			}
 			lossValue = lossValue / valDataSet.Count;
 			return lossValue;
 		}
+		*/
 
-		public List<YoloResult> ImagePredict(Tensor orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		internal override List<YoloResult> ImagePredict(Tensor orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
 		{
 			// Change RGB → BGR
 			orgImage = orgImage.to(dtype, device).unsqueeze(0);
@@ -273,46 +274,61 @@ namespace YoloSharp.Models
 			return results;
 		}
 
-		public void LoadModel(string path, bool skipNcNotEqualLayers = false)
+		internal override Dictionary<string, Tensor> GetTargets(long[] indexs, YoloDataset dataset)
 		{
-			Dictionary<string, Tensor> state_dict = Lib.LoadModel(path, skipNcNotEqualLayers);
-			if (state_dict.Count != yolo.state_dict().Count)
+			int maskSize = dataset.ImageSize / 4;
+			using (NewDisposeScope())
+			using (no_grad())
 			{
-				Console.WriteLine("Mismatched tensor count while loading. Model will run with random weight.");
-			}
-			else
-			{
-				torch.ScalarType modelType = state_dict.Values.First().dtype;
-				yolo.to(modelType);
-
-				List<string> skipList = new();
-				if (skipNcNotEqualLayers)
+				Tensor[] images = new Tensor[indexs.Length];
+				Tensor[] masks = new Tensor[indexs.Length];
+				List<float> batch_idx = new List<float>();
+				List<float> cls = new List<float>();
+				List<Tensor> bboxes = new List<Tensor>();
+				for (int i = 0; i < indexs.Length; i++)
 				{
-					string layerPattern = yoloType switch
+					ImageData imageData = dataset.GetImageAndLabelData(indexs[i]);
+					images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
+					if (imageData.ResizedLabels is not null)
 					{
-						YoloType.Yolov8 => @"model\.22\.cv3",
-						YoloType.Yolov11 => @"model\.23\.cv3",
-						_ => string.Empty
-					};
+						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
+						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
+						bboxes.AddRange(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
 
-					if (!string.IsNullOrEmpty(layerPattern))
-					{
-						skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern)).ToList();
-						if (state_dict[skipList.LastOrDefault(a => a.EndsWith(".bias"))!].shape[0] == sortCount)
+						using (Mat maskMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(0)))
 						{
-							skipList.Clear();
+							for (int j = 0; j < imageData.ResizedLabels.Count; j++)
+							{
+								Point[] points = imageData.ResizedLabels[j].MaskOutLine.Select(p => p.Multiply((float)maskSize / dataset.ImageSize)).ToArray();
+								Mat eachMaskMat = YoloDataset.GetMaskFromOutlinePoints(points, maskSize, maskSize);
+								Mat foreMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(j + 1f));
+								foreMat.CopyTo(maskMat, eachMaskMat);
+							}
+							masks[i] = Lib.GetTensorFromImage(maskMat, torchvision.io.ImageReadMode.GRAY).to(device).unsqueeze(0);
 						}
 					}
 				}
 
-				var (miss, err) = yolo.load_state_dict(state_dict, skip: skipList);
-				if (skipList.Count > 0)
+				Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
+				Tensor cls_tensor = tensor(cls, dtype: dtype, device: device).view(-1, 1);
+				Tensor bboxes_tensor = stack(bboxes).to(dtype, device) / dataset.ImageSize;
+				Tensor imageTensor = concat(images);
+
+				Tensor maskTensor = concat(masks);
+
+				Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
 				{
-					Console.WriteLine("Warning! Skipping nc reference layers. This may cause incorrect predictions.");
-				}
-				yolo.to(dtype);
+					{ "batch_idx", batch_idx_tensor.MoveToOuterDisposeScope() },
+					{ "cls", cls_tensor.MoveToOuterDisposeScope() },
+					{ "bboxes", bboxes_tensor.MoveToOuterDisposeScope() },
+					{ "masks", maskTensor.MoveToOuterDisposeScope() },
+					{ "images", imageTensor.MoveToOuterDisposeScope() },
+				};
+				GC.Collect();
+				return targets;
 			}
 		}
+
 
 	}
 }

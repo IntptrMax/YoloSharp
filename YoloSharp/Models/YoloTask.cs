@@ -12,13 +12,14 @@ namespace YoloSharp.Models
 
 		private bool Initialized => yolo != null;
 
-		public YoloTask(TaskType taskType, int numberClasses, YoloType yoloType, YoloSize yoloSize, DeviceType deviceType = DeviceType.CUDA, Types.ScalarType dtype = Types.ScalarType.Float32)
+		public YoloTask(TaskType taskType, int numberClasses, YoloType yoloType, YoloSize yoloSize, DeviceType deviceType = DeviceType.CUDA, Types.ScalarType dtype = Types.ScalarType.Float32, int[] keyPointShape = null)
 		{
 			yolo = taskType switch
 			{
 				TaskType.Detection => new Detector(numberClasses, yoloType, yoloSize, deviceType, dtype),
 				TaskType.Segmentation => new Segmenter(numberClasses, yoloType, yoloSize, deviceType, dtype),
 				TaskType.Obb => new Obber(numberClasses, yoloType, yoloSize, deviceType, dtype),
+				TaskType.Pose => new PoseDetector(numberClasses, keyPointShape, yoloType, yoloSize, deviceType, dtype),
 				_ => throw new NotImplementedException("Task type not support now.")
 			};
 		}
@@ -49,7 +50,6 @@ namespace YoloSharp.Models
 			}
 			return yolo.ImagePredict(orgImage, PredictThreshold, IouThreshold);
 		}
-
 
 		public List<YoloResult> ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
 		{

@@ -151,9 +151,11 @@ namespace YoloSharp.Models
 			protected virtual int[] concatIndex => new int[] { 1, 0, 3, 2 };
 
 			protected int[] ch;
+			protected int[] kpt_shape;
 
-			public Yolov8(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(Yolov8))
+			public Yolov8(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null, int[] kpt_shape = null) : base(nameof(Yolov8))
 			{
+				this.kpt_shape = kpt_shape;
 				model = BuildModel(nc, yoloSize, device, dtype);
 				RegisterComponents();
 			}
@@ -247,7 +249,7 @@ namespace YoloSharp.Models
 		{
 			protected override int[] outputIndexs => new int[] { 4, 6, 10, 13, 16, 19, 22 };
 
-			public Yolov11(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null) : base(nc, yoloSize, device, dtype)
+			public Yolov11(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null, int[] kpt_shape = null) : base(nc, yoloSize, device, dtype, kpt_shape: kpt_shape)
 			{
 
 			}
@@ -442,6 +444,38 @@ namespace YoloSharp.Models
 				var mod = base.BuildModel(nc, yoloSize, device, dtype);
 				mod.RemoveAt(mod.Count - 1); // remove Detect
 				mod.Add(new OBB(ch, nc, device: device, dtype: dtype));
+				return mod;
+			}
+		}
+
+		public class Yolov8Pose : Yolov8
+		{
+			public Yolov8Pose(int nc = 80, int[] kpt_shape = null, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null) : base(nc, yoloSize, device, dtype, kpt_shape: kpt_shape)
+			{
+
+			}
+
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
+			{
+				var mod = base.BuildModel(nc, yoloSize, device, dtype);
+				mod.RemoveAt(mod.Count - 1); // remove Detect
+				mod.Add(new Pose(nc: nc, kpt_shape: this.kpt_shape, ch: ch, device: device, dtype: dtype));
+				return mod;
+			}
+		}
+
+		public class Yolov11Pose : Yolov11
+		{
+			public Yolov11Pose(int nc = 80, int[] kpt_shape = null, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null) : base(nc, yoloSize, device, dtype,kpt_shape)
+			{
+
+			}
+
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
+			{
+				var mod = base.BuildModel(nc, yoloSize, device, dtype);
+				mod.RemoveAt(mod.Count - 1); // remove Detect
+				mod.Add(new Pose(nc: nc, kpt_shape: kpt_shape, ch: ch, device: device, dtype: dtype));
 				return mod;
 			}
 		}

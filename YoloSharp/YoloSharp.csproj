@@ -44,6 +44,7 @@ Requires reference to one of libtorch-cpu, libtorch-cuda-12.1, libtorch-cuda-12.
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="OpenCvSharp4" Version="4.11.0.20250507" />
     <PackageReference Include="TorchSharp" Version="0.105.1" />
+    <PackageReference Include="TorchSharp.PyBridge" Version="1.4.3" />
     <PackageReference Include="TorchVision" Version="0.105.1" />
   </ItemGroup>
 

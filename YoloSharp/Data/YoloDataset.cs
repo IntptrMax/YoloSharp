@@ -1,4 +1,5 @@
 ﻿using OpenCvSharp;
+using OpenCvSharp.Aruco;
 using TorchSharp;
 using YoloSharp.Types;
 using static TorchSharp.torch;
@@ -38,25 +39,42 @@ namespace YoloSharp.Data
 			}
 			else
 			{
+
 				string path = Path.Combine(rootPath, dataPath);
-				if (!File.Exists(path))
+				if (Directory.Exists(path))
 				{
-					throw new FileNotFoundException($"The file {dataPath} does not exist.");
-				}
-
-				string[] imagesFileNames = File.ReadAllLines(dataPath).Where(line =>
-				{
-					string trimmedLine = line.Trim();
-					if (string.IsNullOrEmpty(trimmedLine))
+					string[] imagesFileNames = Directory.GetFiles(path).Where(line =>
 					{
-						return false;
+						string trimmedLine = line.Trim();
+						if (string.IsNullOrEmpty(trimmedLine))
+						{
+							return false;
+						}
+						string extension = Path.GetExtension(trimmedLine).ToLower();
+						return extension == ".jpg" || extension == ".png" || extension == ".bmp";
+					}).Select(line => Path.IsPathRooted(line) ? Path.GetFullPath(line) : Path.GetFullPath(Path.Combine(rootPath, line.Trim()))).ToArray();
+
+					imageFiles.AddRange(imagesFileNames);
+				}
+				else
+				{
+					if (!File.Exists(path))
+					{
+						throw new FileNotFoundException($"The file {dataPath} does not exist.");
 					}
-					string extension = Path.GetExtension(trimmedLine).ToLower();
-					return extension == ".jpg" || extension == ".png" || extension == ".bmp";
-				}).Select(line => Path.IsPathRooted(line) ? Path.GetFullPath(line) : Path.GetFullPath(Path.Combine(rootPath, line.Trim()))).ToArray();
+					string[] imagesFileNames = File.ReadAllLines(dataPath).Where(line =>
+					{
+						string trimmedLine = line.Trim();
+						if (string.IsNullOrEmpty(trimmedLine))
+						{
+							return false;
+						}
+						string extension = Path.GetExtension(trimmedLine).ToLower();
+						return extension == ".jpg" || extension == ".png" || extension == ".bmp";
+					}).Select(line => Path.IsPathRooted(line) ? Path.GetFullPath(line) : Path.GetFullPath(Path.Combine(rootPath, line.Trim()))).ToArray();
 
-				imageFiles.AddRange(imagesFileNames);
-
+					imageFiles.AddRange(imagesFileNames);
+				}
 			}
 
 			this.imageSize = imageSize;
@@ -205,6 +223,37 @@ namespace YoloSharp.Data
 									});
 									break;
 								}
+							case TaskType.Pose:
+								{
+									if (parts.Length < 8)
+									{
+										throw new Exception($"The label file {labelFileName} format is incorrect.");
+									}
+
+									LabelData labelData = new LabelData()
+									{
+										LabelID = int.Parse(parts[0]),
+										CenterX = float.Parse(parts[1]) * orgWidth,
+										CenterY = float.Parse(parts[2]) * orgHeight,
+										Width = float.Parse(parts[3]) * orgWidth,
+										Height = float.Parse(parts[4]) * orgHeight,
+									};
+									int pointCount = (parts.Length - 5) / 3;
+									Types.KeyPoint[] keyPoints = new Types.KeyPoint[pointCount];
+									for (int i = 0; i < pointCount; i++)
+									{
+										keyPoints[i] = new Types.KeyPoint
+										{
+											X = float.Parse(parts[i * 3 + 5 + 0]) * orgWidth,
+											Y = float.Parse(parts[i * 3 + 5 + 1]) * orgHeight,
+											VisibilityScore = float.Parse(parts[i * 3 + 5 + 2])
+										};
+									}
+									labelData.KeyPoints = keyPoints;
+									labels.Add(labelData);
+
+									break;
+								}
 							default:
 								throw new Exception($"The task type {taskType} is not supported.");
 						}
@@ -266,6 +315,14 @@ namespace YoloSharp.Data
 							resizedLabel.MaskOutLine[i] = new Point(label.MaskOutLine[i].X * r + dw, label.MaskOutLine[i].Y * r + dh);
 						}
 					}
+					if (label.KeyPoints is not null)
+					{
+						resizedLabel.KeyPoints = new Types.KeyPoint[label.KeyPoints.Length];
+						for (int i = 0; i < label.KeyPoints.Length; i++)
+						{
+							resizedLabel.KeyPoints[i] = new Types.KeyPoint(label.KeyPoints[i].X * r + dw, label.KeyPoints[i].Y * r + dh, label.KeyPoints[i].VisibilityScore);
+						}
+					}
 					imageData.ResizedLabels.Add(resizedLabel);
 				}
 			}
@@ -313,6 +370,7 @@ namespace YoloSharp.Data
 					}
 				}
 
+				// roi in org image.
 				Rect roi = new Rect(randomX, randomY, Math.Min(croppedW, eachOrgMat.Width - randomX), Math.Min(croppedH, eachOrgMat.Height - randomY));
 				Mat cropped = new Mat(eachOrgMat, roi);
 				cropped.CopyTo(mosaicMat[new Rect(croppedX, croppedY, roi.Width, roi.Height)]);
@@ -353,6 +411,16 @@ namespace YoloSharp.Data
 								newLabel.MaskOutLine = newPoints.ToArray();
 							}
 						}
+						if (label.KeyPoints is not null)
+						{
+							List<Types.KeyPoint> newPoints = new List<Types.KeyPoint>();
+							foreach (var point in label.KeyPoints)
+							{
+								float vis = (point.X < roi.Left || point.X > roi.Right || point.Y < roi.Top || point.Y > roi.Bottom) ? 0 : point.VisibilityScore;
+								newPoints.Add(new Types.KeyPoint(point.X - roi.Left + croppedX, point.Y - roi.Top + croppedY, vis));
+							}
+							newLabel.KeyPoints = newPoints.ToArray();
+						}
 						if (result.ResizedLabels is null)
 						{
 							result.ResizedLabels = new List<LabelData>();
@@ -365,6 +433,7 @@ namespace YoloSharp.Data
 			result.ResizedImage = mosaicMat;
 			result.OrgLabels = imageDatas[ind].OrgLabels;
 			result.ImagePath = imageDatas[ind].ImagePath;
+
 			return result;
 		}
 
@@ -404,8 +473,8 @@ namespace YoloSharp.Data
 				foreach (var result in data.ResizedLabels)
 				{
 					Cv2.FillPoly(resizedImage, new Point[][] { result.MaskOutLine.Select(x => new Point(x.X, x.Y)).ToArray() }, OpenCvSharp.Scalar.Red);
-					resizedImage.SaveImage("segment.jpg");
 				}
+				resizedImage.SaveImage("segment.jpg");
 			}
 			// Draw box
 			else
@@ -422,8 +491,19 @@ namespace YoloSharp.Data
 						new Point(points[6], points[7]),
 					};
 					Cv2.Polylines(resizedImage, new Point[][] { pts }, true, OpenCvSharp.Scalar.Red, 2);
-					resizedImage.SaveImage("box.jpg");
+					if (result.KeyPoints is not null)
+					{
+						foreach (var point in result.KeyPoints)
+						{
+							if (point.VisibilityScore != 0)
+							{
+								Cv2.Circle(resizedImage, (int)point.X, (int)point.Y, 2, OpenCvSharp.Scalar.Red);
+							}
+						}
+					}
+
 				}
+				resizedImage.SaveImage("box.jpg");
 			}
 
 		}

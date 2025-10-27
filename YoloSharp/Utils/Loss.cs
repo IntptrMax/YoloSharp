@@ -7,6 +7,15 @@ namespace YoloSharp.Utils
 {
 	internal class Loss
 	{
+		private static float[] OKS_SIGMA
+		{
+			get
+			{
+				float[] v = new float[] { 0.26f, 0.25f, 0.25f, 0.35f, 0.35f, 0.79f, 0.79f, 0.72f, 0.72f, 0.62f, 0.62f, 1.07f, 1.07f, 0.87f, 0.87f, 0.89f, 0.89f };
+				return v.Select(x => x / 10.0f).ToArray();
+			}
+		}
+
 		/// <summary>
 		/// Returns label smoothing BCE targets for reducing overfitting
 		/// </summary>
@@ -145,6 +154,27 @@ namespace YoloSharp.Utils
 					}
 
 					return (lossIou.MoveToOuterDisposeScope(), lossDfl.MoveToOuterDisposeScope());
+				}
+			}
+		}
+
+		internal class KeypointLoss : Module<torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor>
+		{
+			private readonly Tensor sigmas;
+			internal KeypointLoss(torch.Tensor sigmas) : base(nameof(KeypointLoss))
+			{
+				this.sigmas = sigmas;
+			}
+
+			public override Tensor forward(torch.Tensor pred_kpts, torch.Tensor gt_kpts, torch.Tensor kpt_mask, torch.Tensor area)
+			{
+				using (NewDisposeScope())
+				{
+					torch.Tensor d = (pred_kpts[TensorIndex.Ellipsis, 0] - gt_kpts[TensorIndex.Ellipsis, 0]).pow(2) + (pred_kpts[TensorIndex.Ellipsis, 1] - gt_kpts[TensorIndex.Ellipsis, 1]).pow(2);
+					torch.Tensor kpt_loss_factor = kpt_mask.shape[1] / (torch.sum(kpt_mask != 0, dim: 1) + 1e-6);
+					// e = d / (2 * (area * self.sigmas) ** 2 + 1e-9)  # from formula
+					torch.Tensor e = d / ((2 * this.sigmas.to(pred_kpts.device)).pow(2) * (area + 1e-9) * 2); // from cocoeval
+					return (kpt_loss_factor.view(-1, 1) * ((1 - torch.exp(-e)) * kpt_mask)).mean().MoveToOuterDisposeScope();
 				}
 			}
 		}
@@ -474,7 +504,7 @@ namespace YoloSharp.Utils
 					Tensor target_scores_sum = max(target_scores.sum());
 					loss[1] = bce.forward(pred_scores, target_scores).sum() / target_scores_sum;  // BCE
 																								  //float loss1 = (this.bce.forward(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum).ToSingle();  // BCE
-					if (fg_mask.sum().ToInt64() > 0)
+					if (fg_mask.sum().ToSingle() > 0)
 					{
 						target_bboxes /= stride_tensor;
 						(loss[0], loss[2]) = bbox_loss.forward(pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask);
@@ -804,7 +834,7 @@ namespace YoloSharp.Utils
 					// Cls loss
 					// loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
 					loss[1] = this.bce.forward(pred_scores, target_scores.to(type: dtype.Value)).sum() / target_scores_sum; // BCE
-					if (fg_mask.sum().ToInt64() > 0)
+					if (fg_mask.sum().ToSingle() > 0)
 					{
 						target_bboxes[TensorIndex.Ellipsis, ..4] /= stride_tensor;
 						(loss[0], loss[2]) = this.bbox_loss.forward(pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask);
@@ -837,6 +867,186 @@ namespace YoloSharp.Utils
 					pred_dist = pred_dist.view(b, a, 4, c / 4).softmax(3).matmul(this.proj.to(pred_dist.dtype, pred_dist.device));
 				}
 				return torch.cat(new Tensor[] { Tal.dist2rbox(pred_dist, pred_angle, anchor_points), pred_angle }, dim: -1);
+			}
+		}
+
+		/// <summary>
+		/// Criterion class for computing training losses for YOLOv8 pose estimation.
+		/// </summary>
+		internal class V8PoseLoss : V8DetectionLoss
+		{
+			private readonly BCEWithLogitsLoss bce_pose;
+			private readonly int[] kpt_shape;
+			private readonly KeypointLoss keypoint_loss;
+			private readonly float hyp_pose;
+			private readonly float hyp_kobj;
+
+			public V8PoseLoss(int nc = 80, int[] kpt_shape = null, int reg_max = 16, int tal_topk = 10, int[]? stride = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, float hyp_pose = 12.0f, float hyp_kobj = 1.0f) : base(nc: nc, reg_max: reg_max, tal_topk: tal_topk, stride: stride, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl)
+			//internal V8PoseLoss()
+			{
+				this.bce_pose = nn.BCEWithLogitsLoss();
+				this.kpt_shape = kpt_shape ?? new int[] { 17, 3 };
+				bool is_pose = this.kpt_shape.SequenceEqual(new int[] { 17, 3 });
+				long nkpt = this.kpt_shape[0];  // number of keypoints
+				torch.Tensor sigmas = is_pose ? torch.tensor(OKS_SIGMA) : torch.ones(nkpt) / nkpt;
+				this.keypoint_loss = new KeypointLoss(sigmas: sigmas);
+				this.hyp_pose = hyp_pose;
+				this.hyp_kobj = hyp_kobj;
+			}
+
+			/// <summary>
+			/// Calculate the total loss and detach it for pose estimation.
+			/// </summary>
+			/// <param name="preds"></param>
+			/// <param name="batch"></param>
+			/// <returns></returns>
+			public override (Tensor loss, Tensor loss_items) forward(Tensor[] preds, Dictionary<string, Tensor> batch)
+			{
+				this.device = preds[0].device;
+				this.dtype = preds[0].dtype;
+				torch.Tensor loss = torch.zeros(5, device: this.device); // box, cls, dfl, kpt_location, kpt_visibility
+				torch.Tensor[] feats = new List<torch.Tensor>() { preds[0], preds[1], preds[2] }.ToArray();
+				torch.Tensor pred_kpts = preds[3];
+
+				torch.Tensor[] feats_mix = feats.Select(xi => xi.view(feats[0].shape[0], this.no, -1)).ToArray();
+
+				torch.Tensor[] pred_distri_scores = torch.cat(feats_mix, 2).split(new long[] { this.reg_max * 4, this.nc }, 1);
+				torch.Tensor pred_distri = pred_distri_scores[0];
+				torch.Tensor pred_scores = pred_distri_scores[1];
+
+				// B, grids, ..
+				pred_scores = pred_scores.permute(0, 2, 1).contiguous();
+				pred_distri = pred_distri.permute(0, 2, 1).contiguous();
+				pred_kpts = pred_kpts.permute(0, 2, 1).contiguous();
+
+				torch.Tensor imgsz = torch.tensor(feats[0].shape.Take(new Range(2, feats[0].shape.Length)).ToArray(), device: this.device, dtype: dtype) * this.stride[0];  // image size (h,w)
+				(torch.Tensor anchor_points, torch.Tensor stride_tensor) = Tal.make_anchors(feats, this.stride, 0.5f);
+
+				// Targets
+				long batch_size = pred_scores.shape[0];
+				torch.Tensor batch_idx = batch["batch_idx"].view(-1, 1);
+				torch.Tensor targets = torch.cat(new torch.Tensor[] { batch_idx, batch["cls"].view(-1, 1), batch["bboxes"] }, 1);
+				Tensor indices = tensor(new long[] { 1, 0, 1, 0 }, device: device);
+
+				// Select elements from imgsz
+				Tensor scale_tensor = imgsz.index_select(0, indices).to(device);
+				targets = base.postprocess(targets.to(this.device), batch_size, scale_tensor: scale_tensor);
+
+				torch.Tensor[] gt_labels_bboxes = targets.split(new long[] { 1, 4 }, 2);  // cls, xyxy
+				torch.Tensor gt_labels = gt_labels_bboxes[0];
+				torch.Tensor gt_bboxes = gt_labels_bboxes[1];
+				torch.Tensor mask_gt = gt_bboxes.sum(2, keepdim: true).gt_(0.0);
+
+				// Pboxes
+				torch.Tensor pred_bboxes = this.bbox_decode(anchor_points, pred_distri);  // xyxy, (b, h*w, 4)
+				List<long> shape = new List<long> { batch_size, -1 };
+				shape.AddRange(this.kpt_shape.Select(x => (long)x));
+				pred_kpts = this.kpts_decode(anchor_points, pred_kpts.view(shape.ToArray())); // (b, h*w, 17, 3)
+
+				(_, torch.Tensor target_bboxes, torch.Tensor target_scores, torch.Tensor fg_mask, torch.Tensor target_gt_idx) = base.assigner.forward(pred_scores.detach().sigmoid(), (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype), anchor_points * stride_tensor, gt_labels, gt_bboxes, mask_gt);
+				torch.Tensor target_scores_sum = max(target_scores.sum());
+
+				// Cls loss
+				// loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
+				loss[3] = this.bce.forward(pred_scores, target_scores).sum() / target_scores_sum;  // BCE
+
+				// Bbox loss
+				if (fg_mask.sum().ToSingle() > 0)
+				{
+					target_bboxes /= stride_tensor;
+					(loss[0], loss[4]) = this.bbox_loss.forward(pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask);
+					torch.Tensor keypoints = batch["keypoints"].to(this.device).@float().clone();
+					keypoints[TensorIndex.Ellipsis, 0] *= imgsz[1];
+					keypoints[TensorIndex.Ellipsis, 1] *= imgsz[0];
+					(loss[1], loss[2]) = this.calculate_keypoints_loss(fg_mask, target_gt_idx, keypoints, batch_idx, stride_tensor, target_bboxes, pred_kpts);
+				}
+
+
+				loss[0] *= this.hyp_box;// box gain
+				loss[1] *= this.hyp_pose; // pose gain
+				loss[2] *= this.hyp_kobj;// kobj gain
+				loss[3] *= this.hyp_cls; // cls gain
+				loss[4] *= this.hyp_dfl; // dfl gain
+				return (((loss * batch_size).sum()).MoveToOuterDisposeScope(), loss.MoveToOuterDisposeScope()); // loss(box, cls, dfl)
+			}
+
+			/// <summary>
+			/// Decode predicted keypoints to image coordinates.
+			/// </summary>
+			/// <param name="anchor_points"></param>
+			/// <param name="pred_kpts"></param>
+			/// <returns></returns>
+			private torch.Tensor kpts_decode(torch.Tensor anchor_points, torch.Tensor pred_kpts)
+			{
+				torch.Tensor y = pred_kpts.clone();
+				y[TensorIndex.Ellipsis, ..2] *= 2.0f;
+				y[TensorIndex.Ellipsis, 0] += anchor_points[.., 0..1] - 0.5f;
+				y[TensorIndex.Ellipsis, 1] += anchor_points[.., 1..2] - 0.5f;
+				return y;
+			}
+
+			/// <summary>
+			/// Calculate the keypoints loss for the model
+			/// </summary>
+			/// <remarks>This function calculates the keypoints loss and keypoints object loss for a given batch. The keypoints loss is 
+			/// based on the difference between the predicted keypoints and ground truth keypoints.The keypoints object loss is 
+			/// a binary classification loss that classifies whether a keypoint is present or not.</remarks>
+			/// <param name="masks">Binary mask tensor indicating object presence, shape (BS, N_anchors).</param>
+			/// <param name="target_gt_idx">Index tensor mapping anchors to ground truth objects, shape (BS, N_anchors).</param>
+			/// <param name="keypoints">Ground truth keypoints, shape (N_kpts_in_batch, N_kpts_per_object, kpts_dim).</param>
+			/// <param name="batch_idx">Batch index tensor for keypoints, shape (N_kpts_in_batch, 1).</param>
+			/// <param name="stride_tensor">Stride tensor for anchors, shape (N_anchors, 1).</param>
+			/// <param name="target_bboxes">Ground truth boxes in (x1, y1, x2, y2) format, shape (BS, N_anchors, 4).</param>
+			/// <param name="pred_kpts"></param>
+			/// <returns>kpts_loss:The keypoints loss. kpts_obj_loss:The keypoints object loss.</returns>
+			private (torch.Tensor kpts_loss, torch.Tensor kpts_obj_loss) calculate_keypoints_loss(torch.Tensor masks, torch.Tensor target_gt_idx, torch.Tensor keypoints, torch.Tensor batch_idx, torch.Tensor stride_tensor, torch.Tensor target_bboxes, torch.Tensor pred_kpts)
+			{
+				using (NewDisposeScope())
+				{
+					batch_idx = batch_idx.flatten();
+					long batch_size = masks.shape[0];
+
+					// Find the maximum number of keypoints in a single image
+					long max_kpts = torch.unique(batch_idx, return_counts: true).counts.max().ToInt64();
+
+					// Create a tensor to hold batched keypoints
+					Tensor batched_keypoints = torch.zeros(new long[] { batch_size, max_kpts, keypoints.shape[1], keypoints.shape[2] }, device: keypoints.device);
+
+					// Fill batched_keypoints with keypoints based on batch_idx
+					for (int i = 0; i < batch_size; i++)
+					{
+						torch.Tensor keypoints_i = keypoints[batch_idx == i];
+						batched_keypoints[i, ..(int)keypoints_i.shape[0]] = keypoints_i;
+					}
+
+					// Expand dimensions of target_gt_idx to match the shape of batched_keypoints
+					torch.Tensor target_gt_idx_expanded = target_gt_idx.unsqueeze(-1).unsqueeze(-1);
+
+					// Use target_gt_idx_expanded to select keypoints from batched_keypoints
+					torch.Tensor selected_keypoints = batched_keypoints.gather(1, target_gt_idx_expanded.expand(-1, -1, keypoints.shape[1], keypoints.shape[2]));
+
+					// Divide coordinates by stride
+					selected_keypoints[TensorIndex.Ellipsis, ..2] /= stride_tensor.view(1, -1, 1, 1);
+
+					torch.Tensor kpts_loss = 0;
+					torch.Tensor kpts_obj_loss = 0;
+
+					if (masks.any().ToBoolean())
+					{
+						torch.Tensor gt_kpt = selected_keypoints[masks];
+						torch.Tensor area = Ops.xyxy2xywh(target_bboxes[masks])[.., 2..].prod(1, keepdim: true);
+						torch.Tensor pred_kpt = pred_kpts[masks];
+						torch.Tensor kpt_mask = (gt_kpt.shape.Last() == 3) ? (gt_kpt[TensorIndex.Ellipsis, 2] != 0) : torch.full_like(gt_kpt[TensorIndex.Ellipsis, 0], true);
+						kpts_loss = this.keypoint_loss.forward(pred_kpt, gt_kpt, kpt_mask, area); // pose loss
+						if (pred_kpt.shape.Last() == 3)
+						{
+							kpts_obj_loss = this.bce_pose.forward(pred_kpt[TensorIndex.Ellipsis, 2], kpt_mask.@float());  // keypoint obj loss
+						}
+					}
+
+					return (kpts_loss.MoveToOuterDisposeScope(), kpts_obj_loss.MoveToOuterDisposeScope());
+
+				}
 			}
 		}
 

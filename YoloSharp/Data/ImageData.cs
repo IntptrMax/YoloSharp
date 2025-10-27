@@ -23,5 +23,8 @@ namespace YoloSharp.Data
 		public float Radian;
 		public int LabelID;
 		public Point[] MaskOutLine;
+		public Types.KeyPoint[] KeyPoints;
+
+	
 	}
 }
