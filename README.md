@@ -1,18 +1,18 @@
 # YoloSharp
 
-Train Yolo model in C# with TorchSharp. </br>
-With the help of this project you won't have to transform .pt model to onnx, and can train your own model in C#.
+Train Yolo model in C# with TorchSharp. <br/>
+With the help of this project you won't have to transform .pt model to onnx, and can train your own model in C# and don't have to install python.
 
 ## Feature
 
-- Written in C# only.
+- Written in C# only, don't have to install python.
 - Train and predict your own model.
 - Support Yolov5, Yolov5u, Yolov8, Yolov11 and Yolov12 now.
-- Support Predict, Segment and Obb now.
+- Support Predict, Segment, Obb, Pose(Key Points) and Classification now.
 - Support n/s/m/l/x size.
 - Support LetterBox and Mosaic4 method for preprocessing images.
 - Support NMS with GPU.
-- Support Load PreTrained models from ultralytics/yolov5/yolov8/yolo11 and yolov12(converted).
+- Support Load PreTrained models from ultralytics yolov5/yolov8/yolo11 and yolov12(converted).
 - Support .Net6 or higher.
 
 ## Models
@@ -56,20 +56,20 @@ You can use it with the code below:
 ### Yolo Task
 
 ```CSharp
+// Create a yolo task.
+YoloTask yoloTask = new YoloTask(taskType, numberClass, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype, keyPointShape: keyPointShape);
 
-// Create Yolo Task
-YoloTask yoloTask = new YoloTask(taskType, numberClass, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype);
+// Load pre-trained model, if you don't want to load the model, you can skip this step.
+yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
 // Train model
-yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 yoloTask.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, imageSize: imageSize, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
 
-// Predict image
-yoloTask.LoadModel(Path.Combine(outputPath, "best.bin"));
+// Predict image, if the model is not trained or loaded, it will use random weight to predict.
 List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage, predictThreshold, iouThreshold);
 
 ```
-</br>
+<br/>
 
 Use yolov8n pre-trained model to detect.
 
@@ -84,3 +84,7 @@ Use yolov8n-seg pre-trained model to detect.
 Use yolov8n-obb pre-trained model to detect.
 
 ![pred_seg](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/trucks.jpg)
+
+Use yolov8n-pose pre-trained model to detect.
+
+![pred_seg](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/tennis.jpg)

@@ -1,4 +1,5 @@
-﻿using System.Text.RegularExpressions;
+﻿using System.Reflection;
+using System.Text.RegularExpressions;
 using TorchSharp;
 using TorchSharp.Modules;
 using YoloSharp.Data;
@@ -37,35 +38,60 @@ namespace YoloSharp.Models
 				List<string> skipList = new();
 				if (skipNcNotEqualLayers)
 				{
-					string layerPattern = yoloType switch
+					nn.Module mod = yolo.children().First().named_children().Last().module;
+					int modelCount = yolo.children().First().named_children().Count();
+
+					switch (mod)
 					{
-						YoloType.Yolov5u => @"model\.24\.cv[34]",
-						YoloType.Yolov8 => @"model\.22\.cv[34]",
-						YoloType.Yolov11 => @"model\.23\.cv[34]",
-						YoloType.Yolov12 => @"model\.21\.cv[34]",
-						_ => string.Empty
-					};
-
-					if (!string.IsNullOrEmpty(layerPattern))
-					{
-						skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern)).ToList();
-						if (state_dict[skipList.LastOrDefault(a => Regex.IsMatch(a, @"cv3.+\.bias"))].shape[0] == sortCount)
-						{
-							skipList.RemoveAll(x => Regex.IsMatch(x, @"cv3.+"));
-							if (keyPointsShape is null)
+						case Modules.Modules.Classify:
 							{
-								skipList.RemoveAll(x => Regex.IsMatch(x, @"cv4.+"));
+								string layerPattern = @"model\." + (modelCount - 1) + @"\.linear";
+								string key = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern + @".+bias")).Last();
+								long nc = state_dict[key].shape[0];
+
+								if (nc != sortCount)
+								{
+									skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern)).ToList();
+								}
+								break;
 							}
-						}
-						if (keyPointsShape is not null)
-						{
-							if (state_dict[skipList.FirstOrDefault(a => Regex.IsMatch(a, @"cv4.+\.bias"))].shape[0] == keyPointsShape[0] * keyPointsShape[1])
+						case Modules.Modules.Pose:
 							{
-								skipList.RemoveAll(x => Regex.IsMatch(x, @"cv4.+"));
+								string ncLayerPattern = @"model\." + (modelCount - 1) + @"\.cv3";
+								string ncKey = state_dict.Keys.Where(x => Regex.IsMatch(x, ncLayerPattern + @".+bias")).Last();
+								long nc = state_dict[ncKey].shape[0];
+
+								string kptLayerPattern = @"model\." + (modelCount - 1) + @"\.cv4";
+								string kptKey = state_dict.Keys.Where(x => Regex.IsMatch(x, kptLayerPattern + @".+bias")).Last();
+								long kpt = state_dict[kptKey].shape[0];
+
+								if (nc != sortCount)
+								{
+									skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, ncLayerPattern)).ToList();
+								}
+								if (kpt != keyPointsShape[0] * keyPointsShape[1])
+								{
+									skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, kptLayerPattern)).ToList();
+								}
+								break;
 							}
-						}
-
-
+						case Modules.Modules.OBB:
+						case Modules.Modules.Segment:
+						case Modules.Modules.Yolov8Detect:
+							{
+								string layerPattern = @"model\." + (modelCount - 1) + @"\.cv3";
+								string key = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern + @".+bias")).Last();
+								long nc = state_dict[key].shape[0];
+								if (nc != sortCount)
+								{
+									skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern)).ToList();
+								}
+								break;
+							}
+						default:
+							{
+								break;
+							}
 					}
 				}
 
@@ -105,7 +131,7 @@ namespace YoloSharp.Models
 			DataLoader valDataLoader = new DataLoader(valDataSet, 4, num_worker: 0, shuffle: true, device: device);
 
 			Optimizer optimizer = new SGD(yolo.parameters(), lr: lr, momentum: 0.9, weight_decay: 5e-4);
-
+			var lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max: 200);
 			float tempLoss = float.MaxValue;
 
 			Console.WriteLine();
@@ -138,6 +164,7 @@ namespace YoloSharp.Models
 						Console.Write($"Process: Epoch {epoch}, Step/Total Step:{step}/{trainDataLoader.Count}");
 					}
 				}
+				lr_scheduler.step();
 				Console.WriteLine();
 				Console.Write("Do val now... ");
 				float valLoss = Val(valDataSet, valDataLoader);

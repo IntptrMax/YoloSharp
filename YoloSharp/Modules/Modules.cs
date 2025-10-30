@@ -1143,6 +1143,7 @@ namespace YoloSharp.Modules
 
 		public class Pose : Yolov8Detect
 		{
+			public readonly int[] KeyPointsShape;
 			private readonly int[] kpt_shape;
 			private readonly int nk;
 			private readonly ModuleList<Sequential> cv4 = new ModuleList<Sequential>();
@@ -1160,6 +1161,7 @@ namespace YoloSharp.Modules
 			public Pose(int nc = 80, int[] kpt_shape = null, int[] ch = null, bool legacy = true, Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, ch: ch, legacy: legacy, device: device, dtype: dtype)
 			{
 				this.kpt_shape = kpt_shape ?? new int[] { 17, 3 }; // number of keypoints, number of dims (2 for x,y or 3 for x,y,visible)
+				this.KeyPointsShape = this.kpt_shape;
 				nk = this.kpt_shape[0] * this.kpt_shape[1];  // number of keypoints total
 				int c4 = Math.Max(ch[0] / 4, nk);
 
@@ -1222,13 +1224,13 @@ namespace YoloSharp.Modules
 			/// <param name="s">Stride.</param>
 			/// <param name="p">Padding.</param>
 			/// <param name="g">Groups.</param>
-			public Classify(int c1, int c2, int k = 1, int s = 1, int? p = null, int g = 1) : base(nameof(Classify))
+			public Classify(int c1, int c2, int k = 1, int s = 1, int? p = null, int g = 1, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(Classify))
 			{
 				int c_ = 1280;  // efficientnet_b0 size
-				conv = new Conv(c1, c_, k, s, p, g);
+				conv = new Conv(c1, c_, k, s, p, g, device: device, dtype: dtype);
 				pool = AdaptiveAvgPool2d(1);  // to x(b,c_,1,1)
 				drop = Dropout(p: 0.0, inplace: true);
-				linear = Linear(c_, c2);  // to x(b,c2)
+				linear = Linear(c_, c2, device: device, dtype: dtype);  // to x(b,c2)
 				RegisterComponents();
 			}
 

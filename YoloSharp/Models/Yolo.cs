@@ -38,7 +38,7 @@ namespace YoloSharp.Models
 						new float[] { 30 / p4_d, 61 / p4_d, 62 / p4_d, 45 / p4_d, 59 / p4_d, 119 / p4_d },// P4/16
 						new float[] { 116 / p5_d, 90 / p5_d, 156 / p5_d, 198 / p5_d, 373 / p5_d, 326 / p5_d }};   // P5/32
 
-				int[] widths = new List<int> { 64, 128, 256, 512, 1024 }.Select(w => (int)(w * width_multiple)).ToArray();
+				widths = new List<int> { 64, 128, 256, 512, 1024 }.Select(w => (int)(w * width_multiple)).ToArray();
 				int[] depths = new List<int> { 3, 6, 9 }.Select(d => (int)(d * depth_multiple)).ToArray();
 				ch = new int[] { widths[2], widths[3], widths[4] };
 
@@ -101,7 +101,7 @@ namespace YoloSharp.Models
 					_ => throw new ArgumentOutOfRangeException(nameof(yoloSize), yoloSize, null)
 				};
 
-				int[] widths = new List<int> { 64, 128, 256, 512, 1024 }.Select(w => (int)(w * width_multiple)).ToArray();
+				widths = new List<int> { 64, 128, 256, 512, 1024 }.Select(w => (int)(w * width_multiple)).ToArray();
 				int[] depths = new List<int> { 3, 6, 9 }.Select(d => (int)(d * depth_multiple)).ToArray();
 				ch = new int[] { widths[2], widths[3], widths[4] };
 
@@ -152,6 +152,8 @@ namespace YoloSharp.Models
 
 			protected int[] ch;
 			protected int[] kpt_shape;
+			protected int[] widths;
+
 
 			public Yolov8(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null, int[] kpt_shape = null) : base(nameof(Yolov8))
 			{
@@ -172,10 +174,9 @@ namespace YoloSharp.Models
 					_ => throw new ArgumentOutOfRangeException(nameof(yoloSize), yoloSize, null)
 				};
 
-				int[] widths = new List<int> { 64, 128, 256, 512, 1024 }.Select(w => Math.Min((int)(w * width_multiple), max_channels)).ToArray();
+				widths = new List<int> { 64, 128, 256, 512, 1024 }.Select(w => Math.Min((int)(w * width_multiple), max_channels)).ToArray();
 				int[] depths = new List<int> { 3, 6, 9 }.Select(d => (int)(d * depth_multiple)).ToArray();
 				ch = new int[] { widths[2], widths[3], widths[4] };
-
 				ModuleList<Module> mod = ModuleList<Module>(
 					// backbone:
 					new Conv(3, widths[0], 3, 2, device: device, dtype: dtype),
@@ -218,17 +219,37 @@ namespace YoloSharp.Models
 				{
 					List<Tensor> outputs = new List<Tensor>();
 					int catCount = 0;
-					for (int i = 0; i < model.Count - 1; i++)
+					Tensor[] list = null;
+					for (int i = 0; i < model.Count; i++)
 					{
 						switch (model[i])
 						{
 							case Module<Tensor, Tensor> mod:
 								x = mod.forward(x);
 								break;
-							case Module<Tensor[], Tensor> cat:
+							case Concat cat:
 								x = cat.forward(new Tensor[] { x, outputs[concatIndex[catCount]] });
 								catCount++;
 								break;
+							case Modules.Modules.Classify classify:
+								{
+									list = classify.forward(new Tensor[] { x });
+									break;
+								}
+							case Modules.Modules.Yolov5Detect v5Detect:
+								{
+									list = v5Detect.forward(new Tensor[] { outputs[outputs.Count - 3], outputs[outputs.Count - 2], outputs[outputs.Count - 1] });
+									break;
+								}
+							case Modules.Modules.Yolov8Detect v8Detect:
+								{
+									list = v8Detect.forward(new Tensor[] { outputs[outputs.Count - 3], outputs[outputs.Count - 2], outputs[outputs.Count - 1] });
+									break;
+								}
+							default:
+								{
+									throw new Exception();
+								}
 						}
 
 						if (outputIndexs.Contains(i))
@@ -236,10 +257,12 @@ namespace YoloSharp.Models
 							outputs.Add(x);
 						}
 					}
-
-					Tensor[] list = ((Module<Tensor[], Tensor[]>)model.Last()).forward(new Tensor[] { outputs[outputs.Count - 3], outputs[outputs.Count - 2], outputs[outputs.Count - 1] });
 					list = list.Select(x => x.MoveToOuterDisposeScope()).ToArray();
 					return list;
+
+					//Tensor[] list = ((Module<Tensor[], Tensor[]>)model.Last()).forward(new Tensor[] { outputs[outputs.Count - 3], outputs[outputs.Count - 2], outputs[outputs.Count - 1] });
+					//list = list.Select(x => x.MoveToOuterDisposeScope()).ToArray();
+					//return list;
 				}
 			}
 
@@ -266,7 +289,7 @@ namespace YoloSharp.Models
 					_ => throw new ArgumentOutOfRangeException(nameof(yoloSize), yoloSize, null)
 				};
 
-				int[] widths = new List<int> { 64, 128, 256, 512, 1024 }.Select(w => Math.Min((int)(w * width_multiple), max_channels)).ToArray();
+				base.widths = new List<int> { 64, 128, 256, 512, 1024 }.Select(w => Math.Min((int)(w * width_multiple), max_channels)).ToArray();
 				int depthSize = (int)(2 * depth_multiple);
 				ch = new int[] { widths[2], widths[3], widths[4] };
 
@@ -325,7 +348,7 @@ namespace YoloSharp.Models
 					_ => throw new ArgumentOutOfRangeException(nameof(yoloSize), yoloSize, null)
 				};
 
-				int[] widths = new List<int> { 64, 128, 256, 512, 1024 }.Select(w => Math.Min((int)(w * width_multiple), max_channels)).ToArray();
+				base.widths = new List<int> { 64, 128, 256, 512, 1024 }.Select(w => Math.Min((int)(w * width_multiple), max_channels)).ToArray();
 				int depthSize = (int)(2 * depth_multiple);
 				ch = new int[] { widths[2], widths[3], widths[4] };
 
@@ -466,7 +489,7 @@ namespace YoloSharp.Models
 
 		public class Yolov11Pose : Yolov11
 		{
-			public Yolov11Pose(int nc = 80, int[] kpt_shape = null, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null) : base(nc, yoloSize, device, dtype,kpt_shape)
+			public Yolov11Pose(int nc = 80, int[] kpt_shape = null, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null) : base(nc, yoloSize, device, dtype, kpt_shape)
 			{
 
 			}
@@ -480,5 +503,41 @@ namespace YoloSharp.Models
 			}
 		}
 
+		public class Yolov8Classify : Yolov8
+		{
+			public Yolov8Classify(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null) : base(nc, yoloSize, device, dtype)
+			{
+
+			}
+
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
+			{
+				var mod = base.BuildModel(nc, yoloSize, device, dtype);
+				for (int i = 0; i < 14; i++)
+				{
+					mod.RemoveAt(mod.Count - 1); // remove Detect
+				}
+				mod.Add(new Classify(base.widths[4], nc, device: device, dtype: dtype));
+				return mod;
+			}
+		}
+
+		public class Yolov11Classify : Yolov11
+		{
+			public Yolov11Classify(int nc = 80, YoloSize yoloSize = YoloSize.n, Device? device = null, torch.ScalarType? dtype = null) : base(nc, yoloSize, device, dtype)
+			{
+			}
+			internal override ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)
+			{
+				var mod = base.BuildModel(nc, yoloSize, device, dtype);
+				for (int i = 0; i < 13; i++)
+				{
+					mod.RemoveAt(mod.Count - 1); // remove Detect
+				}
+				mod.Add(new Classify(base.widths[4], nc, device: device, dtype: dtype));
+				return mod;
+			}
+
+		}
 	}
 }

@@ -20,6 +20,7 @@ namespace YoloSharp.Models
 				TaskType.Segmentation => new Segmenter(numberClasses, yoloType, yoloSize, deviceType, dtype),
 				TaskType.Obb => new Obber(numberClasses, yoloType, yoloSize, deviceType, dtype),
 				TaskType.Pose => new PoseDetector(numberClasses, keyPointShape, yoloType, yoloSize, deviceType, dtype),
+				TaskType.Classification => new Classifier(numberClasses, yoloType, yoloSize, deviceType, dtype),
 				_ => throw new NotImplementedException("Task type not support now.")
 			};
 		}

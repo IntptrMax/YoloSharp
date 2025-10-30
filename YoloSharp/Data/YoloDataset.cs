@@ -1,5 +1,4 @@
 ﻿using OpenCvSharp;
-using OpenCvSharp.Aruco;
 using TorchSharp;
 using YoloSharp.Types;
 using static TorchSharp.torch;
@@ -15,6 +14,7 @@ namespace YoloSharp.Data
 		private ImageProcessType imageProcessType = ImageProcessType.Letterbox;
 		public ImageProcessType ImageProcessType => imageProcessType;
 		private TaskType taskType = TaskType.Detection;
+		List<string> ClasssNames;
 
 		public YoloDataset(string rootPath, string dataPath = "", int imageSize = 640, TaskType taskType = TaskType.Detection, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
 		{
@@ -39,7 +39,6 @@ namespace YoloSharp.Data
 			}
 			else
 			{
-
 				string path = Path.Combine(rootPath, dataPath);
 				if (Directory.Exists(path))
 				{
@@ -74,6 +73,16 @@ namespace YoloSharp.Data
 					}).Select(line => Path.IsPathRooted(line) ? Path.GetFullPath(line) : Path.GetFullPath(Path.Combine(rootPath, line.Trim()))).ToArray();
 
 					imageFiles.AddRange(imagesFileNames);
+				}
+			}
+
+			if (taskType == TaskType.Classification)
+			{
+				ClasssNames = new List<string>();
+				DirectoryInfo[] Directories = Directory.GetParent(imageFiles[0]).Parent.GetDirectories();
+				foreach (DirectoryInfo Directory in Directories)
+				{
+					ClasssNames.Add(Directory.Name);
 				}
 			}
 
@@ -122,6 +131,15 @@ namespace YoloSharp.Data
 
 		public ImageData GetImageAndLabelData(long index)
 		{
+			if (taskType == TaskType.Classification)
+			{
+				if (imageProcessType == ImageProcessType.Mosiac)
+				{
+					throw new Exception($"The image process type mosaic is not suit for classification.");
+				}
+				return GetImageAndLabelDataForClassification(index);
+			}
+
 			return imageProcessType switch
 			{
 				ImageProcessType.Letterbox => GetImageAndLabelDataWithLetterBox(index),
@@ -462,7 +480,6 @@ namespace YoloSharp.Data
 			return list.ToArray();
 		}
 
-
 		private void DrawResizedLabels(ImageData data, bool drawSegment = false)
 		{
 			Mat resizedImage = data.ResizedImage;
@@ -508,7 +525,37 @@ namespace YoloSharp.Data
 
 		}
 
+		private ImageData GetImageAndLabelDataForClassification(long index)
+		{
+			string imageFileName = imageFiles[(int)index];
+			string labelName = Directory.GetParent(imageFileName).Name;
+			int id = ClasssNames.IndexOf(labelName);
+			Mat orgImage = Cv2.ImRead(imageFileName);
+			Mat resized = new Mat();
+			Cv2.Resize(orgImage, resized, new OpenCvSharp.Size(imageSize, imageSize));
 
+			ImageData imageData = new ImageData
+			{
+				ImagePath = imageFileName,
+				OrgWidth = orgImage.Width,
+				OrgHeight = orgImage.Height,
+				OrgLabels = new List<LabelData>()
+				{
+					new LabelData()
+					{
+						LabelID = id
+					}
+				}
+			};
+
+			imageData.ResizedImage = resized;
+			imageData.ResizedLabels = new List<LabelData>();
+			imageData.ResizedLabels.Add(new LabelData()
+			{
+				LabelID = id
+			});
+			return imageData;
+		}
 
 	}
 }

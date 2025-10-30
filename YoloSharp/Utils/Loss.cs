@@ -1050,6 +1050,23 @@ namespace YoloSharp.Utils
 			}
 		}
 
+		/// <summary>
+		/// Criterion class for computing training losses for classification.
+		/// </summary>
+		internal class V8ClassificationLoss : Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)>
+		{
+			internal V8ClassificationLoss() : base(nameof(V8ClassificationLoss))
+			{
+
+			}
+
+			public override (Tensor loss, Tensor loss_items) forward(Tensor[] preds, Dictionary<string, Tensor> batch)
+			{
+				torch.Tensor loss = torch.nn.functional.cross_entropy(preds[0], batch["cls"].squeeze(-1), reduction: Reduction.Mean);
+				return (loss.sum(), loss);
+			}
+		}
+
 	}
 }
 
