@@ -133,10 +133,6 @@ namespace YoloSharp.Data
 		{
 			if (taskType == TaskType.Classification)
 			{
-				if (imageProcessType == ImageProcessType.Mosiac)
-				{
-					throw new Exception($"The image process type mosaic is not suit for classification.");
-				}
 				return GetImageAndLabelDataForClassification(index);
 			}
 
