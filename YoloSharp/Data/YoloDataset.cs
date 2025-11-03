@@ -59,9 +59,9 @@ namespace YoloSharp.Data
 				{
 					if (!File.Exists(path))
 					{
-						throw new FileNotFoundException($"The file {dataPath} does not exist.");
+						throw new FileNotFoundException($"The file {path} does not exist.");
 					}
-					string[] imagesFileNames = File.ReadAllLines(dataPath).Where(line =>
+					string[] imagesFileNames = File.ReadAllLines(path).Where(line =>
 					{
 						string trimmedLine = line.Trim();
 						if (string.IsNullOrEmpty(trimmedLine))

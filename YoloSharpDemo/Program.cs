@@ -9,8 +9,8 @@ namespace YoloSharpDemo
 		static void Main(string[] args)
 		{
 			string rootPath = @"..\..\..\Assets\DataSets\coco128"; // Training data path, it should be the same as coco dataset.
-			string trainDataPath = Path.Combine(rootPath, "train.txt"); // If trainDataPath is "", it will use rootPath as training data.
-			string valDataPath = Path.Combine(rootPath, "val.txt");// If valDataPath is "", it will use rootPath as validation data.
+			string trainDataPath ="train.txt"; // If trainDataPath is "", it will use rootPath as training data.
+			string valDataPath = "val.txt";// If valDataPath is "", it will use rootPath as validation data.
 			string outputPath = "result";    // Trained model output path.
 			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n.bin"; // Pretrained model path.
 			string predictImagePath = @"..\..\..\Assets\TestImage\zidane.jpg";
