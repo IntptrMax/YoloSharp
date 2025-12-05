@@ -3,13 +3,17 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+
 using TorchSharp;
 using TorchSharp.Modules;
+
 using YoloSharp.Data;
 using YoloSharp.Types;
 using YoloSharp.Utils;
+
 using static TorchSharp.torch;
 using static TorchSharp.torch.optim;
+
 using DeviceType = YoloSharp.Types.DeviceType;
 using ScalarType = YoloSharp.Types.ScalarType;
 
@@ -79,6 +83,11 @@ namespace YoloSharp.Models
             Console.WriteLine($"Number Classes is: {yolo.SortCount}");
             Console.WriteLine("Model will be write to: " + outputPath);
 
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             YoloDataset trainDataSet = new YoloDataset(rootPath, trainDataPath, imageSize, yolo.TaskType, imageProcessType);
             if (trainDataSet.Count == 0)
             {
@@ -110,7 +119,11 @@ namespace YoloSharp.Models
             yolo.Model.train(true);
             for (int epoch = 0; epoch < epochs; epoch++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 progress?.Report(new TrainingProgressInfo
                 {
                     Epoch = epoch + 1,
@@ -124,7 +137,11 @@ namespace YoloSharp.Models
                 int step = 0;
                 foreach (var data in trainDataLoader)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
                     using (NewDisposeScope())
                     {
                         step++;
@@ -157,7 +174,11 @@ namespace YoloSharp.Models
                 }
                 lr_scheduler.step();
 
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 progress?.Report(new TrainingProgressInfo
                 {
                     Epoch = epoch + 1,
@@ -180,7 +201,10 @@ namespace YoloSharp.Models
                     Phase = TrainingPhase.Validation
                 });
 
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
                 if (!Directory.Exists(outputPath))
                 {
                     Directory.CreateDirectory(outputPath);
@@ -218,7 +242,10 @@ namespace YoloSharp.Models
             float lossValue = float.MaxValue;
             foreach (var data in valDataLoader)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
                 using (NewDisposeScope())
                 using (no_grad())
                 {
