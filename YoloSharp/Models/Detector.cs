@@ -65,7 +65,7 @@ namespace YoloSharp.Models
 				for (int i = 0; i < indexs.Length; i++)
 				{
 					ImageData imageData = dataset.GetImageAndLabelData(indexs[i]);
-					images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
+					images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(dtype, device).unsqueeze(0) / 255.0f;
 					if (imageData.ResizedLabels is not null)
 					{
 						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));

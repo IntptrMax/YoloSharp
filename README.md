@@ -1,4 +1,4 @@
-# YoloSharp
+﻿# YoloSharp
 
 Train Yolo model in C# with TorchSharp. <br/>
 With the help of this project you won't have to transform .pt model to onnx, and can train your own model in C# and don't have to install python.
@@ -15,10 +15,16 @@ With the help of this project you won't have to transform .pt model to onnx, and
 - Support Load PreTrained models from ultralytics yolov5/yolov8/yolo11 and yolov12(converted).
 - Support .Net6 or higher.
 
+## 🔥Important News  
+
+**2026/01/20**  
+  🚀 YoloSharp support **Mixed Precision Trainer**  (simple amp)  
+  🚀 **Tqdm** supported.  
+  🚀 Add BF16 Precision.
+
 ## Models
 
-You can download yolo pre-trained models here.
-
+You can download yolo pre-trained models here.  
 <details>
   <summary>Prediction Checkpoints</summary>
 
@@ -56,6 +62,7 @@ You can use it with the code below:
 ### Yolo Task
 
 ```CSharp
+
 // Create a yolo task.
 YoloTask yoloTask = new YoloTask(taskType, numberClass, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype, keyPointShape: keyPointShape);
 
@@ -69,17 +76,16 @@ yoloTask.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, ima
 List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage, predictThreshold, iouThreshold);
 
 ```
+
 <br/>
 
 Use yolov8n pre-trained model to detect.
 
 ![image](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/zidane.jpg)
 
-
 Use yolov8n-seg pre-trained model to detect.
 
 ![pred_seg](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/bus.jpg)
-
 
 Use yolov8n-obb pre-trained model to detect.
 

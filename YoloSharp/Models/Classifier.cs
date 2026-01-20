@@ -71,7 +71,7 @@ namespace YoloSharp.Models
 				Tensor cls_tensor = tensor(cls, dtype: torch.ScalarType.Int64, device: device);
 				Tensor imageTensor = concat(images);
 				torchvision.ITransform transformer = torchvision.transforms.Compose(transformers);
-				imageTensor = transformer.call(imageTensor);
+				imageTensor = transformer.call(imageTensor).to(dtype,device);
 
 				Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
 				{

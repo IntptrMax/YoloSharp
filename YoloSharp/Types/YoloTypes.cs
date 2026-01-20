@@ -39,6 +39,7 @@
 	{
 		Float32 = 6,
 		Float16 = 5,
+		BFloat16 = 15,
 	}
 
 	/// <summary>
