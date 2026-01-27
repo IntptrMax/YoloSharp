@@ -8,29 +8,37 @@ namespace YoloSharpDemo
 	{
 		static void Main(string[] args)
 		{
-			string rootPath = @"..\..\..\Assets\DataSets\coco128"; // Training data path, it should be the same as coco dataset.
+			//Mat mat = Cv2.GetRotationMatrix2D(new Point(0, 0), 0, 1.2298317482601286);
+			//double[] data = new double[mat.Total() * mat.Channels()];
+			//long[] shape = new long[] { mat.Rows, mat.Cols, mat.Channels() };
+			//Marshal.Copy(mat.Data, data, 0, data.Length);
+			//var tensor = TorchSharp.torch.tensor(data, shape);
+			//TorchSharp.torch.Tensor t = tensor.permute(new long[] { 2, 0, 1 }).to_type(TorchSharp.torch.float32);
+
+			string rootPath = @"..\..\..\Assets\DataSets\dotav1"; // Training data path, it should be the same as coco dataset.
 			string trainDataPath = "train.txt"; // If trainDataPath is "", it will use rootPath as training data.
 			string valDataPath = "val.txt";// If valDataPath is "", it will use rootPath as validation data.
 			string outputPath = Path.Combine("result", DateTime.Now.ToString("yyyyMMddHHmmss"));    // Trained model output path.
-			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n.bin"; // Pretrained model path.
-			string predictImagePath = @"..\..\..\Assets\TestImage\zidane.jpg";
+			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-obb.bin"; // Pretrained model path.
+			string predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
 			int batchSize = 16;
-			int numberClass = 80;
-			int epochs = 100;
+			int numberClass = 15;
+			int epochs = 20;
 			int imageSize = 640;
 			float predictThreshold = 0.3f;
 			float iouThreshold = 0.7f;
 			float lr = 1e-4f;
+			int workers = Math.Min(Environment.ProcessorCount / 2, 4);
 
 			// For pose estimation, number of keypoints and each keypoint has (x, y, visibility score)
 			int[] keyPointShape = new int[] { 17, 3 };
 
 			YoloType yoloType = YoloType.Yolov8;
 			DeviceType deviceType = DeviceType.CUDA;
-			ScalarType dtype = ScalarType.Float16;
+			ScalarType dtype = ScalarType.Float32;
 			YoloSize yoloSize = YoloSize.n;
 			ImageProcessType imageProcessType = ImageProcessType.Mosiac;
-			TaskType taskType = TaskType.Detection;
+			TaskType taskType = TaskType.Obb;
 
 			Mat predictImage = Cv2.ImRead(predictImagePath);
 
@@ -41,7 +49,7 @@ namespace YoloSharpDemo
 			yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
 			// Train model
-			yoloTask.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, imageSize: imageSize, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType, lr: lr);
+			yoloTask.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, imageSize: imageSize, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType, lr: lr, numWorkers: workers);
 
 			// Predict image, if the model is not trained or loaded, it will use random weight to predict.
 			List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage, predictThreshold, iouThreshold);

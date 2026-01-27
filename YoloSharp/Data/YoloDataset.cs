@@ -1,6 +1,8 @@
 ﻿using OpenCvSharp;
+using SkiaSharp;
 using TorchSharp;
 using YoloSharp.Types;
+using YoloSharp.Utils;
 using static TorchSharp.torch;
 
 namespace YoloSharp.Data
@@ -15,6 +17,8 @@ namespace YoloSharp.Data
 		public ImageProcessType ImageProcessType => imageProcessType;
 		private TaskType taskType = TaskType.Detection;
 		List<string> ClasssNames;
+
+		int kpt_count = 0;
 
 		public YoloDataset(string rootPath, string dataPath = "", int imageSize = 640, TaskType taskType = TaskType.Detection, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
 		{
@@ -115,9 +119,12 @@ namespace YoloSharp.Data
 
 		public override Dictionary<string, Tensor> GetTensor(long index)
 		{
-			Dictionary<string, Tensor> outputs = new Dictionary<string, Tensor>();
-			outputs.Add("index", tensor(index));
-			return outputs;
+			//Dictionary<string, Tensor> outputs = new Dictionary<string, Tensor>();
+			//outputs.Add("index", tensor(index));
+			//return outputs;
+
+
+			return GetTargets(index);
 		}
 
 		public static Mat GetMaskFromOutlinePoints(Point[] points, int width, int height)
@@ -253,6 +260,7 @@ namespace YoloSharp.Data
 										Height = float.Parse(parts[4]) * orgHeight,
 									};
 									int pointCount = (parts.Length - 5) / 3;
+									kpt_count = pointCount;
 									Types.KeyPoint[] keyPoints = new Types.KeyPoint[pointCount];
 									for (int i = 0; i < pointCount; i++)
 									{
@@ -551,6 +559,92 @@ namespace YoloSharp.Data
 				LabelID = id
 			});
 			return imageData;
+		}
+
+		internal Dictionary<string, Tensor> GetTargets(long index)
+		{
+			using (NewDisposeScope())
+			using (no_grad())
+			{
+				ImageData imageData = GetImageAndLabelData(index);
+				int maskSize = imageSize / 4;
+				int c = imageData.ResizedLabels.Count;
+
+				Tensor imageTensor = Lib.GetTensorFromImage(imageData.ResizedImage).unsqueeze(0) / 255.0f;
+
+				Tensor cls_tensor = c > 0 ? tensor(imageData.ResizedLabels.Select(x => (float)x.LabelID).ToArray()).unsqueeze(-1) : tensor(new float[0, 1]);
+
+				if (TaskType.Classification == taskType)
+				{
+					cls_tensor = tensor(imageData.ResizedLabels.Select(x => (float)x.LabelID).ToArray(),torch.ScalarType.Int64);
+					return new Dictionary<string, Tensor>()
+					{
+						{ "cls", cls_tensor.MoveToOuterDisposeScope() },
+						{ "images", imageTensor.MoveToOuterDisposeScope()},
+					};
+				}
+
+				Tensor bboxes_tensor = taskType switch
+				{
+					TaskType.Obb => imageData.ResizedLabels.Count > 0 ? cat(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX / imageSize, x.CenterY / imageSize, x.Width / imageSize, x.Height / imageSize, x.Radian }).unsqueeze(0)).ToArray(), 0) : tensor(new float[0, 5]),
+					_ => imageData.ResizedLabels.Count > 0 ? cat(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height }).unsqueeze(0)).ToArray(), 0) / imageSize : tensor(new float[0, 4]),
+				};
+
+				Tensor mask_tensor = torch.zeros(new long[] { 0, 1, maskSize, maskSize });
+
+				if (TaskType.Segmentation == taskType)
+				{
+					using (Mat maskMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(0)))
+					{
+						for (int j = 0; j < imageData.ResizedLabels.Count; j++)
+						{
+							Point[] points = imageData.ResizedLabels[j].MaskOutLine.Select(p => p.Multiply((float)maskSize / imageSize)).ToArray();
+							using (Mat eachMaskMat = YoloDataset.GetMaskFromOutlinePoints(points, maskSize, maskSize))
+							using (Mat foreMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(j + 1f)))
+							{
+								foreMat.CopyTo(maskMat, eachMaskMat);
+							}
+						}
+						mask_tensor = Lib.GetTensorFromImage(maskMat, torchvision.io.ImageReadMode.GRAY).unsqueeze(0);
+					}
+				}
+
+				Tensor kpt_tensor = torch.zeros(new long[] { 0, kpt_count, 3 });
+				if (TaskType.Pose == taskType)
+				{
+					List<Tensor> kpts = new List<Tensor>();
+					imageData.ResizedLabels.Select(x =>
+					{
+						float[] kpt_array = new float[x.KeyPoints.Count() * 3];
+						for (int j = 0; j < x.KeyPoints.Count(); j++)
+						{
+							kpt_array[j * 3] = x.KeyPoints[j].X / imageData.ResizedImage.Width;
+							kpt_array[j * 3 + 1] = x.KeyPoints[j].Y / imageData.ResizedImage.Height;
+							kpt_array[j * 3 + 2] = x.KeyPoints[j].VisibilityScore;
+						}
+						return tensor(kpt_array).view(x.KeyPoints.Count(), 3);
+					}).ToList().ForEach(x => kpts.Add(x.unsqueeze(0)));
+					if (kpts.Count > 0)
+					{
+						kpt_tensor = cat(kpts.ToArray(), 0);
+					}
+				}
+
+				Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
+				{
+					{ "cls", cls_tensor.MoveToOuterDisposeScope() },
+					{ "bboxes", bboxes_tensor.MoveToOuterDisposeScope() },
+					{ "images", imageTensor.MoveToOuterDisposeScope()},
+					{ "masks", mask_tensor.MoveToOuterDisposeScope()},
+					{ "keypoints", kpt_tensor.MoveToOuterDisposeScope()}
+				};
+
+
+
+
+				GC.Collect();
+				return targets;
+			}
 		}
 
 	}

@@ -12,6 +12,7 @@ public class MixedPrecisionTrainer : IDisposable
 	private bool _foundInf;
 	private Device _device;
 	private ScalarType _precision;
+	private bool _isMixedPrecision;
 
 	public MixedPrecisionTrainer(
 		float initScale = 65536.0f,
@@ -19,11 +20,11 @@ public class MixedPrecisionTrainer : IDisposable
 		float backoffFactor = 0.5f,
 		int growthInterval = 2000,
 		Device device = null,
-		ScalarType precision = ScalarType.Float16)
+		ScalarType precision = ScalarType.Float32)  
 	{
-		if (precision != ScalarType.Float16 && precision != ScalarType.BFloat16)
+		if (precision != ScalarType.Float16 && precision != ScalarType.BFloat16 && precision != ScalarType.Float32)
 		{
-			throw new ArgumentException("Precision must be either Float16 or BFloat16", nameof(precision));
+			throw new ArgumentException("Precision must be Float16, BFloat16, or Float32", nameof(precision));
 		}
 
 		_lossScale = initScale;
@@ -34,29 +35,37 @@ public class MixedPrecisionTrainer : IDisposable
 		_foundInf = false;
 		_device = device ?? (torch.cuda_is_available() ? CUDA : CPU);
 		_precision = precision;
+		_isMixedPrecision = (precision == ScalarType.Float16 || precision == ScalarType.BFloat16);
 
-
+		if (!_isMixedPrecision)
+		{
+			_lossScale = 1.0f;
+		}
 	}
 
 	public ScalarType Precision => _precision;
+	public bool IsMixedPrecision => _isMixedPrecision;
 
 	// Scale Loss
 	public Tensor ScaleLoss(Tensor loss)
 	{
+		if (!_isMixedPrecision)
+			return loss;
+
 		return loss * _lossScale;
 	}
 
 	// Scale Gradients
 	public void ScaleGradients(IEnumerable<TorchSharp.Modules.Parameter> parameters)
 	{
-		if (!_foundInf)
+		if (!_isMixedPrecision || _foundInf)
+			return;
+
+		foreach (var param in parameters)
 		{
-			foreach (var param in parameters)
+			if (param.grad is not null)
 			{
-				if (param.grad is not null)
-				{
-					param.grad.mul_(_lossScale);
-				}
+				param.grad.mul_(_lossScale);
 			}
 		}
 	}
@@ -64,6 +73,9 @@ public class MixedPrecisionTrainer : IDisposable
 	// Unscale Gradients
 	public void UnscaleGradients(IEnumerable<TorchSharp.Modules.Parameter> parameters)
 	{
+		if (!_isMixedPrecision)
+			return;
+
 		var invScale = 1.0f / _lossScale;
 		foreach (var param in parameters)
 		{
@@ -100,6 +112,9 @@ public class MixedPrecisionTrainer : IDisposable
 	// Update Scaler
 	public void Update()
 	{
+		if (!_isMixedPrecision)
+			return;
+
 		_growthCounter++;
 
 		if (_foundInf)
@@ -127,6 +142,9 @@ public class MixedPrecisionTrainer : IDisposable
 	// Change tensor to mixed
 	public Tensor ToMixedPrecision(Tensor tensor)
 	{
+		if (!_isMixedPrecision)
+			return tensor;
+
 		if (tensor.dtype == ScalarType.Float32)
 		{
 			return tensor.to(_precision, copy: true);
@@ -137,6 +155,9 @@ public class MixedPrecisionTrainer : IDisposable
 	// Change the tensor to Float
 	public Tensor ToFloat32(Tensor tensor)
 	{
+		if (!_isMixedPrecision)
+			return tensor;
+
 		if (tensor.dtype == _precision)
 		{
 			return tensor.to(ScalarType.Float32, copy: true);
@@ -149,7 +170,6 @@ public class MixedPrecisionTrainer : IDisposable
 
 	public void Dispose()
 	{
-		
 	}
 }
 
@@ -160,11 +180,12 @@ public class AMPWrapper : IDisposable
 	private Optimizer _optimizer;
 	private Dictionary<string, Tensor> _originalWeights;
 	private bool _weightsConverted;
+	private bool _isMixedPrecision;
 
 	public AMPWrapper(
 		torch.nn.Module<Tensor, Tensor[]> model,
 		Optimizer optimizer,
-		ScalarType precision = ScalarType.Float16,
+		ScalarType precision = ScalarType.Float32,  
 		Device device = null)
 	{
 		_model = model;
@@ -172,21 +193,21 @@ public class AMPWrapper : IDisposable
 		_scaler = new MixedPrecisionTrainer(precision: precision, device: device);
 		_originalWeights = new Dictionary<string, Tensor>();
 		_weightsConverted = false;
+		_isMixedPrecision = _scaler.IsMixedPrecision;
 	}
 
 	// Convert the weight to Mixed
 	private void ConvertWeightsToMixedPrecision()
 	{
-		if (_weightsConverted) return;
+		if (!_isMixedPrecision || _weightsConverted)
+			return;
 
 		foreach (var (name, param) in _model.named_parameters())
 		{
 			if (param.dtype == ScalarType.Float32)
 			{
-				// Get the org weight
 				_originalWeights[name] = param.detach().clone();
 
-				// Convert to mixed weight
 				var mixedPrecisionParam = param.to(_scaler.Precision);
 				param.set_(mixedPrecisionParam);
 			}
@@ -198,18 +219,19 @@ public class AMPWrapper : IDisposable
 	// Restore Weights To Float
 	private void RestoreWeightsToFloat32()
 	{
-		if (!_weightsConverted) return;
+		if (!_isMixedPrecision || !_weightsConverted)
+			return;
 
 		foreach (var (name, original) in _originalWeights)
 		{
-			var param = _model.named_parameters().FirstOrDefault(a => a.name == name).parameter;
-			if (param.IsInvalid)
+			var namedParam = _model.named_parameters().FirstOrDefault(a => a.name == name);
+			if (namedParam.parameter is not null && !namedParam.parameter.IsInvalid)
 			{
+				var param = namedParam.parameter;
 				param.set_(original);
 			}
 		}
 
-		// Clean the cache
 		foreach (var weight in _originalWeights.Values)
 		{
 			weight.Dispose();
@@ -220,35 +242,44 @@ public class AMPWrapper : IDisposable
 
 	public Tensor[] Forward(Tensor input)
 	{
-		// Convert the weight to float
-		ConvertWeightsToMixedPrecision();
-
-		// Convert the weight to mixed
-		Tensor inputMixed = _scaler.ToMixedPrecision(input);
-
-		try
+		if (_isMixedPrecision)
 		{
-			// Foward with mixed weight.
-			var output = _model.forward(inputMixed);
+			ConvertWeightsToMixedPrecision();
+			Tensor inputMixed = _scaler.ToMixedPrecision(input);
 
-			// Convert the weight to float
-			return output.Select(_scaler.ToFloat32).ToArray();
-		}
-		finally
-		{
-			// Clean the cache
-			if (inputMixed.Handle == input.Handle)
+			try
 			{
-				inputMixed.Dispose();
+				var output = _model.forward(inputMixed);
+				return output.Select(_scaler.ToFloat32).ToArray();
 			}
+			finally
+			{
+				if (inputMixed.Handle != input.Handle)
+				{
+					inputMixed.Dispose();
+				}
+			}
+		}
+		else
+		{
+			return _model.forward(input).ToArray();
 		}
 	}
 
 	// Forward
 	public Tensor[] Forward(IEnumerable<Tensor> inputs)
 	{
-		ConvertWeightsToMixedPrecision();
+		if (!_isMixedPrecision)
+		{
+			var opts = new List<Tensor>();
+			foreach (var input in inputs)
+			{
+				opts.AddRange(_model.forward(input));
+			}
+			return opts.ToArray();
+		}
 
+		ConvertWeightsToMixedPrecision();
 		var mixedInputs = inputs.Select(_scaler.ToMixedPrecision).ToList();
 		var outputs = new List<Tensor>();
 
@@ -262,10 +293,9 @@ public class AMPWrapper : IDisposable
 		}
 		finally
 		{
-			// Clean the cache.
 			foreach (var input in mixedInputs)
 			{
-				if (input.IsInvalid)
+				if (input.Handle != inputs.ElementAt(mixedInputs.IndexOf(input)).Handle)
 				{
 					input.Dispose();
 				}
@@ -284,42 +314,48 @@ public class AMPWrapper : IDisposable
 
 		try
 		{
-			// scale Loss
-			var scaledLoss = _scaler.ScaleLoss(loss);
-
-			// Get the backward
-			scaledLoss.backward();
-
-			// Check Gradients if is Inf or Nan
-			bool hasInfNan = _scaler.CheckGradientsForInfNan(_model.parameters());
-
-			if (!hasInfNan)
+			if (_isMixedPrecision)
 			{
-				// Cancel the scale to grad.
-				_scaler.UnscaleGradients(_model.parameters());
+				var scaledLoss = _scaler.ScaleLoss(loss);
+				scaledLoss.backward();
 
-				// Opt
-				_optimizer.step();
+				bool hasInfNan = _scaler.CheckGradientsForInfNan(_model.parameters());
+
+				if (!hasInfNan)
+				{
+					_scaler.UnscaleGradients(_model.parameters());
+					_optimizer.step();
+				}
+				else
+				{
+					_scaler.SkipStep(_optimizer);
+				}
+
+				_scaler.Update();
+
+				if (scaledLoss.Handle != loss.Handle)
+				{
+					scaledLoss.Dispose();
+				}
 			}
 			else
 			{
-				// Skip if is NaN or Inf
-				_scaler.SkipStep(_optimizer);
-			}
-
-			// Update the scaler.
-			_scaler.Update();
-
-			// 清除缩放损失
-			if (scaledLoss.Handle == loss.Handle)
-			{
-				scaledLoss.Dispose();
+				loss.backward();
+				_optimizer.step();
+				_optimizer.zero_grad();
 			}
 		}
 		catch (Exception ex)
 		{
 			Console.WriteLine($"Error in training step: {ex.Message}");
-			_scaler.SkipStep(_optimizer);
+			if (_isMixedPrecision)
+			{
+				_scaler.SkipStep(_optimizer);
+			}
+			else
+			{
+				_optimizer.zero_grad();
+			}
 			throw;
 		}
 	}
@@ -328,31 +364,50 @@ public class AMPWrapper : IDisposable
 	public Tensor[] TrainStep(Tensor input, Tensor target, Func<Tensor[], Tensor, Tensor> lossFunction)
 	{
 		var outputs = Forward(input);
-
 		var loss = lossFunction(outputs, target);
 		Step(loss);
-
 		return outputs;
 	}
 
 	// Eval
 	public Tensor[] Evaluate(Tensor input)
 	{
-		RestoreWeightsToFloat32();
-
-		try
+		if (_isMixedPrecision)
+		{
+			RestoreWeightsToFloat32();
+			try
+			{
+				return _model.forward(input).ToArray();
+			}
+			finally
+			{
+				ConvertWeightsToMixedPrecision();
+			}
+		}
+		else
 		{
 			return _model.forward(input).ToArray();
 		}
-		finally
+	}
+
+	public void TrainStepFloat32(Tensor input, Tensor target, Func<Tensor[], Tensor, Tensor> lossFunction)
+	{
+		if (_isMixedPrecision)
 		{
-			ConvertWeightsToMixedPrecision();
+			RestoreWeightsToFloat32();
 		}
+
+		var outputs = _model.forward(input).ToArray();
+		var loss = lossFunction(outputs, target);
+
+		loss.backward();
+		_optimizer.step();
+		_optimizer.zero_grad();
 	}
 
 	public MixedPrecisionTrainer Scaler => _scaler;
-
 	public ScalarType Precision => _scaler.Precision;
+	public bool IsMixedPrecision => _isMixedPrecision;
 
 	public void Dispose()
 	{

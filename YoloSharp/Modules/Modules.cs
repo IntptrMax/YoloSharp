@@ -713,7 +713,6 @@ namespace YoloSharp.Modules
 				Tensor x = arange(c1, device: device, dtype: dtype);
 				conv.weight = Parameter(x.view(1, c1, 1, 1));
 				this.c1 = c1;
-
 				RegisterComponents();
 			}
 
