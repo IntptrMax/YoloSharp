@@ -122,14 +122,14 @@ public class MixedPrecisionTrainer : IDisposable
 			// If is Inf or NaN, reduce the scale.
 			_lossScale = _lossScale * _backoffFactor;
 			_growthCounter = 0;
-			Console.WriteLine($"Reducing loss scale to: {_lossScale}");
+			//Console.Write($"Reducing loss scale to: {_lossScale}");
 		}
 		else if (_growthCounter >= _growthInterval)
 		{
 			// If there is a long time with no Inf or NaN, upscale the scale.
 			_lossScale = _lossScale * _growthFactor;
 			_growthCounter = 0;
-			Console.WriteLine($"Increasing loss scale to: {_lossScale}");
+			//Console.Write($"Increasing loss scale to: {_lossScale}");
 		}
 	}
 

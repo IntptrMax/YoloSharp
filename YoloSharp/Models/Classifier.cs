@@ -17,6 +17,7 @@ namespace YoloSharp.Models
 			this.sortCount = numberClasses;
 			this.yoloType = yoloType;
 			this.taskType = TaskType.Classification;
+			this.yoloSize = yoloSize;
 
 			yolo = yoloType switch
 			{
@@ -36,7 +37,7 @@ namespace YoloSharp.Models
 			// Tools.TransModelFromSafetensors(yolo, @".\yolov8n-cls.safetensors", @".\PreTrainedModels\yolov8n-cls.bin");
 		}
 
-		internal override Dictionary<string, torch.Tensor> GetTargets(long[] indexs, YoloDataset dataset)
+		internal  Dictionary<string, torch.Tensor> GetTargets(long[] indexs, YoloDataset dataset)
 		{
 			using (NewDisposeScope())
 			using (no_grad())

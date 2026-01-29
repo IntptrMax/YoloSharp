@@ -1,5 +1,4 @@
 ﻿using TorchSharp;
-using YoloSharp.Data;
 using YoloSharp.Types;
 using YoloSharp.Utils;
 using static TorchSharp.torch;
@@ -22,6 +21,7 @@ namespace YoloSharp.Models
 			this.sortCount = numberClasses;
 			this.yoloType = yoloType;
 			this.taskType = TaskType.Obb;
+			this.yoloSize = yoloSize;
 
 			yolo = yoloType switch
 			{
@@ -78,44 +78,6 @@ namespace YoloSharp.Models
 					}
 				}
 				return results;
-			}
-		}
-
-		internal override Dictionary<string, Tensor> GetTargets(long[] indexs, YoloDataset dataset)
-		{
-			using (NewDisposeScope())
-			using (no_grad())
-			{
-				Tensor[] images = new Tensor[indexs.Length];
-				List<float> batch_idx = new List<float>();
-				List<float> cls = new List<float>();
-				List<Tensor> bboxes = new List<Tensor>();
-				for (int i = 0; i < indexs.Length; i++)
-				{
-					ImageData imageData = dataset.GetImageAndLabelData(indexs[i]);
-					images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(dtype, device).unsqueeze(0) / 255.0f;
-					if (imageData.ResizedLabels is not null)
-					{
-						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
-						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
-						bboxes.AddRange(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX / dataset.ImageSize, x.CenterY / dataset.ImageSize, x.Width / dataset.ImageSize, x.Height / dataset.ImageSize, x.Radian })));
-					}
-				}
-
-				Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
-				Tensor cls_tensor = tensor(cls, dtype: dtype, device: device).view(-1, 1);
-				Tensor bboxes_tensor = bboxes.Count == 0 ? zeros(new long[] { 0, 5 }) : stack(bboxes).to(dtype, device);
-				Tensor imageTensor = concat(images);
-
-				Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
-				{
-					{ "batch_idx", batch_idx_tensor.MoveToOuterDisposeScope() },
-					{ "cls", cls_tensor.MoveToOuterDisposeScope() },
-					{ "bboxes", bboxes_tensor.MoveToOuterDisposeScope() },
-					{ "images", imageTensor.MoveToOuterDisposeScope()}
-				};
-				GC.Collect();
-				return targets;
 			}
 		}
 

@@ -1,6 +1,4 @@
-﻿using OpenCvSharp;
-using TorchSharp;
-using YoloSharp.Data;
+﻿using TorchSharp;
 using YoloSharp.Types;
 using YoloSharp.Utils;
 using static TorchSharp.torch;
@@ -23,6 +21,7 @@ namespace YoloSharp.Models
 			this.sortCount = numberClasses;
 			this.yoloType = yoloType;
 			this.taskType = TaskType.Segmentation;
+			this.yoloSize = yoloSize;
 
 			yolo = yoloType switch
 			{
@@ -97,62 +96,6 @@ namespace YoloSharp.Models
 			}
 			return results;
 		}
-
-		internal override Dictionary<string, Tensor> GetTargets(long[] indexs, YoloDataset dataset)
-		{
-			int maskSize = dataset.ImageSize / 4;
-			using (NewDisposeScope())
-			using (no_grad())
-			{
-				Tensor[] images = new Tensor[indexs.Length];
-				Tensor[] masks = new Tensor[indexs.Length];
-				List<float> batch_idx = new List<float>();
-				List<float> cls = new List<float>();
-				List<Tensor> bboxes = new List<Tensor>();
-				for (int i = 0; i < indexs.Length; i++)
-				{
-					ImageData imageData = dataset.GetImageAndLabelData(indexs[i]);
-					images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(dtype, device).unsqueeze(0) / 255.0f;
-					if (imageData.ResizedLabels is not null)
-					{
-						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
-						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
-						bboxes.AddRange(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
-
-						using (Mat maskMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(0)))
-						{
-							for (int j = 0; j < imageData.ResizedLabels.Count; j++)
-							{
-								Point[] points = imageData.ResizedLabels[j].MaskOutLine.Select(p => p.Multiply((float)maskSize / dataset.ImageSize)).ToArray();
-								Mat eachMaskMat = YoloDataset.GetMaskFromOutlinePoints(points, maskSize, maskSize);
-								Mat foreMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(j + 1f));
-								foreMat.CopyTo(maskMat, eachMaskMat);
-							}
-							masks[i] = Lib.GetTensorFromImage(maskMat, torchvision.io.ImageReadMode.GRAY).to(device).unsqueeze(0);
-						}
-					}
-				}
-
-				Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
-				Tensor cls_tensor = tensor(cls, dtype: dtype, device: device).view(-1, 1);
-				Tensor bboxes_tensor = stack(bboxes).to(dtype, device) / dataset.ImageSize;
-				Tensor imageTensor = concat(images);
-
-				Tensor maskTensor = concat(masks);
-
-				Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
-				{
-					{ "batch_idx", batch_idx_tensor.MoveToOuterDisposeScope() },
-					{ "cls", cls_tensor.MoveToOuterDisposeScope() },
-					{ "bboxes", bboxes_tensor.MoveToOuterDisposeScope() },
-					{ "masks", maskTensor.MoveToOuterDisposeScope() },
-					{ "images", imageTensor.MoveToOuterDisposeScope() },
-				};
-				GC.Collect();
-				return targets;
-			}
-		}
-
 
 	}
 }

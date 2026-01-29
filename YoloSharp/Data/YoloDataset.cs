@@ -1,5 +1,4 @@
 ﻿using OpenCvSharp;
-using SkiaSharp;
 using TorchSharp;
 using YoloSharp.Types;
 using YoloSharp.Utils;
@@ -19,6 +18,8 @@ namespace YoloSharp.Data
 		List<string> ClasssNames;
 
 		int kpt_count = 0;
+
+		torchvision.ITransform transform;
 
 		public YoloDataset(string rootPath, string dataPath = "", int imageSize = 640, TaskType taskType = TaskType.Detection, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
 		{
@@ -88,11 +89,22 @@ namespace YoloSharp.Data
 				{
 					ClasssNames.Add(Directory.Name);
 				}
+				transform = torchvision.transforms.Compose(new torchvision.ITransform[] {
+						torchvision.transforms.Resize(imageSize+32,imageSize+32),
+						torchvision.transforms.RandomResizedCrop(imageSize, imageSize,0.9),
+						torchvision.transforms.RandomHorizontalFlip( 0.1),
+						torchvision.transforms.RandomVerticalFlip(0.1),
+						torchvision.transforms.RandomRotation(15),
+						torchvision.transforms.ColorJitter(brightness: 0.1f, contrast: 0.1f, saturation: 0.1f, hue: 0.02f),
+				});
 			}
 
 			this.imageSize = imageSize;
 			this.imageProcessType = imageProcessType;
 			this.taskType = taskType;
+
+
+
 		}
 
 		private string GetLabelFileNameFromImageName(string imageFileName)
@@ -568,15 +580,16 @@ namespace YoloSharp.Data
 			{
 				ImageData imageData = GetImageAndLabelData(index);
 				int maskSize = imageSize / 4;
-				int c = imageData.ResizedLabels.Count;
-
+				int count = (imageData.ResizedLabels?.Count).GetValueOrDefault();
 				Tensor imageTensor = Lib.GetTensorFromImage(imageData.ResizedImage).unsqueeze(0) / 255.0f;
 
-				Tensor cls_tensor = c > 0 ? tensor(imageData.ResizedLabels.Select(x => (float)x.LabelID).ToArray()).unsqueeze(-1) : tensor(new float[0, 1]);
+				Tensor cls_tensor = count > 0 ? tensor(imageData.ResizedLabels.Select(x => (float)x.LabelID).ToArray()).unsqueeze(-1) : tensor(new float[0, 1]);
 
 				if (TaskType.Classification == taskType)
 				{
-					cls_tensor = tensor(imageData.ResizedLabels.Select(x => (float)x.LabelID).ToArray(),torch.ScalarType.Int64);
+					cls_tensor = tensor(imageData.ResizedLabels.Select(x => (float)x.LabelID).ToArray(), torch.ScalarType.Int64);
+					imageTensor = transform.call(imageTensor);
+
 					return new Dictionary<string, Tensor>()
 					{
 						{ "cls", cls_tensor.MoveToOuterDisposeScope() },
@@ -586,8 +599,8 @@ namespace YoloSharp.Data
 
 				Tensor bboxes_tensor = taskType switch
 				{
-					TaskType.Obb => imageData.ResizedLabels.Count > 0 ? cat(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX / imageSize, x.CenterY / imageSize, x.Width / imageSize, x.Height / imageSize, x.Radian }).unsqueeze(0)).ToArray(), 0) : tensor(new float[0, 5]),
-					_ => imageData.ResizedLabels.Count > 0 ? cat(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height }).unsqueeze(0)).ToArray(), 0) / imageSize : tensor(new float[0, 4]),
+					TaskType.Obb => count > 0 ? cat(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX / imageSize, x.CenterY / imageSize, x.Width / imageSize, x.Height / imageSize, x.Radian }).unsqueeze(0)).ToArray(), 0) : tensor(new float[0, 5]),
+					_ => count > 0 ? cat(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height }).unsqueeze(0)).ToArray(), 0) / imageSize : tensor(new float[0, 4]),
 				};
 
 				Tensor mask_tensor = torch.zeros(new long[] { 0, 1, maskSize, maskSize });
@@ -596,7 +609,7 @@ namespace YoloSharp.Data
 				{
 					using (Mat maskMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(0)))
 					{
-						for (int j = 0; j < imageData.ResizedLabels.Count; j++)
+						for (int j = 0; j < count; j++)
 						{
 							Point[] points = imageData.ResizedLabels[j].MaskOutLine.Select(p => p.Multiply((float)maskSize / imageSize)).ToArray();
 							using (Mat eachMaskMat = YoloDataset.GetMaskFromOutlinePoints(points, maskSize, maskSize))
@@ -638,9 +651,6 @@ namespace YoloSharp.Data
 					{ "masks", mask_tensor.MoveToOuterDisposeScope()},
 					{ "keypoints", kpt_tensor.MoveToOuterDisposeScope()}
 				};
-
-
-
 
 				GC.Collect();
 				return targets;

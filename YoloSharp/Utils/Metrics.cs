@@ -220,7 +220,7 @@ namespace YoloSharp.Utils
 						if (CIoU)  // https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
 						{
 							Tensor v = 4 / (MathF.PI * MathF.PI) * (atan(w2 / h2) - atan(w1 / h1)).pow(2);
-							
+
 							{
 								Tensor alpha = v / (v - iou + (1 + eps));
 								return (iou - (rho2 / c2 + v * alpha)).MoveToOuterDisposeScope();  //CIoU

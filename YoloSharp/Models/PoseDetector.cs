@@ -23,6 +23,7 @@ namespace YoloSharp.Models
 			this.yoloType = yoloType;
 			this.taskType = TaskType.Pose;
 			this.keyPointsShape = kpt_shape;
+			this.yoloSize = yoloSize;
 
 			yolo = yoloType switch
 			{
@@ -92,58 +93,6 @@ namespace YoloSharp.Models
 					}
 				}
 				return results;
-			}
-		}
-
-		internal override Dictionary<string, Tensor> GetTargets(long[] indexs, YoloDataset dataset)
-		{
-			using (NewDisposeScope())
-			using (no_grad())
-			{
-				Tensor[] images = new Tensor[indexs.Length];
-				List<float> batch_idx = new List<float>();
-				List<float> cls = new List<float>();
-				List<Tensor> bboxes = new List<Tensor>();
-				List<Tensor> kpts = new List<Tensor>();
-				for (int i = 0; i < indexs.Length; i++)
-				{
-					ImageData imageData = dataset.GetImageAndLabelData(indexs[i]);
-					images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(dtype, device).unsqueeze(0) / 255.0f;
-					if (imageData.ResizedLabels is not null)
-					{
-						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
-						cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
-						bboxes.AddRange(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX, x.CenterY, x.Width, x.Height })));
-						imageData.ResizedLabels.Select(x =>
-						{
-							float[] kpt_array = new float[x.KeyPoints.Count() * 3];
-							for (int j = 0; j < x.KeyPoints.Count(); j++)
-							{
-								kpt_array[j * 3] = x.KeyPoints[j].X / imageData.ResizedImage.Width;
-								kpt_array[j * 3 + 1] = x.KeyPoints[j].Y / imageData.ResizedImage.Height;
-								kpt_array[j * 3 + 2] = x.KeyPoints[j].VisibilityScore;
-							}
-							return tensor(kpt_array).view(x.KeyPoints.Count(), 3);
-						}).ToList().ForEach(x => kpts.Add(x.unsqueeze(0).to(dtype,device)));
-					}
-				}
-
-				Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
-				Tensor cls_tensor = tensor(cls, dtype: dtype, device: device).view(-1, 1);
-				Tensor bboxes_tensor = stack(bboxes).to(dtype, device) / dataset.ImageSize;
-				Tensor imageTensor = concat(images);
-				Tensor kpts_tensor = concat(kpts);
-
-				Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
-				{
-					{ "batch_idx", batch_idx_tensor.MoveToOuterDisposeScope() },
-					{ "cls", cls_tensor.MoveToOuterDisposeScope() },
-					{ "bboxes", bboxes_tensor.MoveToOuterDisposeScope() },
-					{ "images", imageTensor.MoveToOuterDisposeScope() },
-					{ "keypoints", kpts_tensor.MoveToOuterDisposeScope()}
-				};
-				GC.Collect();
-				return targets;
 			}
 		}
 

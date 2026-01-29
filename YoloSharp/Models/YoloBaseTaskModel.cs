@@ -1,4 +1,6 @@
 ﻿using Data;
+using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 using TorchSharp;
 using TorchSharp.Modules;
@@ -22,6 +24,7 @@ namespace YoloSharp.Models
 		protected Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> loss;
 		protected TaskType taskType;
 		protected int[] keyPointsShape;
+		protected YoloSize yoloSize;
 
 		internal virtual void LoadModel(string path, bool skipNcNotEqualLayers = false)
 		{
@@ -114,6 +117,8 @@ namespace YoloSharp.Models
 			Console.WriteLine($"Number Classes is: {sortCount}");
 			Console.WriteLine("Model will be write to: " + outputPath);
 
+			WriteSettings();
+
 			YoloDataset trainDataSet = new YoloDataset(rootPath, trainDataPath, imageSize, this.taskType, imageProcessType);
 			if (trainDataSet.Count == 0)
 			{
@@ -121,7 +126,6 @@ namespace YoloSharp.Models
 			}
 
 			YoloDataLoader trainDataLoader = new YoloDataLoader(trainDataSet, batchSize, num_worker: numWorkers, shuffle: true, device: device);
-
 			valDataPath = string.IsNullOrEmpty(valDataPath) ? trainDataPath : valDataPath;
 
 			YoloDataset valDataSet = new YoloDataset(rootPath, valDataPath, imageSize, this.taskType, imageProcessType);
@@ -130,112 +134,196 @@ namespace YoloSharp.Models
 				throw new FileNotFoundException("No data found in the path: " + rootPath);
 			}
 
-			YoloDataLoader valDataLoader = new YoloDataLoader(valDataSet, (int)Math.Ceiling(batchSize / 4f), num_worker: 0, shuffle: false, device: device);
+			YoloDataLoader valDataLoader = new YoloDataLoader(valDataSet, batchSize, num_worker: numWorkers, shuffle: false, device: device);
 
 			Optimizer optimizer = new SGD(yolo.parameters(), lr: lr, momentum: 0.937f, weight_decay: 5e-4);
 			lr_scheduler.LRScheduler lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max: 200);
 			float tempLoss = float.MaxValue;
-
 			Console.WriteLine();
-			var par = yolo.parameters();
-			yolo.train(true);
 
 			AMPWrapper amp = new AMPWrapper(yolo, optimizer, precision: dtype);
-
+			yolo.train();
+			string weightsPath = Path.Combine(outputPath, "weights");
 			for (int epoch = 1; epoch <= epochs; epoch++)
 			{
-				yolo.train();
-				//int step = 0;
-				float trainLoss = 0;
 				Console.WriteLine();
-				using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(trainDataLoader, desc: $"Epoch:{epoch,3}", total: (int)trainDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 30, showPartialChar: true))
+				switch (taskType)
 				{
-					foreach (Dictionary<string, Tensor> data in pbar)
-					{
-						using (NewDisposeScope())
-						{
-							if (data["batch_idx"].NumberOfElements == 0)
-							{
-								continue;
-							}
-							long c = data["images"].shape[0];
-
-							Tensor[] list = amp.Forward(data["images"].to(dtype));
-							(Tensor ls, Tensor ls_item) = loss.forward(list, data);
-
-							amp.Step(ls);
-
-							pbar.SetPostfix(
-								new (string key, object value)[]
-								{
-									("Loss", $"{ls.ToSingle() / c,6:F6}")
-								});
-							trainLoss = trainLoss + ls.ToSingle();
-							//pbar.Update();
-						}
-					}
+					case TaskType.Detection:
+					case TaskType.Obb:
+						Console.WriteLine("{0,10}{1,10}{2,10}{3,10}{4,11}{5,6}", "Epoch", "box_loss", "cls_loss", "dfl_loss", "Instances", "Size");
+						break;
+					case TaskType.Segmentation:
+						Console.WriteLine("{0,10}{1,10}{2,10}{3,10}{4,10}{5,11}{6,6}", "Epoch", "box_loss", "seg_loss", "cls_loss", "dfl_loss", "Instances", "Size");
+						break;
+					case TaskType.Pose:
+						Console.WriteLine("{0,10}{1,10}{2,10}{3,10}{4,10}{5,10}{6,11}{7,6}", "Epoch", "box_loss", "pose_loss", "kobj_loss", "cls_loss", "dfl_loss", "Instances", "Size");
+						break;
+					case TaskType.Classification:
+						Console.WriteLine("{0,10}{1,10}{2,11}{3,6}", "Epoch", "loss", "Instances", "Size");
+						break;
+					default:
+						throw new NotImplementedException("Not implemented task type: " + taskType);
 				}
-				trainLoss = trainLoss / trainDataSet.Count;
+				Stopwatch stopwatch = Stopwatch.StartNew();
+				float[] trainLoss_items = TrainEpoch(trainDataLoader, amp, epoch);
 				lr_scheduler.step();
-				//Console.Write("Do val now... ");
-				float valLoss = Val(valDataSet, valDataLoader, amp);
-				Console.WriteLine($"Epoch {epoch}/{epochs}, Train Loss:{trainLoss}, Val Loss: {valLoss}");
+				float[] valLoss_items = Val(valDataLoader, amp, epoch);
+				Console.WriteLine($"Epoch {epoch}/{epochs}, Train Loss:{trainLoss_items.Sum() / trainDataSet.Count}, Val Loss: {valLoss_items.Sum() / valDataSet.Count}");
+
+				if (!Directory.Exists(weightsPath))
+				{
+					Directory.CreateDirectory(weightsPath);
+				}
+
+				yolo.save(Path.Combine(weightsPath, "last.bin"));
+				if (tempLoss > valLoss_items.Sum())
+				{
+					Console.WriteLine("Get a better result, will be save to best.bin");
+					yolo.save(Path.Combine(weightsPath, "best.bin"));
+					tempLoss = valLoss_items.Sum();
+				}
+				Console.WriteLine();
+				stopwatch.Stop();
+				WriteLog(epoch, stopwatch.ElapsedMilliseconds / 1000f, trainLoss_items, valLoss_items);
+			}
+			Console.WriteLine("Train Done.");
+
+			void WriteLog(int epoch, float time, float[] trainLoss_Items, float[] valLoss_Items)
+			{
 				if (!Directory.Exists(outputPath))
 				{
 					Directory.CreateDirectory(outputPath);
 				}
-				yolo.save(Path.Combine(outputPath, "last.bin"));
-				if (tempLoss > valLoss)
+				string fileName = Path.Combine(outputPath, "log.csv");
+				StringBuilder stringBuilder = new StringBuilder();
+				if (!File.Exists(fileName))
 				{
-					Console.WriteLine("Get a better result, will be save to best.bin");
-					yolo.save(Path.Combine(outputPath, "best.bin"));
-					tempLoss = valLoss;
+					stringBuilder.Append("Epoch, Time, ");
+					stringBuilder.Append(taskType switch
+					{
+						TaskType.Detection or TaskType.Obb => "TrainBoxLoss, TrainClsLoss, TrainDflLoss, ValBoxLoss, ValClsLoss, ValDflLoss,",
+						TaskType.Segmentation => "TrainBoxLoss, TrainSegLoss, TrainClsLoss, TrainDflLoss, ValBoxLoss, ValSegLoss, ValClsLoss, ValDflLoss,",
+						TaskType.Pose => "TrainBoxLoss, TrainPoseLoss, TrainKobjLoss, TrainClsLoss, TrainDflLoss, ValBoxLoss, ValPoseLoss, ValKobjLoss, ValClsLoss, ValDflLoss,",
+						TaskType.Classification => "TrainLoss, ValLoss,",
+						_ => throw new NotImplementedException("Not implemented task type: " + taskType),
+					});
+					stringBuilder.AppendLine("TrainLoss, ValLoss");
 				}
-				Console.WriteLine();
+				//stringBuilder.AppendLine($"{epoch}, {time}, {trainLoss}, {valLoss}");
+				stringBuilder.Append($"{epoch}, {time}, ");
+				foreach (float item in trainLoss_Items)
+				{
+					stringBuilder.Append($"{item / trainDataSet.Count}, ");
+				}
+				foreach (float item in valLoss_Items)
+				{
+					stringBuilder.Append($"{item / valDataSet.Count}, ");
+				}
+				stringBuilder.AppendLine($"{trainLoss_Items.Sum() / trainDataSet.Count}, {valLoss_Items.Sum() / valDataSet.Count}");
+				File.AppendAllText(fileName, stringBuilder.ToString());
 			}
-			Console.WriteLine("Train Done.");
+
+			void WriteSettings()
+			{
+				if (!Directory.Exists(outputPath))
+				{
+					Directory.CreateDirectory(outputPath);
+				}
+				string fileName = Path.Combine(outputPath, "settings.txt");
+				StringBuilder stringBuilder = new StringBuilder();
+				stringBuilder.AppendLine("Training Settings:");
+				stringBuilder.AppendLine($"Date Time: {DateTime.Now}");
+				stringBuilder.AppendLine($"Yolo task type: {taskType}");
+				stringBuilder.AppendLine($"Yolo type: {yoloType}");
+				stringBuilder.AppendLine($"Yolo size: {yoloSize}");
+				stringBuilder.AppendLine($"Image Process Type: {imageProcessType}");
+				stringBuilder.AppendLine($"Precision type: {dtype}");
+				stringBuilder.AppendLine($"Device type: {device}");
+				stringBuilder.AppendLine($"Number Classes: {sortCount}");
+				stringBuilder.AppendLine($"Image Size: {imageSize}");
+				stringBuilder.AppendLine($"Epochs: {epochs}");
+				stringBuilder.AppendLine($"Learning Rate: {lr}");
+				stringBuilder.AppendLine($"Batch Size: {batchSize}");
+				stringBuilder.AppendLine($"Num Workers: {numWorkers}");
+				stringBuilder.AppendLine($"Root Path: {Path.GetFullPath(rootPath)}");
+				stringBuilder.AppendLine($"Train Data Path: {trainDataPath}");
+				stringBuilder.AppendLine($"Val Data Path: {valDataPath}");
+				File.WriteAllText(fileName, stringBuilder.ToString());
+			}
 		}
 
-		internal virtual float Val(YoloDataset valDataset, YoloDataLoader valDataLoader, AMPWrapper amp)
+		internal virtual float[] TrainEpoch(YoloDataLoader trainDataLoader, AMPWrapper amp, int epoch)
 		{
-			float lossValue = float.MaxValue;
-			int step = 0;
-			using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(valDataLoader, total: (int)valDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 30, showPartialChar: true))
+			using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(trainDataLoader, total: (int)trainDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
 			{
+				Tensor loss_items = null;
 				foreach (Dictionary<string, Tensor> data in pbar)
 				{
-					step++;
+					using (NewDisposeScope())
+					{
+						if (data["batch_idx"].NumberOfElements == 0)
+						{
+							continue;
+						}
+						Tensor[] list = amp.Forward(data["images"].to(dtype));
+						(Tensor ls, Tensor ls_item) = loss.forward(list.ToArray(), data);
+						if (loss_items is null)
+						{
+							loss_items = torch.zeros_like(ls_item);
+						}
+						loss_items = loss_items + ls_item.to(loss_items.dtype, loss_items.device);
+						loss_items = loss_items.MoveToOuterDisposeScope();
+						amp.Step(ls);
+						float[] ls_items = (ls_item).data<float>().ToArray();
+						StringBuilder stringBuilder = new StringBuilder();
+						stringBuilder.AppendFormat("{0,10}", epoch);
+						foreach (float Items in ls_items)
+						{
+							stringBuilder.AppendFormat("{0,10:f3}", Items / data["images"].shape[0]);
+						}
+						stringBuilder.AppendFormat("{0,11}", data["batch_idx"].NumberOfElements);
+						stringBuilder.AppendFormat("{0,6}", data["images"].shape[2]);
+						pbar.SetDescription(stringBuilder.ToString());
+					}
+				}
+				return loss_items.@float().data<float>().ToArray();
+
+			}
+		}
+
+		internal virtual float[] Val(YoloDataLoader valDataLoader, AMPWrapper amp, int epoch)
+		{
+			using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(valDataLoader, desc: $"Epoch {epoch,3}", total: (int)valDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
+			{
+				Tensor loss_items = null;
+				foreach (Dictionary<string, Tensor> data in pbar)
+				{
 					using (NewDisposeScope())
 					using (no_grad())
 					{
-						//long[] indexs = data["index"].data<long>().ToArray();
-						//Dictionary<string, Tensor> targets = GetTargets(indexs, valDataset);
-
 						if (data["batch_idx"].NumberOfElements == 0)
 						{
 							continue;
 						}
 						Tensor[] list = amp.Evaluate(data["images"].to(dtype));
-						//Tensor[] list = yolo.forward(targets["images"].to(dtype));
 						var (ls, ls_item) = loss.forward(list.ToArray(), data);
-						if (lossValue == float.MaxValue)
+						if (loss_items is null)
 						{
-							lossValue = ls.ToSingle();
+							loss_items = torch.zeros_like(ls_item);
 						}
-						else
-						{
-							lossValue = lossValue + ls.ToSingle();
-						}
-						pbar.SetDescription($"Val Loss:{ls.ToSingle() / list[0].shape[0],6:F6} ");
+						loss_items = loss_items + ls_item.to(loss_items.dtype, loss_items.device);
+						loss_items = loss_items.MoveToOuterDisposeScope();
+						pbar.SetPostfix(new (string key, object value)[]
+								{
+									("Val Loss", $"{(ls.ToSingle()):f3}"),
+								});
 					}
 				}
-				lossValue = lossValue / valDataset.Count;
-				return lossValue;
+				return loss_items.@float().data<float>().ToArray();
 
 			}
 		}
-
-		internal abstract Dictionary<string, Tensor> GetTargets(long[] indexs, YoloDataset dataset);
 
 		internal abstract List<YoloResult> ImagePredict(Tensor orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f);
 
