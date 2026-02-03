@@ -1,4 +1,5 @@
 ﻿using Data;
+using OpenCvSharp;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -25,6 +26,13 @@ namespace YoloSharp.Models
 		protected TaskType taskType;
 		protected int[] keyPointsShape;
 		protected YoloSize yoloSize;
+
+		// Early Stop params
+		private int patience;
+		private float best_val_loss = float.PositiveInfinity;
+		private int counter = 0;
+		private float delta;
+
 
 		internal virtual void LoadModel(string path, bool skipNcNotEqualLayers = false)
 		{
@@ -108,7 +116,7 @@ namespace YoloSharp.Models
 			}
 		}
 
-		internal virtual void Train(string rootPath, string trainDataPath = "", string valDataPath = "", string outputPath = "output", int imageSize = 640, int epochs = 100, float lr = 1e-4f, int batchSize = 8, int numWorkers = 0, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
+		internal virtual void Train(string rootPath, string trainDataPath = "", string valDataPath = "", string outputPath = "output", int imageSize = 640, int epochs = 100, float lr = 1e-4f, int batchSize = 8, int numWorkers = 0, ImageProcessType imageProcessType = ImageProcessType.Letterbox, int patience = 30, float delta = 1e-5f, float brightness = 0.1f, float contrast = 0.1f, float saturation = 0.1f, float hue = 0.02f)
 		{
 			Console.WriteLine("Start Training:");
 			Console.WriteLine($"Yolo task type is: {taskType}");
@@ -116,10 +124,12 @@ namespace YoloSharp.Models
 			Console.WriteLine($"Device type is: {device}");
 			Console.WriteLine($"Number Classes is: {sortCount}");
 			Console.WriteLine("Model will be write to: " + outputPath);
+			this.patience = patience;
+			this.delta = delta;
 
 			WriteSettings();
 
-			YoloDataset trainDataSet = new YoloDataset(rootPath, trainDataPath, imageSize, this.taskType, imageProcessType);
+			YoloDataset trainDataSet = new YoloDataset(rootPath, trainDataPath, imageSize, this.taskType, imageProcessType, brightness: brightness, contrast: contrast, saturation: saturation, hue: hue);
 			if (trainDataSet.Count == 0)
 			{
 				throw new FileNotFoundException("No data found in the path: " + rootPath);
@@ -128,7 +138,7 @@ namespace YoloSharp.Models
 			YoloDataLoader trainDataLoader = new YoloDataLoader(trainDataSet, batchSize, num_worker: numWorkers, shuffle: true, device: device);
 			valDataPath = string.IsNullOrEmpty(valDataPath) ? trainDataPath : valDataPath;
 
-			YoloDataset valDataSet = new YoloDataset(rootPath, valDataPath, imageSize, this.taskType, imageProcessType);
+			YoloDataset valDataSet = new YoloDataset(rootPath, valDataPath, imageSize, this.taskType, ImageProcessType.Letterbox, brightness: 0f, contrast: 0f, saturation: 0f, hue: 0f);
 			if (valDataSet.Count == 0)
 			{
 				throw new FileNotFoundException("No data found in the path: " + rootPath);
@@ -138,7 +148,6 @@ namespace YoloSharp.Models
 
 			Optimizer optimizer = new SGD(yolo.parameters(), lr: lr, momentum: 0.937f, weight_decay: 5e-4);
 			lr_scheduler.LRScheduler lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max: 200);
-			float tempLoss = float.MaxValue;
 			Console.WriteLine();
 
 			AMPWrapper amp = new AMPWrapper(yolo, optimizer, precision: dtype);
@@ -146,6 +155,11 @@ namespace YoloSharp.Models
 			string weightsPath = Path.Combine(outputPath, "weights");
 			for (int epoch = 1; epoch <= epochs; epoch++)
 			{
+				if (!Directory.Exists(weightsPath))
+				{
+					Directory.CreateDirectory(weightsPath);
+				}
+
 				Console.WriteLine();
 				switch (taskType)
 				{
@@ -169,20 +183,23 @@ namespace YoloSharp.Models
 				float[] trainLoss_items = TrainEpoch(trainDataLoader, amp, epoch);
 				lr_scheduler.step();
 				float[] valLoss_items = Val(valDataLoader, amp, epoch);
+
 				Console.WriteLine($"Epoch {epoch}/{epochs}, Train Loss:{trainLoss_items.Sum() / trainDataSet.Count}, Val Loss: {valLoss_items.Sum() / valDataSet.Count}");
-
-				if (!Directory.Exists(weightsPath))
-				{
-					Directory.CreateDirectory(weightsPath);
-				}
-
-				yolo.save(Path.Combine(weightsPath, "last.bin"));
-				if (tempLoss > valLoss_items.Sum())
+				if (valLoss_items.Sum() / valDataSet.Count < this.best_val_loss - this.delta)
 				{
 					Console.WriteLine("Get a better result, will be save to best.bin");
 					yolo.save(Path.Combine(weightsPath, "best.bin"));
-					tempLoss = valLoss_items.Sum();
 				}
+				bool shouldStop = ShouldStop(valLoss_items.Sum() / valDataSet.Count);
+				if (shouldStop)
+				{
+					Console.WriteLine($"Early stop at epoch {epoch + 1} with val loss {valLoss_items.Sum() / valDataSet.Count}");
+					break;
+				}
+
+
+				yolo.save(Path.Combine(weightsPath, "last.bin"));
+
 				Console.WriteLine();
 				stopwatch.Stop();
 				WriteLog(epoch, stopwatch.ElapsedMilliseconds / 1000f, trainLoss_items, valLoss_items);
@@ -249,6 +266,12 @@ namespace YoloSharp.Models
 				stringBuilder.AppendLine($"Root Path: {Path.GetFullPath(rootPath)}");
 				stringBuilder.AppendLine($"Train Data Path: {trainDataPath}");
 				stringBuilder.AppendLine($"Val Data Path: {valDataPath}");
+				stringBuilder.AppendLine($"Early Stop Patience: {patience}");
+				stringBuilder.AppendLine($"Early Stop Delta: {delta}");
+				stringBuilder.AppendLine($"Brightness Augmentation: {brightness}");
+				stringBuilder.AppendLine($"Contrast Augmentation: {contrast}");
+				stringBuilder.AppendLine($"Saturation Augmentation: {saturation}");
+				stringBuilder.AppendLine($"Hue Augmentation: {hue}");
 				File.WriteAllText(fileName, stringBuilder.ToString());
 			}
 		}
@@ -266,7 +289,7 @@ namespace YoloSharp.Models
 						{
 							continue;
 						}
-						Tensor[] list = amp.Forward(data["images"].to(dtype));
+						Tensor[] list = amp.Forward(data["images"]);
 						(Tensor ls, Tensor ls_item) = loss.forward(list.ToArray(), data);
 						if (loss_items is null)
 						{
@@ -297,6 +320,7 @@ namespace YoloSharp.Models
 			using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(valDataLoader, desc: $"Epoch {epoch,3}", total: (int)valDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
 			{
 				Tensor loss_items = null;
+				long count = 0;
 				foreach (Dictionary<string, Tensor> data in pbar)
 				{
 					using (NewDisposeScope())
@@ -314,20 +338,32 @@ namespace YoloSharp.Models
 						}
 						loss_items = loss_items + ls_item.to(loss_items.dtype, loss_items.device);
 						loss_items = loss_items.MoveToOuterDisposeScope();
+						count += data["images"].shape[0];
 						pbar.SetPostfix(new (string key, object value)[]
 								{
-									("Val Loss", $"{(ls.ToSingle()):f3}"),
+									("Val Loss", $"{(loss_items.sum().ToSingle()/count):f3}"),
 								});
 					}
 				}
 				return loss_items.@float().data<float>().ToArray();
-
 			}
 		}
 
 		internal abstract List<YoloResult> ImagePredict(Tensor orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f);
 
-
-
+		internal bool ShouldStop(float val_loss)
+		{
+			if (val_loss < this.best_val_loss - this.delta)
+			{
+				this.best_val_loss = val_loss;
+				this.counter = 0;
+				return false;
+			}
+			else
+			{
+				this.counter += 1;
+				return this.counter >= this.patience;
+			}
+		}
 	}
 }

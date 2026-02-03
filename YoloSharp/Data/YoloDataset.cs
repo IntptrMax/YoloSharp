@@ -21,7 +21,7 @@ namespace YoloSharp.Data
 
 		torchvision.ITransform transform;
 
-		public YoloDataset(string rootPath, string dataPath = "", int imageSize = 640, TaskType taskType = TaskType.Detection, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
+		public YoloDataset(string rootPath, string dataPath = "", int imageSize = 640, TaskType taskType = TaskType.Detection, ImageProcessType imageProcessType = ImageProcessType.Letterbox, float brightness = 0.1f, float contrast = 0.1f, float saturation = 0.1f, float hue = 0.02f)
 		{
 			torchvision.io.DefaultImager = new torchvision.io.SkiaImager();
 
@@ -95,16 +95,17 @@ namespace YoloSharp.Data
 						torchvision.transforms.RandomHorizontalFlip( 0.1),
 						torchvision.transforms.RandomVerticalFlip(0.1),
 						torchvision.transforms.RandomRotation(15),
-						torchvision.transforms.ColorJitter(brightness: 0.1f, contrast: 0.1f, saturation: 0.1f, hue: 0.02f),
+						torchvision.transforms.ColorJitter(brightness: brightness, contrast: contrast, saturation: saturation, hue: hue),
 				});
+			}
+			else
+			{
+				transform = torchvision.transforms.ColorJitter(brightness: brightness, contrast: contrast, saturation: saturation, hue: hue);
 			}
 
 			this.imageSize = imageSize;
 			this.imageProcessType = imageProcessType;
 			this.taskType = taskType;
-
-
-
 		}
 
 		private string GetLabelFileNameFromImageName(string imageFileName)
@@ -597,6 +598,8 @@ namespace YoloSharp.Data
 					};
 				}
 
+				imageTensor = transform.call(imageTensor);
+
 				Tensor bboxes_tensor = taskType switch
 				{
 					TaskType.Obb => count > 0 ? cat(imageData.ResizedLabels.Select(x => tensor(new float[] { x.CenterX / imageSize, x.CenterY / imageSize, x.Width / imageSize, x.Height / imageSize, x.Radian }).unsqueeze(0)).ToArray(), 0) : tensor(new float[0, 5]),
@@ -612,7 +615,7 @@ namespace YoloSharp.Data
 						for (int j = 0; j < count; j++)
 						{
 							Point[] points = imageData.ResizedLabels[j].MaskOutLine.Select(p => p.Multiply((float)maskSize / imageSize)).ToArray();
-							using (Mat eachMaskMat = YoloDataset.GetMaskFromOutlinePoints(points, maskSize, maskSize))
+							using (Mat eachMaskMat = GetMaskFromOutlinePoints(points, maskSize, maskSize))
 							using (Mat foreMat = new Mat(maskSize, maskSize, MatType.CV_8UC1, new OpenCvSharp.Scalar(j + 1f)))
 							{
 								foreMat.CopyTo(maskMat, eachMaskMat);

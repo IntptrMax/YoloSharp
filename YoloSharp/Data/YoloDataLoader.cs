@@ -1,6 +1,5 @@
 ﻿using TorchSharp;
 using TorchSharp.Modules;
-using YoloSharp.Data;
 using static TorchSharp.torch;
 
 namespace Data
@@ -20,6 +19,7 @@ namespace Data
 		private static Dictionary<string, torch.Tensor> Collate(IEnumerable<Dictionary<string, torch.Tensor>> dic, torch.Device device)
 		{
 			using (torch.NewDisposeScope())
+			using (torch.no_grad())
 			{
 				Dictionary<string, torch.Tensor> dictionary = new Dictionary<string, torch.Tensor>();
 				torch.Tensor[] classes = dic.Select((Dictionary<string, torch.Tensor> k) => k["cls"].unsqueeze(0)).ToArray();

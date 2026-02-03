@@ -17,6 +17,11 @@ With the help of this project you won't have to transform .pt model to onnx, and
 
 ## 🔥Important News  
 
+**2026/02/03**  
+  🚀 Add **Early Stop**
+  🚀 Add **HSV transform**
+  🚀 Add **Train Logs**
+
 **2026/01/20**  
   🚀 YoloSharp support **Mixed Precision Trainer**  (simple amp)  
   🚀 **Tqdm** supported.  

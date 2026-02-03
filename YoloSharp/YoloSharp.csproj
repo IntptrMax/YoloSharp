@@ -15,7 +15,7 @@ Train and Predict yolov8-segment and yolov11-segment model in C# only.
 You don't have to install python.
 Requires reference to one of libtorch-cpu, libtorch-cuda-12.1, libtorch-cuda-12.1-win-x64 or libtorch-cuda-12.1-linux-x64 version 2.5.1.0 and OpenCvSharp4.runtime to execute.
 </Description>
-    <Version>1.1.17</Version>
+    <Version>1.1.18</Version>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
