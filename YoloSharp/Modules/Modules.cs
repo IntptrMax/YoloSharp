@@ -936,11 +936,6 @@ namespace YoloSharp.Modules
 			{
 				long[] shape = x[0].shape;  // BCHW
 
-				//List<Tensor> xi_mix = new List<Tensor>();
-				//foreach (var xi in x)
-				//{
-				//	xi_mix.Add(xi.view(shape[0], this.no, -1));
-				//}
 				Tensor x_cat = cat(x.Select(xi => xi.view(shape[0], no, -1)).ToArray(), 2);
 
 				if (this.shape != shape)

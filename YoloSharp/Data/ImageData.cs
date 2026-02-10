@@ -25,6 +25,6 @@ namespace YoloSharp.Data
 		public Point[] MaskOutLine;
 		public Types.KeyPoint[] KeyPoints;
 
-	
+
 	}
 }

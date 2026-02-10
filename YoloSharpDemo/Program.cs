@@ -1,4 +1,5 @@
-﻿using OpenCvSharp;
+﻿using Data;
+using OpenCvSharp;
 using YoloSharp.Models;
 using YoloSharp.Types;
 
@@ -8,44 +9,43 @@ namespace YoloSharpDemo
 	{
 		static void Main(string[] args)
 		{
-			string rootPath = @"..\..\..\Assets\DataSets\Dotav1"; // Training data path, it should be the same as coco dataset.
-			string trainDataPath = "train.txt"; // If trainDataPath is "", it will use rootPath as training data.
-			string valDataPath = "val.txt";// If valDataPath is "", it will use rootPath as validation data.
-			string outputPath = Path.Combine("result", DateTime.Now.ToString("yyyyMMddHHmmss"));    // Trained model output path.
 			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-obb.bin"; // Pretrained model path.
 			string predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
-			int batchSize = 16;
-			int numberClass = 15;
-			int epochs = 100;
-			int imageSize = 640;
-			float predictThreshold = 0.3f;
-			float iouThreshold = 0.7f;
-			float lr = 1e-4f;
-			int workers = Math.Min(Environment.ProcessorCount / 2, 4);
-
-			// For pose estimation, number of keypoints and each keypoint has (x, y, visibility score)
-			int[] keyPointShape = new int[] { 17, 3 };
-
-			YoloType yoloType = YoloType.Yolov8;
-			DeviceType deviceType = DeviceType.CUDA;
-			ScalarType dtype = ScalarType.Float16;
-			YoloSize yoloSize = YoloSize.n;
-			ImageProcessType imageProcessType = ImageProcessType.Mosiac;
-			TaskType taskType = TaskType.Obb;
 
 			Mat predictImage = Cv2.ImRead(predictImagePath);
 
-			// Create a yolo task.
-			YoloTask yoloTask = new YoloTask(taskType, numberClass, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype, keyPointShape: keyPointShape);
+			// Create a Yolo config
+			Config config = new Config
+			{
+				DeviceType = DeviceType.CUDA,
+				ScalarType = ScalarType.Float16,
+				RootPath = @"..\..\..\Assets\DataSets\dotav1",
+				TrainDataPath = "train.txt",
+				ValDataPath = "val.txt",
+				YoloType = YoloType.Yolov8,
+				YoloSize = YoloSize.n,
+				TaskType = TaskType.Obb,
+				ImageProcessType = ImageProcessType.Mosiac,
+				ImageSize = 640,
+				BatchSize = 16,
+				NumberClass = 15,
+				PredictThreshold = 0.3f,
+				IouThreshold = 0.7f,
+				Workers = 4,
+				Epochs = 100,
+			};
 
-			// Load pre-trained model, if you don't want to load the model, you can skip this step.
+			// Create a yolo task.
+			YoloTask yoloTask = new YoloTask(config);
+
+			// Load pre-trained model. If you don't want to use pre-trained model, skip the step.
 			yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
 			// Train model
-			yoloTask.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, imageSize: imageSize, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType, lr: lr, numWorkers: workers);
+			yoloTask.Train();
 
 			// Predict image, if the model is not trained or loaded, it will use random weight to predict.
-			List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage, predictThreshold, iouThreshold);
+			List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage);
 
 			// Rand for mask color.
 			Random rand = new Random(1024);
@@ -69,7 +69,6 @@ namespace YoloSharpDemo
 				Size textSize = Cv2.GetTextSize(label, HersheyFonts.HersheySimplex, 0.5, 1, out int baseline);
 				Cv2.Rectangle(predictImage, new Rect(new Point(result.X, result.Y - textSize.Height - baseline), new Size(textSize.Width, textSize.Height + baseline)), OpenCvSharp.Scalar.White, Cv2.FILLED);
 				Cv2.PutText(predictImage, label, new Point(result.X, result.Y - baseline), HersheyFonts.HersheySimplex, 0.5, OpenCvSharp.Scalar.Black, 1);
-
 				Console.WriteLine(string.Format("LabelID:{0}, Score:{1:F1}%, CenterX:{2}, CenterY:{3}, Width:{4}, Height:{5}, R:{6:F3} rnd", result.ClassID, result.Score * 100, result.CenterX, result.CenterY, result.Width, result.Height, result.Radian));
 
 				// Draw mask
@@ -102,6 +101,11 @@ namespace YoloSharpDemo
 			Console.WriteLine("Image Predict done");
 		}
 
+		/// <summary>
+		/// CenterX, CenterY, Width, Height, r → P0(x0, y0), P1(x1, y1), P2(x2, y2), P3(x3, y3)
+		/// </summary>
+		/// <param name="x"></param>
+		/// <returns></returns>
 		private static float[] cxcywhr2xyxyxyxy(float[] x)
 		{
 			float cx = x[0];

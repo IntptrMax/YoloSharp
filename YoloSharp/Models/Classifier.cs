@@ -1,4 +1,5 @@
-﻿using TorchSharp;
+﻿using Data;
+using TorchSharp;
 using YoloSharp.Data;
 using YoloSharp.Types;
 using YoloSharp.Utils;
@@ -8,24 +9,16 @@ namespace YoloSharp.Models
 {
 	internal class Classifier : YoloBaseTaskModel
 	{
-		public Classifier(int numberClasses = 80, YoloType yoloType = YoloType.Yolov8, YoloSize yoloSize = YoloSize.n, Types.DeviceType deviceType = Types.DeviceType.CUDA, Types.ScalarType dtype = Types.ScalarType.Float32)
+		public Classifier(Config config)
 		{
-			torchvision.io.DefaultImager = new torchvision.io.SkiaImager();
-
-			device = new Device((TorchSharp.DeviceType)deviceType);
-			this.dtype = (torch.ScalarType)dtype;
-			this.sortCount = numberClasses;
-			this.yoloType = yoloType;
-			this.taskType = TaskType.Classification;
-			this.yoloSize = yoloSize;
-
-			yolo = yoloType switch
+			this.config = config;
+			yolo = config.YoloType switch
 			{
-				YoloType.Yolov8 => new Yolo.Yolov8Classify(numberClasses, yoloSize, device, this.dtype),
-				YoloType.Yolov11 => new Yolo.Yolov11Classify(numberClasses, yoloSize, device, this.dtype),
+				YoloType.Yolov8 => new Yolo.Yolov8Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+				YoloType.Yolov11 => new Yolo.Yolov11Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
 				_ => throw new NotImplementedException("Yolo type not supported."),
 			};
-			loss = yoloType switch
+			loss = config.YoloType switch
 			{
 				YoloType.Yolov5u => new Loss.V8ClassificationLoss(),
 				YoloType.Yolov8 => new Loss.V8ClassificationLoss(),
@@ -37,7 +30,7 @@ namespace YoloSharp.Models
 			// Tools.TransModelFromSafetensors(yolo, @".\yolov8n-cls.safetensors", @".\PreTrainedModels\yolov8n-cls.bin");
 		}
 
-		internal  Dictionary<string, torch.Tensor> GetTargets(long[] indexs, YoloDataset dataset)
+		internal Dictionary<string, torch.Tensor> GetTargets(long[] indexs, YoloDataset dataset)
 		{
 			using (NewDisposeScope())
 			using (no_grad())
@@ -48,7 +41,7 @@ namespace YoloSharp.Models
 				for (int i = 0; i < indexs.Length; i++)
 				{
 					ImageData imageData = dataset.GetImageAndLabelData(indexs[i]);
-					images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(device).unsqueeze(0) / 255.0f;
+					images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(config.Device).unsqueeze(0) / 255.0f;
 					if (imageData.ResizedLabels is not null)
 					{
 						batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
@@ -68,11 +61,11 @@ namespace YoloSharp.Models
 					_ => new torchvision.ITransform[] { }
 				};
 
-				Tensor batch_idx_tensor = tensor(batch_idx, dtype: dtype, device: device).view(-1, 1);
-				Tensor cls_tensor = tensor(cls, dtype: torch.ScalarType.Int64, device: device);
+				Tensor batch_idx_tensor = tensor(batch_idx, dtype: config.Dtype, device: config.Device).view(-1, 1);
+				Tensor cls_tensor = tensor(cls, dtype: torch.ScalarType.Int64, device: config.Device);
 				Tensor imageTensor = concat(images);
 				torchvision.ITransform transformer = torchvision.transforms.Compose(transformers);
-				imageTensor = transformer.call(imageTensor).to(dtype,device);
+				imageTensor = transformer.call(imageTensor).to(config.Dtype, config.Device);
 
 				Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
 				{
@@ -86,13 +79,13 @@ namespace YoloSharp.Models
 			}
 		}
 
-		internal override List<YoloResult> ImagePredict(torch.Tensor orgImage, float PredictThreshold = 0.25F, float IouThreshold = 0.5F)
+		internal override List<YoloResult> ImagePredict(Tensor orgImage, float predictThreshold, float iouThreshold)
 		{
 			using (no_grad())
 			{
 				yolo.eval();
 				// Change RGB → BGR
-				orgImage = orgImage.to(dtype, device).unsqueeze(0);
+				orgImage = orgImage.to(config.Dtype, config.Device).unsqueeze(0);
 
 				int w = (int)orgImage.shape[3];
 				int h = (int)orgImage.shape[2];
@@ -105,7 +98,7 @@ namespace YoloSharp.Models
 				Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros, 114) / 255.0f;
 				Tensor[] tensors = yolo.forward(input);
 				List<YoloResult> results = new List<YoloResult>();
-				for (int i = 0; i < sortCount; i++)
+				for (int i = 0; i < config.NumberClass; i++)
 				{
 					results.Add(new YoloResult()
 					{

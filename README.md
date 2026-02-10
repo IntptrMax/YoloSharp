@@ -68,17 +68,43 @@ You can use it with the code below:
 
 ```CSharp
 
-// Create a yolo task.
-YoloTask yoloTask = new YoloTask(taskType, numberClass, yoloType: yoloType, deviceType: deviceType, yoloSize: yoloSize, dtype: dtype, keyPointShape: keyPointShape);
+string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-obb.bin"; // Pretrained model path.
+string predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
 
-// Load pre-trained model, if you don't want to load the model, you can skip this step.
+Mat predictImage = Cv2.ImRead(predictImagePath);
+
+// Create a Yolo config
+Config config = new Config
+{
+	DeviceType = DeviceType.CUDA,
+	ScalarType = ScalarType.Float16,
+	RootPath = @"..\..\..\Assets\DataSets\dotav1",
+	TrainDataPath = "train.txt",
+	ValDataPath = "val.txt",
+	YoloType = YoloType.Yolov8,
+	YoloSize = YoloSize.n,
+	TaskType = TaskType.Obb,
+	ImageProcessType = ImageProcessType.Mosiac,
+	ImageSize = 640,
+	BatchSize = 16,
+	NumberClass = 15,
+	PredictThreshold = 0.3f,
+	IouThreshold = 0.7f,
+	Workers = 4,
+	Epochs = 100,
+};
+
+// Create a yolo task.
+YoloTask yoloTask = new YoloTask(config);
+
+// Load pre-trained model. If you don't want to use pre-trained model, skip the step.
 yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
 // Train model
-yoloTask.Train(rootPath, trainDataPath, valDataPath, outputPath: outputPath, imageSize: imageSize, batchSize: batchSize, epochs: epochs, imageProcessType: imageProcessType);
+yoloTask.Train();
 
 // Predict image, if the model is not trained or loaded, it will use random weight to predict.
-List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage, predictThreshold, iouThreshold);
+List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage);
 
 ```
 

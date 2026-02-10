@@ -1,4 +1,5 @@
-﻿using TorchSharp;
+﻿using Data;
+using TorchSharp;
 using YoloSharp.Types;
 using YoloSharp.Utils;
 using static TorchSharp.torch;
@@ -8,40 +9,33 @@ namespace YoloSharp.Models
 {
 	internal class Segmenter : YoloBaseTaskModel
 	{
-		internal Segmenter(int numberClasses = 80, YoloType yoloType = YoloType.Yolov8, YoloSize yoloSize = YoloSize.n, Types.DeviceType deviceType = Types.DeviceType.CUDA, Types.ScalarType dtype = Types.ScalarType.Float32)
+		internal Segmenter(Config config)
 		{
-			torchvision.io.DefaultImager = new torchvision.io.SkiaImager();
-			if (yoloType == YoloType.Yolov5 || yoloType == YoloType.Yolov5u || yoloType == YoloType.Yolov12)
+			this.config = config;
+			if (config.YoloType == YoloType.Yolov5 || config.YoloType == YoloType.Yolov5u || config.YoloType == YoloType.Yolov12)
 			{
 				throw new ArgumentException("Segmenter not support yolov5, yolov5u or yolov12. Please use yolov8 or yolov11 instead.");
 			}
 
-			device = new Device((TorchSharp.DeviceType)deviceType);
-			this.dtype = (torch.ScalarType)dtype;
-			this.sortCount = numberClasses;
-			this.yoloType = yoloType;
-			this.taskType = TaskType.Segmentation;
-			this.yoloSize = yoloSize;
-
-			yolo = yoloType switch
+			yolo = config.YoloType switch
 			{
-				YoloType.Yolov8 => new Yolo.Yolov8Segment(numberClasses, yoloSize, device, this.dtype),
-				YoloType.Yolov11 => new Yolo.Yolov11Segment(numberClasses, yoloSize, device, this.dtype),
+				YoloType.Yolov8 => new Yolo.Yolov8Segment(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+				YoloType.Yolov11 => new Yolo.Yolov11Segment(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
 				_ => throw new NotImplementedException("Yolo type not supported."),
 			};
-			loss = yoloType switch
+			loss = config.YoloType switch
 			{
-				YoloType.Yolov8 => new Loss.V8SegmentationLoss(this.sortCount),
-				YoloType.Yolov11 => new Loss.V8SegmentationLoss(this.sortCount),
+				YoloType.Yolov8 => new Loss.V8SegmentationLoss(config.NumberClass),
+				YoloType.Yolov11 => new Loss.V8SegmentationLoss(config.NumberClass),
 				_ => throw new NotImplementedException("Yolo type not supported."),
 			};
 			//Tools.TransModelFromSafetensors(yolo, @".\yolov8n-seg.safetensors", @".\PreTrainedModels\yolov11x-seg.bin");
 		}
 
-		internal override List<YoloResult> ImagePredict(Tensor orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		internal override List<YoloResult> ImagePredict(Tensor orgImage, float predictThreshold, float iouThreshold)
 		{
 			// Change RGB → BGR
-			orgImage = orgImage.to(dtype, device).unsqueeze(0);
+			orgImage = orgImage.to(config.Dtype, config.Device).unsqueeze(0);
 
 			int w = (int)orgImage.shape[3];
 			int h = (int)orgImage.shape[2];
@@ -56,7 +50,7 @@ namespace YoloSharp.Models
 
 			Tensor[] outputs = yolo.forward(input);
 
-			(List<Tensor> preds, var _) = Ops.non_max_suppression(outputs[0], nc: this.sortCount, conf_thres: PredictThreshold, iou_thres: IouThreshold);
+			(List<Tensor> preds, var _) = Ops.non_max_suppression(outputs[0], nc: this.config.NumberClass, conf_thres: predictThreshold, iou_thres: iouThreshold);
 			Tensor proto = outputs[4];
 
 			List<YoloResult> results = new List<YoloResult>();

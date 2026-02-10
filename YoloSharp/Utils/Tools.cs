@@ -53,6 +53,7 @@ namespace YoloSharp.Utils
 		{
 			torch.ScalarType dtype = torch.ScalarType.Float32;
 			List<long> shape = new List<long>();
+			List<long> stride = new List<long>();
 			ZipArchive zip = ZipFile.OpenRead(path);
 			ZipArchiveEntry headerEntry = zip.Entries.First(e => e.Name == "data.pkl");
 
@@ -76,7 +77,7 @@ namespace YoloSharp.Utils
 			}
 			for (int i = 0; i < headerBytes.Length; i++)
 			{
-				if (headerBytes[i] == 81 && headerBytes[i + 1] == 75 && headerBytes[i + 2] == 0)
+				if (headerBytes[i] == 81 && headerBytes[i + 1] == 75 && (headerBytes[i + 2] == 0 || headerBytes[i + 2] == 5))
 				{
 					for (int j = i + 2; j < headerBytes.Length; j++)
 					{
@@ -90,12 +91,12 @@ namespace YoloSharp.Utils
 							shape.Add(headerBytes[j + 1] + headerBytes[j + 2] * 256);
 							j += 2;
 						}
-						else if (headerBytes[j] == 113)
+						else if (headerBytes[j] == 113 || headerBytes[j] == 133 )
 						{
 							break;
 						}
-
 					}
+					
 					break;
 				}
 			}

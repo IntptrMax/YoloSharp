@@ -15,6 +15,7 @@ namespace YoloSharp.Utils
 		internal static Tensor box_iou(Tensor box1, Tensor box2, float eps = 1e-7f)
 		{
 			using (NewDisposeScope())
+			using (no_grad())
 			{
 				// NOTE: Need .float() to get accurate iou values
 				// inter(N,M) = (rb(N,M,2) - lt(N,M,2)).clamp(0).prod(2)
@@ -45,6 +46,7 @@ namespace YoloSharp.Utils
 		internal static Tensor probiou(Tensor obb1, Tensor obb2, bool CIoU = false, float eps = 1e-7f)
 		{
 			using (NewDisposeScope())
+			using (no_grad())
 			{
 				Tensor x1 = obb1[.., 0..1];
 				Tensor y1 = obb1[.., 1..2];
@@ -92,6 +94,7 @@ namespace YoloSharp.Utils
 		internal static Tensor batch_probiou(Tensor obb1, Tensor obb2, float eps = 1e-7f)
 		{
 			using (NewDisposeScope())
+			using (no_grad())
 			{
 				// Split coordinates and get covariance matrices
 				Tensor x1 = obb1[.., 0].unsqueeze(-1);
@@ -126,6 +129,7 @@ namespace YoloSharp.Utils
 		private static (Tensor a, Tensor b, Tensor c) _get_covariance_matrix(Tensor boxes)
 		{
 			using (NewDisposeScope())
+			using (no_grad())
 			{
 				// Gaussian bounding boxes, ignore the center points (the first two columns) because they are not needed here.
 				Tensor gbbs = torch.cat(new Tensor[] { boxes[.., 2..4].pow(2) / 12, boxes[.., 4..] }, dim: -1);
@@ -158,6 +162,7 @@ namespace YoloSharp.Utils
 		internal static Tensor bbox_iou(Tensor box1, Tensor box2, bool xywh = true, bool GIoU = false, bool DIoU = false, bool CIoU = false, float eps = 1e-7f)
 		{
 			using (NewDisposeScope())
+			using (no_grad())
 			{
 				Tensor b1_x1, b1_x2, b1_y1, b1_y2;
 				Tensor b2_x1, b2_x2, b2_y1, b2_y2;

@@ -9,8 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="libtorch-cuda-12.8-win-x64" Version="2.7.1" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.11.0.20250507" />
-    <PackageReference Include="TorchSharp-cuda-windows" Version="0.105.2" />
   </ItemGroup>
 
   <ItemGroup>

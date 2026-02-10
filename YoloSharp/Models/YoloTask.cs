@@ -1,5 +1,7 @@
-﻿using OpenCvSharp;
+﻿using Data;
+using OpenCvSharp;
 using SkiaSharp;
+using TorchSharp;
 using YoloSharp.Types;
 using YoloSharp.Utils;
 using static TorchSharp.torch;
@@ -12,15 +14,20 @@ namespace YoloSharp.Models
 
 		private bool Initialized => yolo != null;
 
-		public YoloTask(TaskType taskType, int numberClasses, YoloType yoloType, YoloSize yoloSize, DeviceType deviceType = DeviceType.CUDA, Types.ScalarType dtype = Types.ScalarType.Float32, int[] keyPointShape = null)
+		public YoloTask(Config config)
 		{
-			yolo = taskType switch
+			if (string.IsNullOrEmpty(config.OutputPath))
 			{
-				TaskType.Detection => new Detector(numberClasses, yoloType, yoloSize, deviceType, dtype),
-				TaskType.Segmentation => new Segmenter(numberClasses, yoloType, yoloSize, deviceType, dtype),
-				TaskType.Obb => new Obber(numberClasses, yoloType, yoloSize, deviceType, dtype),
-				TaskType.Pose => new PoseDetector(numberClasses, keyPointShape, yoloType, yoloSize, deviceType, dtype),
-				TaskType.Classification => new Classifier(numberClasses, yoloType, yoloSize, deviceType, dtype),
+				config.OutputPath = Path.Combine("result", config.TaskType.ToString().ToUpper(), DateTime.Now.ToString("yyyyMMddHHmmss"));
+			}
+			torchvision.io.DefaultImager = new torchvision.io.SkiaImager();
+			yolo = config.TaskType switch
+			{
+				TaskType.Detection => new Detector(config),
+				TaskType.Segmentation => new Segmenter(config),
+				TaskType.Obb => new Obber(config),
+				TaskType.Pose => new PoseDetector(config),
+				TaskType.Classification => new Classifier(config),
 				_ => throw new NotImplementedException("Task type not support now.")
 			};
 		}
@@ -34,40 +41,67 @@ namespace YoloSharp.Models
 			yolo?.LoadModel(path, skipNcNotEqualLayers);
 		}
 
-		public void Train(string rootPath, string trainDataPath = "", string valDataPath = "", string outputPath = "output", int imageSize = 640, int epochs = 100, float lr = 1e-4f, int batchSize = 8, int numWorkers = 0, ImageProcessType imageProcessType = ImageProcessType.Letterbox)
+		public void Train()
 		{
 			if (!Initialized)
 			{
 				throw new ArgumentNullException("Yolo is not Initialized.");
 			}
-			yolo?.Train(rootPath, trainDataPath, valDataPath, outputPath, imageSize, epochs, lr, batchSize, numWorkers, imageProcessType);
+			yolo?.Train();
 		}
 
-		public List<YoloResult> ImagePredict(Tensor orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		public List<YoloResult> ImagePredict(Tensor orgImage)
 		{
 			if (!Initialized)
 			{
 				throw new ArgumentNullException("Yolo is not Initialized.");
 			}
-			return yolo.ImagePredict(orgImage, PredictThreshold, IouThreshold);
+			return yolo.ImagePredict(orgImage);
 		}
 
-		public List<YoloResult> ImagePredict(SKBitmap image, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		public List<YoloResult> ImagePredict(SKBitmap image)
 		{
 			Tensor orgImage = Lib.GetTensorFromImage(image);
-			return ImagePredict(orgImage, PredictThreshold, IouThreshold);
+			return ImagePredict(orgImage);
 		}
 
-		public List<YoloResult> ImagePredict(string imagePath, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		public List<YoloResult> ImagePredict(string imagePath)
 		{
 			Tensor orgImage = Lib.GetTensorFromImage(imagePath);
-			return ImagePredict(orgImage, PredictThreshold, IouThreshold);
+			return ImagePredict(orgImage);
 		}
 
-		public List<YoloResult> ImagePredict(Mat mat, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		public List<YoloResult> ImagePredict(Mat mat)
 		{
 			Tensor orgImage = Lib.GetTensorFromImage(mat);
-			return ImagePredict(orgImage, PredictThreshold, IouThreshold);
+			return ImagePredict(orgImage);
+		}
+
+		public List<YoloResult> ImagePredict(Tensor orgImage, float predictThreshold, float iouThreshold)
+		{
+			if (!Initialized)
+			{
+				throw new ArgumentNullException("Yolo is not Initialized.");
+			}
+			return yolo.ImagePredict(orgImage, predictThreshold, iouThreshold);
+		}
+
+		public List<YoloResult> ImagePredict(SKBitmap image, float predictThreshold, float iouThreshold)
+		{
+			Tensor orgImage = Lib.GetTensorFromImage(image);
+			return ImagePredict(orgImage, predictThreshold, iouThreshold);
+		}
+
+		public List<YoloResult> ImagePredict(string imagePath, float predictThreshold, float iouThreshold)
+		{
+			Tensor orgImage = Lib.GetTensorFromImage(imagePath);
+			return ImagePredict(orgImage, predictThreshold, iouThreshold);
+		}
+
+		public List<YoloResult> ImagePredict(Mat mat, float predictThreshold, float iouThreshold)
+		{
+			Tensor orgImage = Lib.GetTensorFromImage(mat);
+			return ImagePredict(orgImage, predictThreshold, iouThreshold);
 		}
 
 

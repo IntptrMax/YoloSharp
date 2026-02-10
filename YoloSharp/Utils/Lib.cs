@@ -78,11 +78,11 @@ namespace YoloSharp.Utils
 
 		internal static Tensor GetTensorFromImage(Mat mat, torchvision.io.ImageReadMode readMode = torchvision.io.ImageReadMode.RGB)
 		{
-			Tensor tensor = torchvision.io.read_image(mat.ToMemoryStream(),readMode);
+			Tensor tensor = torchvision.io.read_image(mat.ToMemoryStream(), readMode);
 			return tensor;
 		}
 
-		internal static SKBitmap GetImageFromTensor(Tensor tensor)
+		internal static SKBitmap GetSKBitmapFromTensor(Tensor tensor)
 		{
 			using (MemoryStream memoryStream = new MemoryStream())
 			{
@@ -90,6 +90,18 @@ namespace YoloSharp.Utils
 				memoryStream.Position = 0;
 				SKBitmap skBitmap = SKBitmap.Decode(memoryStream);
 				return skBitmap;
+			}
+		}
+
+		internal static Mat GetMatFromTensor(Tensor tensor)
+		{
+			using (MemoryStream memoryStream = new MemoryStream())
+			{
+				long channelCount = tensor.ndim == 4 ? tensor.shape[1] : tensor.shape[0];
+				torchvision.io.write_png(tensor.cpu(), memoryStream);
+				memoryStream.Position = 0;
+				Mat mat = Mat.FromStream(memoryStream, channelCount == 1 ? ImreadModes.Grayscale : ImreadModes.Color);
+				return mat;
 			}
 		}
 

@@ -1,4 +1,5 @@
-﻿using TorchSharp;
+﻿using Data;
+using TorchSharp;
 using YoloSharp.Types;
 using YoloSharp.Utils;
 using static TorchSharp.torch;
@@ -10,37 +11,29 @@ namespace YoloSharp.Models
 	{
 		private Module<Tensor, float, float, Tensor> predict;
 
-		internal Detector(int numberClasses = 80, YoloType yoloType = YoloType.Yolov8, YoloSize yoloSize = YoloSize.n, Types.DeviceType deviceType = Types.DeviceType.CUDA, Types.ScalarType dtype = Types.ScalarType.Float32)
+		internal Detector(Config config)
 		{
-			torchvision.io.DefaultImager = new torchvision.io.SkiaImager();
-
-			device = new Device((TorchSharp.DeviceType)deviceType);
-			this.dtype = (torch.ScalarType)dtype;
-			this.sortCount = numberClasses;
-			this.yoloType = yoloType;
-			this.taskType = TaskType.Detection;
-			this.yoloSize = yoloSize;
-
-			yolo = yoloType switch
+			this.config = config;
+			yolo = config.YoloType switch
 			{
-				YoloType.Yolov5 => new Yolo.Yolov5(numberClasses, yoloSize, device, this.dtype),
-				YoloType.Yolov5u => new Yolo.Yolov5u(numberClasses, yoloSize, device, this.dtype),
-				YoloType.Yolov8 => new Yolo.Yolov8(numberClasses, yoloSize, device, this.dtype),
-				YoloType.Yolov11 => new Yolo.Yolov11(numberClasses, yoloSize, device, this.dtype),
-				YoloType.Yolov12 => new Yolo.Yolov12(numberClasses, yoloSize, device, this.dtype),
+				YoloType.Yolov5 => new Yolo.Yolov5(this.config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+				YoloType.Yolov5u => new Yolo.Yolov5u(this.config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+				YoloType.Yolov8 => new Yolo.Yolov8(this.config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+				YoloType.Yolov11 => new Yolo.Yolov11(this.config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+				YoloType.Yolov12 => new Yolo.Yolov12(this.config.NumberClass, config.YoloSize, config.Device, config.Dtype),
 				_ => throw new NotImplementedException(),
 			};
 
-			loss = yoloType switch
+			loss = config.YoloType switch
 			{
-				YoloType.Yolov5 => new Loss.V5DetectionLoss(this.sortCount),
-				YoloType.Yolov5u => new Loss.V8DetectionLoss(this.sortCount),
-				YoloType.Yolov8 => new Loss.V8DetectionLoss(this.sortCount),
-				YoloType.Yolov11 => new Loss.V8DetectionLoss(this.sortCount),
-				YoloType.Yolov12 => new Loss.V8DetectionLoss(this.sortCount),
+				YoloType.Yolov5 => new Loss.V5DetectionLoss(this.config.NumberClass),
+				YoloType.Yolov5u => new Loss.V8DetectionLoss(this.config.NumberClass),
+				YoloType.Yolov8 => new Loss.V8DetectionLoss(this.config.NumberClass),
+				YoloType.Yolov11 => new Loss.V8DetectionLoss(this.config.NumberClass),
+				YoloType.Yolov12 => new Loss.V8DetectionLoss(this.config.NumberClass),
 				_ => throw new NotImplementedException(),
 			};
-			predict = yoloType switch
+			predict = config.YoloType switch
 			{
 				YoloType.Yolov5 => new Yolov5Predict(),
 				YoloType.Yolov5u => new YoloPredict(),
@@ -53,12 +46,12 @@ namespace YoloSharp.Models
 			//Tools.TransModelFromSafetensors(yolo, @".\yolov11n.safetensors", @".\yolov11n.bin");
 		}
 
-		internal override List<YoloResult> ImagePredict(Tensor orgImage, float PredictThreshold = 0.25f, float IouThreshold = 0.5f)
+		internal override List<YoloResult> ImagePredict(Tensor orgImage, float predictThreshold, float iouThreshold)
 		{
 			using (no_grad())
 			{
 				// Change RGB → BGR
-				orgImage = orgImage.to(dtype, device).unsqueeze(0);
+				orgImage = orgImage.to(config.Dtype, config.Device).unsqueeze(0);
 				int w = (int)orgImage.shape[3];
 				int h = (int)orgImage.shape[2];
 				int padHeight = 32 - (int)(orgImage.shape[2] % 32);
@@ -71,7 +64,7 @@ namespace YoloSharp.Models
 				yolo.eval();
 
 				Tensor[] tensors = yolo.forward(input);
-				Tensor outputs = predict.forward(tensors[0], PredictThreshold, IouThreshold);
+				Tensor outputs = predict.forward(tensors[0], predictThreshold, iouThreshold);
 				List<YoloResult> predResults = new List<YoloResult>();
 				for (int i = 0; i < outputs.shape[0]; i++)
 				{
