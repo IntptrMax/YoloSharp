@@ -24,7 +24,17 @@ namespace YoloSharp.Models
 
 		protected Config config = new Config();
 
-		internal virtual void LoadModel(string path, bool skipNcNotEqualLayers = false)
+        // 提供只读访问，方便外部封装器（如带取消的训练器）查询状态。
+        internal Device Device => device;
+        internal torch.ScalarType TorchDType => dtype;
+        internal int SortCount => sortCount;
+        internal YoloType YoloType => yoloType;
+        internal TaskType TaskType => taskType;
+        internal Module<Tensor, Tensor[]> Model => yolo;
+        internal Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> Loss => loss;
+        internal int[] KeyPointsShape => keyPointsShape;
+
+        internal virtual void LoadModel(string path, bool skipNcNotEqualLayers = false)
 		{
 			Console.WriteLine("Loading model...");
 			Dictionary<string, Tensor> state_dict = Lib.LoadModel(path, skipNcNotEqualLayers);
