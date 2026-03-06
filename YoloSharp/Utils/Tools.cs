@@ -75,6 +75,10 @@ namespace YoloSharp.Utils
 			{
 				dtype = torch.ScalarType.Float32;
 			}
+			else if (headerStr.Contains("BoolStorage"))
+			{
+				dtype = torch.ScalarType.Bool;
+			}
 			for (int i = 0; i < headerBytes.Length; i++)
 			{
 				if (headerBytes[i] == 81 && headerBytes[i + 1] == 75 && (headerBytes[i + 2] == 0 || headerBytes[i + 2] == 5))
@@ -91,12 +95,12 @@ namespace YoloSharp.Utils
 							shape.Add(headerBytes[j + 1] + headerBytes[j + 2] * 256);
 							j += 2;
 						}
-						else if (headerBytes[j] == 113 || headerBytes[j] == 133 )
+						else if (headerBytes[j] == 113 || headerBytes[j] == 133)
 						{
 							break;
 						}
 					}
-					
+
 					break;
 				}
 			}
