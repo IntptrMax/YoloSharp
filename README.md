@@ -1,19 +1,20 @@
 ﻿# YoloSharp
 
-Train Yolo model in C# with TorchSharp. <br/>
-With the help of this project you won't have to transform .pt model to onnx, and can train your own model in C# and don't have to install python.
+Train and run YOLO models in pure C# with TorchSharp.
 
-## Feature
+No Python required — from training to inference, everything stays in .NET.
 
-- Written in C# only, don't have to install python.
-- Train and predict your own model.
-- Support Yolov5, Yolov5u, Yolov8, Yolov11 and Yolov12 now.
-- Support Predict, Segment, Obb, Pose(Key Points) and Classification now.
-- Support n/s/m/l/x size.
-- Support LetterBox and Mosaic4 method for preprocessing images.
-- Support NMS with GPU.
-- Support Load PreTrained models from ultralytics yolov5/yolov8/yolo11 and yolov12(converted).
-- Support .Net6 or higher.
+## Features
+
+- **100% C# implementation** – No Python environment needed.
+- **Full pipeline support** – Train, validate, and predict with your own models.
+- **Multiple YOLO versions** – Supports YOLOv5, YOLOv5u, YOLOv8, YOLOv11, and YOLOv12.
+- **Various task types** – Object detection, segmentation, oriented bounding boxes (OBB), pose estimation (keypoints), and classification.
+- **Model sizes** – n/s/m/l/x variants available.
+- **Advanced preprocessing** – LetterBox and Mosaic4 data augmentation.
+- **GPU-accelerated NMS** – Non-maximum suppression runs on GPU.
+- **Pretrained model support** – Load models from Ultralytics YOLO (v5/v8/v11) and converted YOLOv12.
+- **Cross-platform** – Compatible with .NET 6 and later.
 
 ## 🔥Important News  
 
