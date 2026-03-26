@@ -18,6 +18,9 @@ No Python required — from training to inference, everything stays in .NET.
 
 ## 🔥Important News  
 
+**2026/03/26**  
+  🚀 Add metrics curves for training.  
+
 **2026/03/06**  
   🚀 Add config for training and predict.  
   🚀 Add more metrics for val.   
