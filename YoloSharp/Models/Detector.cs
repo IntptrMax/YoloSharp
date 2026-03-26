@@ -11,8 +11,6 @@ namespace YoloSharp.Models
 {
     internal class Detector : YoloBaseTaskModel
     {
-        //private Module<Tensor, float, float, Tensor> predict;
-
         internal Detector(Config config)
         {
             this.config = config;
@@ -140,8 +138,6 @@ namespace YoloSharp.Models
                     loss_items = loss_items + ls_item.to(loss_items.dtype, loss_items.device);
                     loss_items = loss_items.MoveToOuterDisposeScope();
                     count += data["images"].shape[0];
-                    // pbar.SetPostfix(new (string key, object value)[] { ("Val Loss", $"{loss_items.sum().ToSingle() / count:f3}"), });
-
                 }
 
                 Tensor tp_total = torch.cat(tpList);
@@ -183,14 +179,23 @@ namespace YoloSharp.Models
 
         internal override string GetValDescription()
         {
-            string[] strs = new string[] {"Class", "Images", "Instances", "Box(P", "R", "mAP50", "mAP50-90)" };
+            string[] strs = new string[] { "Class", "Images", "Instances", "Box(P", "R", "mAP50", "mAP50-90)" };
             StringBuilder stringBuilder = new StringBuilder();
-            foreach (string str in strs) 
+            foreach (string str in strs)
             {
                 stringBuilder.AppendFormat("{0,10}", str);
-            } 
+            }
             return stringBuilder.ToString();
         }
 
+        internal override string GetSeperatLogHeaders()
+        {
+            return "Epoch, Time, train/box_loss, train/cls_loss, train/dfl_loss, val/box_loss, val/cls_oss, val/dfl_loss, metrics/precision(B), metrics/recall(B), metrics/mAP50(B), metrics/mAP50-95(B), train/loss, val/loss";
+        }
+
+        internal void DrawPlots(Tensor p_curve, Tensor r_curve, Tensor f1_curve, Tensor x, Tensor prec_values)
+        {
+
+        }
     }
 }

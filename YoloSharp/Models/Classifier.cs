@@ -196,5 +196,11 @@ namespace YoloSharp.Models
             }
             return stringBuilder.ToString();
         }
+
+        internal override string GetSeperatLogHeaders()
+        {
+            return "Epoch, Time, train/loss, val/loss, metrics/accuracy_top1, metrics/accuracy_top5, train/loss, val/loss";
+        }
+
     }
 }

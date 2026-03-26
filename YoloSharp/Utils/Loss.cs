@@ -846,7 +846,7 @@ namespace YoloSharp.Utils
 
 					loss[0] *= this.hyp_box;  // box gain
 					loss[1] *= this.hyp_cls;  // cls gain
-					loss[2] *= this.hyp_dfl; // dfl gain
+					loss[2] *= this.hyp_dfl;  // dfl gain
 
 					return ((loss.sum() * batch_size).MoveToOuterDisposeScope(), loss.MoveToOuterDisposeScope()); // loss(box, cls, dfl)
 				}

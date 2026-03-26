@@ -233,6 +233,10 @@ namespace YoloSharp.Models
             return stringBuilder.ToString();
         }
 
+        internal override string GetSeperatLogHeaders()
+        {
+            return "Epoch, Time, train/box_loss, train/pose_loss, train/kobj_loss, train/cls_loss, train/dfl_loss, val/box_loss, val/pose_loss, val/kobj_loss, val/cls_loss, val/dfl_loss, metrics/precision(B), metrics/recall(B), metrics/mAP50(B), metrics/mAP50-95(B), metrics/precision(P), metrics/recall(P), metrics/mAP50(P), metrics/mAP50-95(P), train/loss, val/loss";
+        }
 
     }
 }

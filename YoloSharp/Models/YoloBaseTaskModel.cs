@@ -1,4 +1,6 @@
 ﻿using Data;
+using ScottPlot;
+using System.Data;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -19,7 +21,6 @@ namespace YoloSharp.Models
         protected Module<Tensor, Tensor[]> yolo;
         protected Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> loss;
 
-        private float best_val_loss = float.PositiveInfinity;
         private int counter = 0;
 
         protected Config config = new Config();
@@ -109,6 +110,7 @@ namespace YoloSharp.Models
 
         internal virtual void Train()
         {
+            float best_fitness = float.MinValue;
             Console.WriteLine("Start Training:");
             Console.WriteLine(config.ToString());
             WriteConfig();
@@ -131,10 +133,11 @@ namespace YoloSharp.Models
             YoloDataLoader valDataLoader = new YoloDataLoader(valDataSet, config.BatchSize, num_worker: config.Workers, shuffle: false, device: config.Device);
 
             Optimizer optimizer = new SGD(yolo.parameters(), lr: config.LearningRate, momentum: 0.937f, weight_decay: 5e-4);
-            lr_scheduler.LRScheduler lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max: 200);
+            lr_scheduler.LRScheduler lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max: config.Epochs);
             Console.WriteLine();
 
             AMPWrapper amp = new AMPWrapper(yolo, optimizer, precision: config.Dtype);
+            EarlyStopping stopper = new EarlyStopping(config.Patience);
             yolo.train();
             string weightsPath = Path.Combine(config.OutputPath, "weights");
             for (int epoch = 1; epoch <= config.Epochs; epoch++)
@@ -150,15 +153,20 @@ namespace YoloSharp.Models
                 lr_scheduler.step();
                 (float[] valLoss_items, float[] metrics) = Val(valDataLoader, amp, epoch);
 
-                if (valLoss_items.Sum() / valDataSet.Count < this.best_val_loss - config.Delta)
+                float fitness = -valLoss_items.Sum();
+
+                if (fitness > best_fitness)
                 {
+                    best_fitness = fitness;
                     Console.WriteLine("Get a better result, will be save to best.bin");
                     yolo.save(Path.Combine(weightsPath, "best.bin"));
                 }
-                bool shouldStop = ShouldStop(valLoss_items.Sum() / valDataSet.Count);
+
+                bool shouldStop = stopper.ShouldStop(fitness, epoch);
+
                 if (shouldStop)
                 {
-                    Console.WriteLine($"Early stop at epoch {epoch + 1} with val loss {valLoss_items.Sum() / valDataSet.Count}");
+                    //Console.WriteLine($"Early stop at epoch {epoch + 1} with val loss {valLoss_items.Sum() / valDataSet.Count}");
                     break;
                 }
 
@@ -168,6 +176,8 @@ namespace YoloSharp.Models
                 stopwatch.Stop();
                 WriteLog(epoch, stopwatch.ElapsedMilliseconds / 1000f, trainLoss_items, valLoss_items, metrics);
             }
+            DrawCurve();
+
             Console.WriteLine("Train Done.");
 
             void WriteLog(int epoch, float time, float[] trainLoss_Items, float[] valLoss_Items, float[] metrics)
@@ -180,16 +190,7 @@ namespace YoloSharp.Models
                 StringBuilder stringBuilder = new StringBuilder();
                 if (!File.Exists(fileName))
                 {
-                    stringBuilder.Append("Epoch, Time, ");
-                    stringBuilder.Append(config.TaskType switch
-                    {
-                        TaskType.Detection or TaskType.Obb => "train/box_loss, train/cls_loss, train/dfl_loss, val/box_loss, val/cls_oss, val/dfl_loss, metrics/precision(B), metrics/recall(B), metrics/mAP50(B), metrics/mAP50-95(B), ",
-                        TaskType.Segmentation => "train/box_loss, train/seg_loss, train/cls_loss, train/dfl_loss, val/box_loss, val/seg_loss, val/cls_loss, val/dfl_loss, metrics/precision(B), metrics/recall(B), metrics/mAP50(B), metrics/mAP50-95(B), metrics/precision(M), metrics/recall(M), metrics/mAP50(M), metrics/mAP50-95(M), ",
-                        TaskType.Pose => "train/box_loss, train/pose_loss, train/kobj_loss, train/cls_loss, train/dfl_loss, val/box_loss, val/pose_loss, val/kobj_loss, val/cls_loss, val/dfl_loss, metrics/precision(B), metrics/recall(B), metrics/mAP50(B), metrics/mAP50-95(B), metrics/precision(P), metrics/recall(P), metrics/mAP50(P), metrics/mAP50-95(P), ",
-                        TaskType.Classification => "train/loss, val/loss, metrics/accuracy_top1, metrics/accuracy_top5, ",
-                        _ => throw new NotImplementedException("Not implemented task type: " + config.TaskType),
-                    });
-                    stringBuilder.AppendLine("train/loss, val/loss, ");
+                    stringBuilder.AppendLine(GetSeperatLogHeaders());
                 }
                 //stringBuilder.AppendLine($"{epoch}, {time}, {trainLoss}, {valLoss}");
                 stringBuilder.Append($"{epoch}, {time}, ");
@@ -221,6 +222,35 @@ namespace YoloSharp.Models
                 stringBuilder.AppendLine($"Date Time: {DateTime.Now}");
                 stringBuilder.AppendLine(config.ToString());
                 File.WriteAllText(fileName, stringBuilder.ToString());
+            }
+
+            void DrawCurve()
+            {
+                string fileName = Path.Combine(config.OutputPath, "log.csv");
+                Dictionary<string, List<float>> dictionary = Tools.LoadCSV(fileName);
+                Multiplot multiplot = new Multiplot();
+
+                int plotCount = dictionary.Keys.Count - 4;
+                if (string.IsNullOrEmpty(dictionary.Keys.Last()))
+                {
+                    plotCount = plotCount - 1;
+                }
+
+                multiplot.AddPlots(plotCount);
+                multiplot.Layout = new ScottPlot.MultiplotLayouts.Grid(2, plotCount / 2);
+                for (int i = 0; i < 10; i++)
+                {
+                    string name = dictionary.Keys.ToArray()[i + 2];
+                    List<float> x = dictionary["Epoch"];
+                    List<float> y = dictionary[name];
+
+                    Plot plot = multiplot.Subplots.GetPlot(i);
+                    plot.Title(name);
+                    plot.Add.Scatter(x, y);
+                }
+
+                string plotImagePath = Path.Combine(config.OutputPath, "results.png");
+                multiplot.SavePng(plotImagePath, 200 * plotCount, 1200);
             }
         }
 
@@ -270,22 +300,9 @@ namespace YoloSharp.Models
 
         internal abstract List<YoloResult> ImagePredict(Tensor orgImage, float predictThreshold, float iouThreshold);
 
-        internal bool ShouldStop(float val_loss)
-        {
-            if (val_loss < this.best_val_loss - config.Delta)
-            {
-                this.best_val_loss = val_loss;
-                this.counter = 0;
-                return false;
-            }
-            else
-            {
-                this.counter += 1;
-                return this.counter >= config.Patience;
-            }
-        }
-
         internal abstract (float[] loss, float[] metrics) Val(YoloDataLoader valDataLoader, AMPWrapper amp, int epoch);
+
+        internal abstract string GetSeperatLogHeaders();
 
         /// <summary>
         /// Match predictions to ground truth objects using IoU.

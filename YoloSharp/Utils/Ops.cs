@@ -240,8 +240,8 @@ namespace YoloSharp.Utils
                 //prediction[TensorIndex.Ellipsis, ..4] = torchvision.ops.box_convert(prediction[TensorIndex.Ellipsis, ..4], torchvision.ops.BoxFormats.cxcywh, torchvision.ops.BoxFormats.xyxy);
 
 
-                List<Tensor> output = Enumerable.Range(0, bs).Select(_ => torch.zeros(new long[] { 0, 6 + extra }, device: prediction.device).clone()).ToList();
-                List<Tensor> keepi = Enumerable.Range(0, bs).Select(_ => torch.zeros(new long[] { 0, 1 }, device: prediction.device).clone()).ToList(); // to store the kept idxs
+                List<Tensor> output = Enumerable.Range(0, bs).Select(_ => torch.zeros(new long[] { 0, 6 + extra }, device: prediction.device).clone().MoveToOuterDisposeScope()).ToList();
+                List<Tensor> keepi = Enumerable.Range(0, bs).Select(_ => torch.zeros(new long[] { 0, 1 }, device: prediction.device).clone().MoveToOuterDisposeScope()).ToList(); // to store the kept idxs
 
                 for (int xi = 0; xi < bs; xi++)
                 {

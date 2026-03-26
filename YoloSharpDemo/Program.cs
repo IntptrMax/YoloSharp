@@ -11,15 +11,16 @@ namespace YoloSharpDemo
 		{
 			string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-obb.bin"; // Pretrained model path.
 			string predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
+			string dataRootPath = @"..\..\..\Assets\datasets\DOTAv1";
 
-			Mat predictImage = Cv2.ImRead(predictImagePath);
+            Mat predictImage = Cv2.ImRead(predictImagePath);
 
 			// Create a Yolo config
 			Config config = new Config
 			{
 				DeviceType = DeviceType.CUDA,
 				ScalarType = ScalarType.Float16,
-				RootPath = @"..\..\..\Assets\DataSets\dotav1",
+				RootPath = dataRootPath,
 				TrainDataPath = "train.txt",
 				ValDataPath = "val.txt",
 				YoloType = YoloType.Yolov8,
@@ -27,12 +28,14 @@ namespace YoloSharpDemo
 				TaskType = TaskType.Obb,
 				ImageProcessType = ImageProcessType.Mosiac,
 				ImageSize = 640,
-				BatchSize = 16,
+				BatchSize = 8,
 				NumberClass = 15,
 				PredictThreshold = 0.3f,
 				IouThreshold = 0.7f,
 				Workers = 4,
 				Epochs = 100,
+				LearningRate = 1e-4f,
+				Patience = 50,
 			};
 
 			// Create a yolo task.

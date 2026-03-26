@@ -103,12 +103,7 @@ namespace Data
 		/// <summary>
 		/// Early stop patience
 		/// </summary>
-		public int Patience { get; set; } = 30;
-
-		/// <summary>
-		/// Early stop delta
-		/// </summary>
-		public float Delta { get; set; } = 1e-5f;
+		public int Patience { get; set; } = 50;
 
 		/// <summary>
 		/// Key point shape, it will be use only in YoloPose
@@ -162,7 +157,6 @@ namespace Data
 			ScalarType = dtype ?? ScalarType;
 			ImageProcessType = imageProcessType ?? ImageProcessType;
 			Patience = patience ?? Patience;
-			Delta = delta ?? Delta;
 			KeyPointShape = keyPointShape ?? new int[] { 17, 3 };
 			Brightness = brightness ?? Brightness;
 			Contrast = contrast ?? Contrast;
@@ -194,7 +188,6 @@ namespace Data
 			stringBuilder.AppendLine($"Val Data Path: {ValDataPath}");
 			stringBuilder.AppendLine($"Output Path: \"{Path.GetFullPath(OutputPath)}\"");
 			stringBuilder.AppendLine($"Early Stop Patience: {Patience}");
-			stringBuilder.AppendLine($"Early Stop Delta: {Delta}");
 			stringBuilder.AppendLine($"Predict Threshold: {PredictThreshold}");
 			stringBuilder.AppendLine($"Iou Threshold: {IouThreshold}");
 			stringBuilder.AppendLine($"Brightness Augmentation: {Brightness}");
