@@ -13,6 +13,8 @@ public class MixedPrecisionTrainer : IDisposable
 	private Device _device;
 	private ScalarType _precision;
 	private bool _isMixedPrecision;
+	private float _minScale;      // New: minimum scaling factor
+	private float _maxScale;      // New: maximum scaling factor
 
 	public MixedPrecisionTrainer(
 		float initScale = 65536.0f,
@@ -20,7 +22,9 @@ public class MixedPrecisionTrainer : IDisposable
 		float backoffFactor = 0.5f,
 		int growthInterval = 2000,
 		Device device = null,
-		ScalarType precision = ScalarType.Float32)  
+		ScalarType precision = ScalarType.Float32,
+		float minScale = 1e-4f,      // default minimum scale
+		float maxScale = 16777216f)  // default maximum scale (2^24)
 	{
 		if (precision != ScalarType.Float16 && precision != ScalarType.BFloat16 && precision != ScalarType.Float32)
 		{
@@ -36,6 +40,8 @@ public class MixedPrecisionTrainer : IDisposable
 		_device = device ?? (torch.cuda_is_available() ? CUDA : CPU);
 		_precision = precision;
 		_isMixedPrecision = (precision == ScalarType.Float16 || precision == ScalarType.BFloat16);
+		_minScale = minScale;
+		_maxScale = maxScale;
 
 		if (!_isMixedPrecision)
 		{
@@ -96,8 +102,7 @@ public class MixedPrecisionTrainer : IDisposable
 			if (param.grad is not null)
 			{
 				var grad = param.grad;
-
-				// Check if is NaN or Inf
+				// Use any().item<bool>() to check
 				if (grad.isinf().any().item<bool>() || grad.isnan().any().item<bool>())
 				{
 					_foundInf = true;
@@ -109,7 +114,7 @@ public class MixedPrecisionTrainer : IDisposable
 		return _foundInf;
 	}
 
-	// Update Scaler
+	// Update Scaler with boundary protection
 	public void Update()
 	{
 		if (!_isMixedPrecision)
@@ -119,17 +124,15 @@ public class MixedPrecisionTrainer : IDisposable
 
 		if (_foundInf)
 		{
-			// If is Inf or NaN, reduce the scale.
-			_lossScale = _lossScale * _backoffFactor;
+			// Found inf/nan, reduce scaling factor but not below minimum
+			_lossScale = Math.Max(_lossScale * _backoffFactor, _minScale);
 			_growthCounter = 0;
-			//Console.Write($"Reducing loss scale to: {_lossScale}");
 		}
 		else if (_growthCounter >= _growthInterval)
 		{
-			// If there is a long time with no Inf or NaN, upscale the scale.
-			_lossScale = _lossScale * _growthFactor;
+			// No issues for a while, increase scaling factor but not above maximum
+			_lossScale = Math.Min(_lossScale * _growthFactor, _maxScale);
 			_growthCounter = 0;
-			//Console.Write($"Increasing loss scale to: {_lossScale}");
 		}
 	}
 
@@ -139,30 +142,30 @@ public class MixedPrecisionTrainer : IDisposable
 		optimizer.zero_grad();
 	}
 
-	// Change tensor to mixed
+	// Change tensor to mixed precision (if needed)
 	public Tensor ToMixedPrecision(Tensor tensor)
 	{
 		if (!_isMixedPrecision)
 			return tensor;
 
-		if (tensor.dtype == ScalarType.Float32)
-		{
-			return tensor.to(_precision, copy: true);
-		}
-		return tensor;
+		// If already at target precision, return the original tensor (avoid copy)
+		if (tensor.dtype == _precision)
+			return tensor;
+
+		return tensor.to(_precision, copy: true);
 	}
 
-	// Change the tensor to Float
+	// Change tensor to float32 (if needed)
 	public Tensor ToFloat32(Tensor tensor)
 	{
 		if (!_isMixedPrecision)
 			return tensor;
 
-		if (tensor.dtype == _precision)
-		{
-			return tensor.to(ScalarType.Float32, copy: true);
-		}
-		return tensor;
+		// If already float32, return the original tensor
+		if (tensor.dtype == ScalarType.Float32)
+			return tensor;
+
+		return tensor.to(ScalarType.Float32, copy: true);
 	}
 
 	// Get Current Scale
@@ -170,6 +173,7 @@ public class MixedPrecisionTrainer : IDisposable
 
 	public void Dispose()
 	{
+		// No additional cleanup needed
 	}
 }
 
@@ -178,135 +182,96 @@ public class AMPWrapper : IDisposable
 	private MixedPrecisionTrainer _scaler;
 	private torch.nn.Module<Tensor, Tensor[]> _model;
 	private Optimizer _optimizer;
-	private Dictionary<string, Tensor> _originalWeights;
-	private bool _weightsConverted;
 	private bool _isMixedPrecision;
 
 	public AMPWrapper(
 		torch.nn.Module<Tensor, Tensor[]> model,
 		Optimizer optimizer,
-		ScalarType precision = ScalarType.Float32,  
+		ScalarType precision = ScalarType.Float32,
 		Device device = null)
 	{
 		_model = model;
 		_optimizer = optimizer;
 		_scaler = new MixedPrecisionTrainer(precision: precision, device: device);
-		_originalWeights = new Dictionary<string, Tensor>();
-		_weightsConverted = false;
 		_isMixedPrecision = _scaler.IsMixedPrecision;
-	}
 
-	// Convert the weight to Mixed
-	private void ConvertWeightsToMixedPrecision()
-	{
-		if (!_isMixedPrecision || _weightsConverted)
-			return;
-
-		foreach (var (name, param) in _model.named_parameters())
-		{
-			if (param.dtype == ScalarType.Float32)
-			{
-				_originalWeights[name] = param.detach().clone();
-
-				var mixedPrecisionParam = param.to(_scaler.Precision);
-				param.set_(mixedPrecisionParam);
-			}
-		}
-
-		_weightsConverted = true;
-	}
-
-	// Restore Weights To Float
-	private void RestoreWeightsToFloat32()
-	{
-		if (!_isMixedPrecision || !_weightsConverted)
-			return;
-
-		foreach (var (name, original) in _originalWeights)
-		{
-			var namedParam = _model.named_parameters().FirstOrDefault(a => a.name == name);
-			if (namedParam.parameter is not null && !namedParam.parameter.IsInvalid)
-			{
-				var param = namedParam.parameter;
-				param.set_(original);
-			}
-		}
-
-		foreach (var weight in _originalWeights.Values)
-		{
-			weight.Dispose();
-		}
-		_originalWeights.Clear();
-		_weightsConverted = false;
-	}
-
-	public Tensor[] Forward(Tensor input)
-	{
+		// If mixed precision is enabled, convert model parameters to target precision (in-place)
 		if (_isMixedPrecision)
 		{
 			ConvertWeightsToMixedPrecision();
-			Tensor inputMixed = _scaler.ToMixedPrecision(input);
-
-			try
-			{
-				var output = _model.forward(inputMixed);
-				return output.Select(_scaler.ToFloat32).ToArray();
-			}
-			finally
-			{
-				if (inputMixed.Handle != input.Handle)
-				{
-					inputMixed.Dispose();
-				}
-			}
-		}
-		else
-		{
-			return _model.forward(input).ToArray();
 		}
 	}
 
-	// Forward
+	// Convert model weights to mixed precision (in-place)
+	private void ConvertWeightsToMixedPrecision()
+	{
+		var targetType = _scaler.Precision;
+		foreach (var (_, param) in _model.named_parameters())
+		{
+			if (param.dtype != targetType)
+			{
+				var converted = param.to(targetType);
+				param.set_(converted);
+				converted.Dispose(); // Release temporary tensor
+			}
+		}
+	}
+
+	// Convert model weights back to float32 (in-place)
+	private void RestoreWeightsToFloat32()
+	{
+		foreach (var (_, param) in _model.named_parameters())
+		{
+			if (param.dtype != ScalarType.Float32)
+			{
+				var converted = param.to(ScalarType.Float32);
+				param.set_(converted);
+				converted.Dispose();
+			}
+		}
+	}
+
+	// Forward pass (single input)
+	public Tensor[] Forward(Tensor input)
+	{
+		if (!_isMixedPrecision)
+		{
+			return _model.forward(input).ToArray();
+		}
+
+		// Convert input to mixed precision, convert outputs back to float32
+		using var mixedInput = _scaler.ToMixedPrecision(input);
+		var outputs = _model.forward(mixedInput);
+		return outputs.Select(_scaler.ToFloat32).ToArray();
+	}
+
+	// Forward pass (multiple inputs)
 	public Tensor[] Forward(IEnumerable<Tensor> inputs)
 	{
 		if (!_isMixedPrecision)
 		{
-			var opts = new List<Tensor>();
+			var results = new List<Tensor>();
 			foreach (var input in inputs)
 			{
-				opts.AddRange(_model.forward(input));
+				results.AddRange(_model.forward(input));
 			}
-			return opts.ToArray();
+			return results.ToArray();
 		}
 
-		ConvertWeightsToMixedPrecision();
-		var mixedInputs = inputs.Select(_scaler.ToMixedPrecision).ToList();
 		var outputs = new List<Tensor>();
-
-		try
+		foreach (var input in inputs)
 		{
-			foreach (var input in mixedInputs)
-			{
-				var output = _model.forward(input);
-				outputs.AddRange(output.Select(_scaler.ToFloat32));
-			}
+			using var mixedInput = _scaler.ToMixedPrecision(input);
+			var outTensors = _model.forward(mixedInput);
+			outputs.AddRange(outTensors.Select(_scaler.ToFloat32));
 		}
-		finally
-		{
-			foreach (var input in mixedInputs)
-			{
-				if (input.Handle != inputs.ElementAt(mixedInputs.IndexOf(input)).Handle)
-				{
-					input.Dispose();
-				}
-			}
-		}
-
 		return outputs.ToArray();
 	}
 
+	// Single training step
 	public void Step(Tensor loss)
 	{
+		// Ensure loss is float32
 		if (loss.dtype != ScalarType.Float32)
 		{
 			loss = loss.to(ScalarType.Float32);
@@ -316,23 +281,32 @@ public class AMPWrapper : IDisposable
 		{
 			if (_isMixedPrecision)
 			{
+				// Scale loss and backpropagate
 				var scaledLoss = _scaler.ScaleLoss(loss);
 				scaledLoss.backward();
 
+				// Check if gradients contain inf/nan
 				bool hasInfNan = _scaler.CheckGradientsForInfNan(_model.parameters());
 
 				if (!hasInfNan)
 				{
+					// Unscale gradients
 					_scaler.UnscaleGradients(_model.parameters());
+					// Update optimizer
 					_optimizer.step();
+					// Zero gradients (fix gradient accumulation issue)
+					_optimizer.zero_grad();
 				}
 				else
 				{
+					// Skip this update and zero gradients
 					_scaler.SkipStep(_optimizer);
 				}
 
+				// Update loss scaler
 				_scaler.Update();
 
+				// Dispose scaled loss tensor if it is different from original loss
 				if (scaledLoss.Handle != loss.Handle)
 				{
 					scaledLoss.Dispose();
@@ -360,7 +334,7 @@ public class AMPWrapper : IDisposable
 		}
 	}
 
-	// Train
+	// Training step (includes forward, loss computation, backward)
 	public Tensor[] TrainStep(Tensor input, Tensor target, Func<Tensor[], Tensor, Tensor> lossFunction)
 	{
 		var outputs = Forward(input);
@@ -369,29 +343,24 @@ public class AMPWrapper : IDisposable
 		return outputs;
 	}
 
-	// Eval
+	// Evaluation mode: forward pass with mixed precision weights (input automatically converted, outputs converted to float32)
 	public Tensor[] Evaluate(Tensor input)
 	{
-		if (_isMixedPrecision)
-		{
-			RestoreWeightsToFloat32();
-			try
-			{
-				return _model.forward(input).ToArray();
-			}
-			finally
-			{
-				ConvertWeightsToMixedPrecision();
-			}
-		}
-		else
+		if (!_isMixedPrecision)
 		{
 			return _model.forward(input).ToArray();
 		}
+
+		// Convert input to mixed precision, convert outputs back to float32
+		using var mixedInput = _scaler.ToMixedPrecision(input);
+		var outputs = _model.forward(mixedInput);
+		return outputs.Select(_scaler.ToFloat32).ToArray();
 	}
 
+	// Force a training step using float32 (kept for backward compatibility)
 	public void TrainStepFloat32(Tensor input, Tensor target, Func<Tensor[], Tensor, Tensor> lossFunction)
 	{
+		// Temporarily convert model weights to float32
 		if (_isMixedPrecision)
 		{
 			RestoreWeightsToFloat32();
@@ -403,6 +372,12 @@ public class AMPWrapper : IDisposable
 		loss.backward();
 		_optimizer.step();
 		_optimizer.zero_grad();
+
+		// If originally mixed precision, revert to mixed precision
+		if (_isMixedPrecision)
+		{
+			ConvertWeightsToMixedPrecision();
+		}
 	}
 
 	public MixedPrecisionTrainer Scaler => _scaler;
@@ -411,7 +386,11 @@ public class AMPWrapper : IDisposable
 
 	public void Dispose()
 	{
-		RestoreWeightsToFloat32();
+		// Convert model weights back to float32 for subsequent use
+		if (_isMixedPrecision)
+		{
+			RestoreWeightsToFloat32();
+		}
 		_scaler?.Dispose();
 	}
 }
