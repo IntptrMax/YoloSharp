@@ -7,7 +7,6 @@ using System.Text.RegularExpressions;
 using TorchSharp;
 using TorchSharp.Modules;
 using Utils;
-using YoloSharp.Data;
 using YoloSharp.Types;
 using YoloSharp.Utils;
 using static TorchSharp.torch;
@@ -21,9 +20,12 @@ namespace YoloSharp.Models
         protected Module<Tensor, Tensor[]> yolo;
         protected Module<Tensor[], Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> loss;
 
-        private int counter = 0;
-
         protected Config config = new Config();
+
+        internal YoloBaseTaskModel()
+        {
+            torchvision.io.DefaultImager = new torchvision.io.SkiaImager();
+        }
 
         internal virtual void LoadModel(string path, bool skipNcNotEqualLayers = false)
         {
@@ -72,7 +74,7 @@ namespace YoloSharp.Models
                                 {
                                     skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, ncLayerPattern)).ToList();
                                 }
-                                if (kpt != config.KeyPointShape[0] * config.KeyPointShape[1])
+                                if (kpt != config.KeyPoint_Num * config.KeyPoint_Dim)
                                 {
                                     skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, kptLayerPattern)).ToList();
                                 }
@@ -115,7 +117,7 @@ namespace YoloSharp.Models
             Console.WriteLine(config.ToString());
             WriteConfig();
 
-            YoloDataset trainDataSet = new YoloDataset(config.RootPath, config.TrainDataPath, config.ImageSize, config.TaskType, config.ImageProcessType, brightness: config.Brightness, contrast: config.Contrast, saturation: config.Saturation, hue: config.Hue);
+            BaseDataset trainDataSet = this.config.TaskType == TaskType.Classification ? new ClassificationDataset(config) : new YoloDataset(config);
             if (trainDataSet.Count == 0)
             {
                 throw new FileNotFoundException("No data found in the path: " + config.RootPath);
@@ -124,7 +126,7 @@ namespace YoloSharp.Models
             YoloDataLoader trainDataLoader = new YoloDataLoader(trainDataSet, config.BatchSize, num_worker: config.Workers, shuffle: true, device: config.Device);
             config.ValDataPath = string.IsNullOrEmpty(config.ValDataPath) ? config.TrainDataPath : config.ValDataPath;
 
-            YoloDataset valDataSet = new YoloDataset(config.RootPath, config.ValDataPath, config.ImageSize, config.TaskType, ImageProcessType.Letterbox, brightness: 0f, contrast: 0f, saturation: 0f, hue: 0f);
+            BaseDataset valDataSet = this.config.TaskType == TaskType.Classification ? new ClassificationDataset(this.config, true) : new YoloDataset(this.config, true);
             if (valDataSet.Count == 0)
             {
                 throw new FileNotFoundException("No data found in the path: " + config.RootPath);
@@ -238,7 +240,9 @@ namespace YoloSharp.Models
 
                 multiplot.AddPlots(plotCount);
                 multiplot.Layout = new ScottPlot.MultiplotLayouts.Grid(2, plotCount / 2);
-                for (int i = 0; i < 10; i++)
+
+                int max_count = Math.Min(plotCount, 10);
+                for (int i = 0; i < max_count; i++)
                 {
                     string name = dictionary.Keys.ToArray()[i + 2];
                     List<float> x = dictionary["Epoch"];
@@ -269,6 +273,7 @@ namespace YoloSharp.Models
                             continue;
                         }
                         Tensor[] list = amp.Forward(data["images"]);
+
                         (Tensor ls, Tensor ls_item) = loss.forward(list.ToArray(), data);
                         if (loss_items.NumberOfElements < 1)
                         {

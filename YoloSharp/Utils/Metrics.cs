@@ -112,12 +112,14 @@ namespace YoloSharp.Utils
             using (no_grad())
             {
                 Tensor d = (kpt1[.., TensorIndex.None, .., 0] - kpt2[TensorIndex.Ellipsis, 0]).pow(2) + (kpt1[.., TensorIndex.None, .., 1] - kpt2[TensorIndex.Ellipsis, 1]).pow(2);    //   (N, M, 17)
-                Tensor sigma_tensor = torch.tensor(sigma, device: kpt1.device, dtype: kpt1.dtype);  // (17, )
+                long nkpt = kpt1.shape[1];
+
+                Tensor sigma_tensor = nkpt == 17 ? torch.tensor(sigma, device: kpt1.device, dtype: kpt1.dtype) : torch.ones(new long[] { nkpt }, device: kpt1.device, dtype: kpt1.dtype) / nkpt;  // (17, )
                 Tensor kpt_mask = kpt1[TensorIndex.Ellipsis, 2] != 0;  // (N, 17)
                 Tensor e = d / ((2 * sigma_tensor).pow(2) * (area[.., TensorIndex.None, TensorIndex.None] + eps) * 2);  // from cocoeval
 
                 // e = d / ((area[None, :, None] + eps) * sigma) ** 2 / 2  # from formula
-                Tensor kpt_iou = ((-e).exp() * kpt_mask[..,TensorIndex. None]).sum(-1) / (kpt_mask.sum(-1)[..,TensorIndex. None] + eps);
+                Tensor kpt_iou = ((-e).exp() * kpt_mask[.., TensorIndex.None]).sum(-1) / (kpt_mask.sum(-1)[.., TensorIndex.None] + eps);
                 return kpt_iou.MoveToOuterDisposeScope();
             }
         }
@@ -271,7 +273,6 @@ namespace YoloSharp.Utils
                         if (CIoU)  // https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
                         {
                             Tensor v = 4 / (MathF.PI * MathF.PI) * (atan(w2 / h2) - atan(w1 / h1)).pow(2);
-
                             {
                                 Tensor alpha = v / (v - iou + (1 + eps));
                                 return (iou - (rho2 / c2 + v * alpha)).MoveToOuterDisposeScope();  //CIoU

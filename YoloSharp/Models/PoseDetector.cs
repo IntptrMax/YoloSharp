@@ -30,14 +30,14 @@ namespace YoloSharp.Models
 
             yolo = config.YoloType switch
             {
-                YoloType.Yolov8 => new Yolo.Yolov8Pose(config.NumberClass, config.KeyPointShape, config.YoloSize, config.Device, config.Dtype),
-                YoloType.Yolov11 => new Yolo.Yolov11Pose(config.NumberClass, config.KeyPointShape, config.YoloSize, config.Device, config.Dtype),
+                YoloType.Yolov8 => new Yolo.Yolov8Pose(config.NumberClass, config.KeyPoint_Num,config.KeyPoint_Dim, config.YoloSize, config.Device, config.Dtype),
+                YoloType.Yolov11 => new Yolo.Yolov11Pose(config.NumberClass, config.KeyPoint_Num, config.KeyPoint_Dim, config.YoloSize, config.Device, config.Dtype),
                 _ => throw new NotImplementedException("Yolo type not supported."),
             };
             loss = config.YoloType switch
             {
-                YoloType.Yolov8 => new Loss.V8PoseLoss(config.NumberClass, config.KeyPointShape),
-                YoloType.Yolov11 => new Loss.V8PoseLoss(config.NumberClass, config.KeyPointShape),
+                YoloType.Yolov8 => new Loss.V8PoseLoss(config.NumberClass, config.KeyPoint_Num, config.KeyPoint_Dim),
+                YoloType.Yolov11 => new Loss.V8PoseLoss(config.NumberClass, config.KeyPoint_Num, config.KeyPoint_Dim),
                 _ => throw new NotImplementedException("Yolo type not supported."),
             };
 
@@ -136,7 +136,7 @@ namespace YoloSharp.Models
                         Tensor pred_bboxes = nms_results[i][.., 0..4];
                         Tensor pred_scores = nms_results[i][.., 4];
                         Tensor pred_classes = nms_results[i][.., 5];
-                        Tensor pred_kpt = nms_results[i][.., 6..].view(new long[] { -1, config.KeyPointShape[0], config.KeyPointShape[1] });
+                        Tensor pred_kpt = nms_results[i][.., 6..].view(new long[] { -1, config.KeyPoint_Num, config.KeyPoint_Dim });
 
                         Tensor batch_idx = data["batch_idx"].squeeze(-1) == i;
                         Tensor turn_classes = data["cls"][batch_idx].squeeze(-1);

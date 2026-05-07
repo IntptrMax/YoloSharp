@@ -1,1 +1,1 @@
-﻿images\train2017\000000000247.jpg
+﻿./images/train2017/000000000247.jpg

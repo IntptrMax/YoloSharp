@@ -32,55 +32,6 @@ namespace YoloSharp.Models
             // Tools.TransModelFromSafetensors(yolo, @".\yolov8n-cls.safetensors", @".\PreTrainedModels\yolov8n-cls.bin");
         }
 
-        internal Dictionary<string, torch.Tensor> GetTargets(long[] indexs, YoloDataset dataset)
-        {
-            using (NewDisposeScope())
-            using (no_grad())
-            {
-                Tensor[] images = new Tensor[indexs.Length];
-                List<float> batch_idx = new List<float>();
-                List<float> cls = new List<float>();
-                for (int i = 0; i < indexs.Length; i++)
-                {
-                    ImageData imageData = dataset.GetImageAndLabelData(indexs[i]);
-                    images[i] = Lib.GetTensorFromImage(imageData.ResizedImage).to(config.Device).unsqueeze(0) / 255.0f;
-                    if (imageData.ResizedLabels is not null)
-                    {
-                        batch_idx.AddRange(Enumerable.Repeat((float)i, imageData.ResizedLabels.Count));
-                        cls.AddRange(imageData.ResizedLabels.Select(x => (float)x.LabelID));
-                    }
-                }
-
-                torchvision.ITransform[] transformers = this.yolo.training switch
-                {
-                    true => new torchvision.ITransform[] {
-                         torchvision.transforms.RandomHorizontalFlip(p: 0.3),
-                         torchvision.transforms.RandomVerticalFlip(0),
-                         torchvision.transforms.RandomRotation(15),
-                         torchvision.transforms.RandomPerspective(0.2, 0.3),
-                         torchvision.transforms.ColorJitter(brightness: 0.2f, contrast: 0.2f, saturation: 0.2f, hue: 0.1f),
-                     },
-                    _ => new torchvision.ITransform[] { }
-                };
-
-                Tensor batch_idx_tensor = tensor(batch_idx, dtype: config.Dtype, device: config.Device).view(-1, 1);
-                Tensor cls_tensor = tensor(cls, dtype: torch.ScalarType.Int64, device: config.Device);
-                Tensor imageTensor = concat(images);
-                torchvision.ITransform transformer = torchvision.transforms.Compose(transformers);
-                imageTensor = transformer.call(imageTensor).to(config.Dtype, config.Device);
-
-                Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
-                {
-                    { "batch_idx", batch_idx_tensor.MoveToOuterDisposeScope() },
-                    { "cls", cls_tensor.MoveToOuterDisposeScope() },
-                    { "images", imageTensor.MoveToOuterDisposeScope()}
-                };
-
-                GC.Collect();
-                return targets;
-            }
-        }
-
         internal override List<YoloResult> ImagePredict(Tensor orgImage, float predictThreshold, float iouThreshold)
         {
             using (no_grad())
@@ -199,7 +150,7 @@ namespace YoloSharp.Models
 
         internal override string GetSeperatLogHeaders()
         {
-            return "Epoch, Time, train/loss, val/loss, metrics/accuracy_top1, metrics/accuracy_top5, train/loss, val/loss";
+            return "Epoch, Time, train/loss, val/loss, metrics/accuracy_top1, metrics/accuracy_top5, train_total/loss, val_total/loss";
         }
 
     }

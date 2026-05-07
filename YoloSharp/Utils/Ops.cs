@@ -160,6 +160,70 @@ namespace YoloSharp.Utils
         }
 
         /// <summary>
+        /// Takes a list of keypoints and a shape (height, width) and clips the keypoints to the shape.
+        /// </summary>
+        /// <param name="kpts">The keypoints of the image.</param>
+        /// <param name="shape">The shape of the image.</param>
+        /// <returns>The clipped keypoints.</returns>
+        internal static Tensor clip_keypoints(Tensor kpts, float[] shape)
+        {
+            Tensor keypoints = kpts.clone();
+            int w = (int)shape[1];
+            int h = (int)shape[0];
+            if (keypoints.shape[^1] == 3)
+            {
+                keypoints[torch.TensorIndex.Ellipsis, 2][
+                               (keypoints[torch.TensorIndex.Ellipsis, 0] < 0)
+                               | (keypoints[torch.TensorIndex.Ellipsis, 0] > w)
+                               | (keypoints[torch.TensorIndex.Ellipsis, 1] < 0)
+                               | (keypoints[torch.TensorIndex.Ellipsis, 1] > h)
+                           ] = 0.0;
+            }
+            keypoints[torch.TensorIndex.Ellipsis, 0] = keypoints[torch.TensorIndex.Ellipsis, 0].clip(0, w);
+            keypoints[torch.TensorIndex.Ellipsis, 1] = keypoints[torch.TensorIndex.Ellipsis, 1].clip(0, h);
+            return keypoints;
+        }
+
+        /// <summary>
+        /// Takes a list of obb corners and a shape (height, width) and clips the corners to the shape.
+        /// </summary>
+        /// <param name="obb_corners">The oriented bounding box corners to clip.</param>
+        /// <param name="shape">The shape of the image.</param>
+        /// <returns>The clipped corners.</returns>
+        internal static Tensor clip_obb_corners(Tensor obb_corners, float[] shape)
+        {
+            Tensor corners = obb_corners.clone();
+            int w = (int)shape[1];
+            int h = (int)shape[0];
+            corners[torch.TensorIndex.Ellipsis, 0] = corners[torch.TensorIndex.Ellipsis, 0].clip(0, w);
+            corners[torch.TensorIndex.Ellipsis, 1] = corners[torch.TensorIndex.Ellipsis, 1].clip(0, h);
+            return corners;
+        }
+
+        /// <summary>
+        /// sort the OBB corners (top-left corner as the 0th point, counter-clockwise by angle)
+        /// </summary>
+        internal static Tensor sort_obb_corners_batch(Tensor obb_corners)
+        {
+            using (torch.no_grad())
+            {
+                Tensor centers = obb_corners.mean(new long[] { 1 });  // (n, 2)
+
+                Tensor dx = obb_corners[TensorIndex.Ellipsis, 0] - centers[TensorIndex.Ellipsis, 0].unsqueeze(1);
+                Tensor dy = obb_corners[TensorIndex.Ellipsis, 1] - centers[TensorIndex.Ellipsis, 1].unsqueeze(1);
+                Tensor angles = torch.atan2(dy, dx);
+                Tensor sorted_idx = angles.argsort(dim: 1).to(torch.int64);  // (n, 4)
+
+                Tensor sorted_x = obb_corners[TensorIndex.Ellipsis, 0].gather(1, sorted_idx);
+                Tensor sorted_y = obb_corners[TensorIndex.Ellipsis, 1].gather(1, sorted_idx);
+                Tensor sorted = torch.stack(new[] { sorted_x, sorted_y }, dim: 2);
+
+                return sorted;
+            }
+        }
+
+
+        /// <summary>
         /// Perform non-maximum suppression (NMS) on prediction results.<br/>
         /// Applies NMS to filter overlapping bounding boxes based on confidence and IoU thresholds. Supports multiple detection formats including standard boxes, rotated boxes, and masks.
         /// </summary>
@@ -482,7 +546,6 @@ namespace YoloSharp.Utils
                     masks = torch.nn.functional.interpolate(masks[TensorIndex.None], size: shape, mode: InterpolationMode.Bilinear, align_corners: false)[0];// # CHW
                 }
                 return masks.gt_(0.0).MoveToOuterDisposeScope();
-
             }
         }
 

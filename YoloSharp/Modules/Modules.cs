@@ -1136,7 +1136,9 @@ namespace YoloSharp.Modules
         public class Pose : Yolov8Detect
         {
             public readonly int[] KeyPointsShape;
-            private readonly int[] kpt_shape;
+            //private readonly int[] kpt_shape;
+            private readonly int kpt_num;
+            private readonly int kpt_dim;
             private readonly int nk;
             private readonly ModuleList<Sequential> cv4 = new ModuleList<Sequential>();
 
@@ -1150,11 +1152,14 @@ namespace YoloSharp.Modules
             /// <param name="legacy"></param>
             /// <param name="device"></param>
             /// <param name="dtype"></param>
-            public Pose(int nc = 80, int[] kpt_shape = null, int[] ch = null, bool legacy = true, Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, ch: ch, legacy: legacy, device: device, dtype: dtype)
+            public Pose(int nc = 80, /*int[] kpt_shape = null,*/ int? kpt_num = 17, int? kpt_dim = 3, int[]? ch = null, bool legacy = true, Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, ch: ch, legacy: legacy, device: device, dtype: dtype)
             {
-                this.kpt_shape = kpt_shape ?? new int[] { 17, 3 }; // number of keypoints, number of dims (2 for x,y or 3 for x,y,visible)
-                this.KeyPointsShape = this.kpt_shape;
-                nk = this.kpt_shape[0] * this.kpt_shape[1];  // number of keypoints total
+                //this.kpt_shape = kpt_shape ?? new int[] { 17, 3 }; // number of keypoints, number of dims (2 for x,y or 3 for x,y,visible)
+                //this.KeyPointsShape = this.kpt_shape;
+                //nk = this.kpt_shape[0] * this.kpt_shape[1];  // number of keypoints total
+                this.kpt_num = kpt_num ?? 17;
+                this.kpt_dim = kpt_dim ?? 3;
+                nk = this.kpt_num * this.kpt_dim;
                 int c4 = Math.Max(ch[0] / 4, nk);
 
                 cv4 = new ModuleList<Sequential>(ch.Select(x =>
@@ -1184,7 +1189,8 @@ namespace YoloSharp.Modules
             private Tensor kpts_decode(long bs, Tensor kpts)
             {
                 Tensor y = kpts.clone();
-                int ndim = kpt_shape[1];
+                //int ndim = kpt_shape[1];
+                int ndim = this.kpt_dim;
                 if (ndim == 3)
                 {
                     y[.., TensorIndex.Slice(2, step: ndim)] = y[.., TensorIndex.Slice(2, step: ndim)].sigmoid();  // sigmoid (WARNING: inplace .sigmoid_() Apple MPS bug)
