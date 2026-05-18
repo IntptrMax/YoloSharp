@@ -113,6 +113,7 @@ namespace Data
                 {
                     return label;
                 }
+
                 if (this.pre_transform is not null)
                 {
                     label = this.pre_transform.Apply(label);
@@ -238,9 +239,11 @@ namespace Data
                 torch.Tensor mix_keypoints = keypointsList.Count > 0 ? torch.cat(keypointsList) : null;
                 torch.Tensor mix_cls = torch.cat(clsList);
                 torch.Tensor mix_obb_corners = obbCornersList.Count > 0 ? torch.cat(obbCornersList) : null;
-
+                torch.Tensor org_areas = torchvision.ops.box_area(mix_bboxes);
                 mix_bboxes = mix_bboxes.clip(0, s * 2);
-                torch.Tensor good = torchvision.ops.box_area(mix_bboxes) > 0;
+                torch.Tensor areas = torchvision.ops.box_area(mix_bboxes);
+                torch.Tensor good = (areas > 0) & (areas > 0.7 * org_areas);
+                //torch.Tensor good = areas > 0;
                 mix_cls = mix_cls[good];
                 mix_bboxes = mix_bboxes[good];
                 if (mix_keypoints is not null)
@@ -660,8 +663,11 @@ namespace Data
 
             public Struct.LabelStruct Apply(Struct.LabelStruct label)
             {
+                if (label.cls.NumberOfElements < 1)
+                {
+                    return label;
+                }
                 Struct.LabelStruct result = label.Clone();
-
                 result = this.pre_transform is null ? result : this.pre_transform.Apply(result);
 
                 this.border_w = label.mosic_border.w;
@@ -688,7 +694,6 @@ namespace Data
 
             }
         }
-
 
         internal class LetterBox : ITransform
         {
@@ -772,6 +777,86 @@ namespace Data
             }
         }
 
+        internal class Rectangle : ITransform
+        {
+            private readonly int mask_ratio;
+            private readonly int color;
+
+            internal Rectangle(int mask_ratio = 4, int color = 114)
+            {
+                this.mask_ratio = mask_ratio;
+                this.color = color;
+            }
+
+            public Struct.LabelStruct Apply(Struct.LabelStruct label)
+            {
+                if (label.normalized)
+                {
+                    throw new ArgumentException("Label must be denormalized for LetterBox.");
+                }
+                Struct.LabelStruct transformedLabel = label.Clone();
+
+                (int pad_l, int pad_u, torch.Tensor img) = RectangleImage(transformedLabel.img, label.resized_shape.w, label.resized_shape.h, label.rectangle_shape.w, label.rectangle_shape.h, color);
+
+                transformedLabel.img = img;
+
+                if (transformedLabel.mask is not null)
+                {
+                    (_, _, torch.Tensor mask) = RectangleImage(transformedLabel.mask, label.resized_shape.w / mask_ratio, label.resized_shape.h / mask_ratio, label.rectangle_shape.w / mask_ratio, label.rectangle_shape.h / mask_ratio, 0);
+                    transformedLabel.mask = mask;
+                }
+                if (transformedLabel.bboxes is not null)
+                {
+                    if (transformedLabel.bbox_format == torchvision.ops.BoxFormats.xyxy)
+                    {
+                        transformedLabel.bboxes = transformedLabel.bboxes.add(new float[] { pad_l, pad_u, pad_l, pad_u });
+                    }
+                    else
+                    {
+                        transformedLabel.bboxes = transformedLabel.bboxes.add(new float[] { pad_l, pad_u, 0, 0 });
+                    }
+                }
+
+                if (transformedLabel.keypoints is not null)
+                {
+                    transformedLabel.keypoints[torch.TensorIndex.Ellipsis, 0..2] = transformedLabel.keypoints[torch.TensorIndex.Ellipsis, 0..2].add(new float[] { pad_l, pad_u });
+                }
+
+                if (transformedLabel.obb_corners is not null)
+                {
+                    transformedLabel.obb_corners = transformedLabel.obb_corners.add(new float[] { pad_l, pad_u });
+                }
+
+                // transformedLabel.resized_shape = (this.resized_height, this.resized_width);
+
+                return transformedLabel;
+            }
+
+            private (int pad_l, int pad_u, torch.Tensor rectangle_image) RectangleImage(torch.Tensor img, int resized_w, int resized_h, int rectangle_w, int rectangle_h, int color)
+            {
+                int imgH = (int)img.shape[1];
+                int imgW = (int)img.shape[2];
+
+                float ratio_w = resized_w / (float)imgW;
+                float ratio_h = resized_h / (float)imgH;
+                float ratio = Math.Min(ratio_w, ratio_h);
+
+                int new_w = (int)(imgW * ratio);
+                int new_h = (int)(imgH * ratio);
+
+                int pad_l = (rectangle_w - new_w) / 2;
+                int pad_r = rectangle_w - new_w - pad_l;
+                int pad_u = (rectangle_h - new_h) / 2;
+                int pad_d = rectangle_h - new_h - pad_u;
+
+                torch.Tensor img_resized = torchvision.transforms.functional.resize(img, new_h, new_w);
+                torch.Tensor img_padded = torchvision.transforms.functional.pad(img_resized, new long[] { pad_l, pad_u, pad_r, pad_d }, color);
+
+                return (pad_l, pad_u, img_padded);
+            }
+        }
+
+
         internal class FlipLR : ITransform
         {
             private readonly float p;
@@ -842,6 +927,7 @@ namespace Data
                 {
                     return label;
                 }
+
                 if (label.normalized)
                 {
                     throw new ArgumentException("Label must be denormalized for FlipUD.");
@@ -895,7 +981,7 @@ namespace Data
             public Struct.LabelStruct Apply(Struct.LabelStruct label)
             {
                 Struct.LabelStruct transformedLabel = label.Clone();
-                var transform = torchvision.transforms.ColorJitter(brightness: this.vgain, contrast: vgain, hue: this.hgain, saturation: this.sgain);
+                var transform = torchvision.transforms.ColorJitter(brightness: this.vgain, contrast: 0, hue: this.hgain, saturation: this.sgain);
                 transformedLabel.img = transform.call(transformedLabel.img);
                 return transformedLabel;
             }

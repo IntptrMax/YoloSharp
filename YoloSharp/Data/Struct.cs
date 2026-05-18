@@ -11,6 +11,7 @@ namespace Data
             public (int h, int w) org_shape;
             public (int h, int w) resized_shape;
             public (int h, int w) mosic_border;
+            public (int h, int w) rectangle_shape;
 
             public int mask_ratio;
 
@@ -70,7 +71,8 @@ namespace Data
                     bbox_format = this.bbox_format,
                     mask_ratio = this.mask_ratio,
                     mosic_border = this.mosic_border,
-                    obb_corners = this.obb_corners?.clone()
+                    obb_corners = this.obb_corners?.clone(),
+                    rectangle_shape = this.rectangle_shape,
                 };
             }
 
@@ -100,7 +102,8 @@ namespace Data
                 {
                     return;
                 }
-                (int h, int w) = this.resized_shape;
+
+                (int h, int w) = (this.rectangle_shape.w > 0 && this.rectangle_shape.h > 0) ? (this.rectangle_shape.h, this.rectangle_shape.w) : this.resized_shape;
                 float ww = 1f / w;
                 float hh = 1f / h;
 

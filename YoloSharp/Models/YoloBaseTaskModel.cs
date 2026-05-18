@@ -134,14 +134,43 @@ namespace YoloSharp.Models
 
             YoloDataLoader valDataLoader = new YoloDataLoader(valDataSet, config.BatchSize, num_worker: config.Workers, shuffle: false, device: config.Device);
 
-            Optimizer optimizer = new SGD(yolo.parameters(), lr: config.LearningRate, momentum: 0.937f, weight_decay: 5e-4);
-            lr_scheduler.LRScheduler lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max: config.Epochs);
+            //Optimizer optimizer = new SGD(yolo.parameters(), lr: config.LearningRate, momentum: 0.937f, weight_decay: 5e-4);
+
+            double lr_fit = Math.Round(0.002 * 5 / (4 + config.NumberClass), 6);  // lr0 fit equation to 6 decimal places
+
+            AdamW.ParamGroup biasGroup = new AdamW.ParamGroup();
+            biasGroup.Parameters = yolo.named_parameters().Where(a => a.name.Contains("bias")).Select(a => a.parameter);
+
+            AdamW.ParamGroup weightGroup = new AdamW.ParamGroup();
+            weightGroup.Parameters = yolo.named_parameters().Where(a => a.name.Contains("weight")).Select(a => a.parameter);
+
+            AdamW.ParamGroup bnGroup = new AdamW.ParamGroup();
+            bnGroup.Parameters = yolo.named_parameters().Where(a => a.name.Contains("bn")).Select(a => a.parameter);
+
+            //Optimizer optimizer = new AdamW(yolo.parameters(), lr: lr_fit, weight_decay: 5e-4f);
+            Optimizer optimizer = new AdamW(new AdamW.ParamGroup[] { biasGroup, weightGroup, bnGroup }, lr: lr_fit, weight_decay: 5e-4f);
+
+            Func<int, double> lrLambda = config.UseCosLR ?
+                OneCycle(1.0, config.Lrf, config.Epochs) :
+                (int epoch) =>
+                    {
+                        double x = (double)epoch / config.Epochs;
+                        double factor = Math.Max(1 - x, 0) * (1.0 - config.Lrf) + config.Lrf;
+                        return factor;
+                    };
+
+            lr_scheduler.LRScheduler lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lrLambda);
             Console.WriteLine();
 
             AMPWrapper amp = new AMPWrapper(yolo, optimizer, precision: config.Dtype);
             EarlyStopping stopper = new EarlyStopping(config.Patience);
             yolo.train();
             string weightsPath = Path.Combine(config.OutputPath, "weights");
+
+            long nb = trainDataLoader.Count;
+            long nw = Math.Max(config.WarmUpEpoches * nb, 100);
+
+
             for (int epoch = 1; epoch <= config.Epochs; epoch++)
             {
                 if (!Directory.Exists(weightsPath))
@@ -151,7 +180,10 @@ namespace YoloSharp.Models
 
                 Console.WriteLine(GetTrainDescription());
                 Stopwatch stopwatch = Stopwatch.StartNew();
-                float[] trainLoss_items = TrainEpoch(trainDataLoader, amp, epoch);
+
+                trainDataSet.CloseMosaic(epoch <= config.CloseMosaic);
+
+                float[] trainLoss_items = TrainEpoch(trainDataLoader, amp, epoch, nb, nw);
                 lr_scheduler.step();
                 (float[] valLoss_items, float[] metrics) = Val(valDataLoader, amp, epoch);
 
@@ -258,16 +290,41 @@ namespace YoloSharp.Models
             }
         }
 
-        internal virtual float[] TrainEpoch(YoloDataLoader trainDataLoader, AMPWrapper amp, int epoch)
+        internal virtual float[] TrainEpoch(YoloDataLoader trainDataLoader, AMPWrapper amp, int epoch, long nb, long nw)
         {
+            Func<int, double> lrLambda = config.UseCosLR ?
+                    OneCycle(1.0, config.Lrf, config.Epochs) :
+                    (int epoch) =>
+                    {
+                        double x = (double)epoch / config.Epochs;
+                        double factor = Math.Max(1 - x, 0) * (1.0 - config.Lrf) + config.Lrf;
+                        return factor;
+                    };
+
             using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(trainDataLoader, total: (int)trainDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
             {
                 yolo.train();
                 Tensor loss_items = torch.empty(0);
+                int i = 0;
                 foreach (Dictionary<string, Tensor> data in pbar)
                 {
                     using (NewDisposeScope())
                     {
+                        // Warm Up
+                        long ni = i + nb * epoch;
+                        if (ni <= nw)
+                        {
+                            double[] xi = new double[] { 0, nw };
+
+                            int paraId = 0;
+                            foreach (var x in amp.Optimizer.ParamGroups)
+                            {
+                                var d = x.InitialLearningRate * lrLambda(epoch);
+                                x.LearningRate = Interp(ni, xi, new double[] { paraId == 0 ? config.WarmUpBiasLr : 0, d });
+                                paraId++;
+                            }
+                        }
+
                         if (data["batch_idx"].NumberOfElements < 1)
                         {
                             continue;
@@ -293,6 +350,7 @@ namespace YoloSharp.Models
                         stringBuilder.AppendFormat("{0,10}", data["images"].shape[2]);
                         pbar.SetDescription(stringBuilder.ToString());
                     }
+                    i++;
                 }
                 return loss_items.@float().data<float>().ToArray();
             }
@@ -391,6 +449,43 @@ namespace YoloSharp.Models
         internal abstract string GetValDescription();
 
         internal abstract string GetTrainDescription();
+
+        private static Func<int, double> OneCycle(double y1, double y2, int steps)
+        {
+            return (int x) =>
+            {
+                double progress = x * Math.PI / steps;
+                double cosVal = Math.Cos(progress);
+                double factor = (1 - cosVal) / 2;
+                factor = Math.Max(factor, 0);          // 避免负数（实际不会）
+                return factor * (y2 - y1) + y1;
+            };
+        }
+
+
+        public static double Interp(double x, double[] xp, double[] fp)
+        {
+            if (xp.Length != fp.Length)
+                throw new ArgumentException("xp and fp must have the same length.");
+            if (xp.Length == 0)
+                throw new ArgumentException("xp and fp must not be empty.");
+
+            if (x <= xp[0]) return fp[0];
+            if (x >= xp[^1]) return fp[^1];
+
+            int index = Array.BinarySearch(xp, x);
+            if (index >= 0)
+                return fp[index];
+
+            index = ~index;
+            double x0 = xp[index - 1];
+            double x1 = xp[index];
+            double y0 = fp[index - 1];
+            double y1 = fp[index];
+
+            double t = (x - x0) / (x1 - x0);
+            return y0 + t * (y1 - y0);
+        }
 
     }
 

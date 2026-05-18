@@ -22,7 +22,7 @@ namespace YoloSharpDemo
             Config config = new Config
             {
                 DeviceType = DeviceType.CUDA,
-                ScalarType = ScalarType.BFloat16,
+                ScalarType = ScalarType.Float32,
                 RootPath = dataRootPath,
                 TrainDataPath = trainDataPath,
                 ValDataPath = valDataPath,
@@ -34,13 +34,13 @@ namespace YoloSharpDemo
                 BatchSize = 16,
                 NumberClass = 15,
                 PredictThreshold = 0.3f,
-                IouThreshold = 0.7f,
+                IouThreshold = 0.5f,
                 Workers = 4,
-                Epochs = 100,
+                Epochs = 20,
                 LearningRate = 1e-4f,
-                Patience = 50,
                 KeyPoint_Num = 21,
                 KeyPoint_Dim = 3,
+                CloseMosaic = 0,
             };
 
             // Create a yolo task.

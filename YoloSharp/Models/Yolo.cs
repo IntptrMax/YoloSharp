@@ -162,6 +162,8 @@ namespace YoloSharp.Models
                 this.kpt_dim = kpt_dim;
                 model = BuildModel(nc, yoloSize, device, dtype);
                 RegisterComponents();
+
+                ((Modules.Modules.Yolov8Detect)(model[^1])).init_bias();
             }
 
             internal virtual ModuleList<Module> BuildModel(int nc, YoloSize yoloSize, Device? device, torch.ScalarType? dtype)

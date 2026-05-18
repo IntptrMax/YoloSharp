@@ -1,7 +1,5 @@
 ﻿using TorchSharp;
 using YoloSharp.Types;
-using static Data.Struct;
-using static TorchSharp.torch;
 
 namespace Data
 {
@@ -74,13 +72,13 @@ namespace Data
             using (torch.no_grad())
             using (torch.NewDisposeScope())
             {
-                LabelStruct label = this.labels[(int)index].Clone();
+                Data.Struct.LabelStruct label = this.labels[(int)index].Clone();
                 label = transform.Apply(label);
                 torch.Tensor img = label.img;
                 torch.Tensor cls = label.cls;
                 img = img.view(1, label.img.shape[0], label.img.shape[1], label.img.shape[2]).mul(1 / 255.0f);
                 cls = cls.view(-1, 1);
-                Dictionary<string, Tensor> targets = new Dictionary<string, Tensor>()
+                Dictionary<string, torch.Tensor> targets = new Dictionary<string, torch.Tensor>()
                 {
                     { "cls", cls.to(torch.ScalarType.Int64,config.Device).MoveToOuterDisposeScope()},
                     { "images", img.to(config.Device).MoveToOuterDisposeScope()},
@@ -225,6 +223,11 @@ namespace Data
                 var (x, y, h, w, v) = get_params(img, scaleMin: this.scaleMin, scaleMax: this.scaleMax, ratioMin: this.ratioMin, ratioMax: this.ratioMax, value: value);
                 return torchvision.transforms.functional.erase(img, x, y, h, w, v, this.inplace);
             }
+        }
+
+        public override void CloseMosaic(bool closeMosaic)
+        {
+
         }
 
     }

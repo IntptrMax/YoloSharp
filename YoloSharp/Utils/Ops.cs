@@ -301,7 +301,7 @@ namespace YoloSharp.Utils
                     }
                 }
 
-                //prediction[TensorIndex.Ellipsis, ..4] = torchvision.ops.box_convert(prediction[TensorIndex.Ellipsis, ..4], torchvision.ops.BoxFormats.cxcywh, torchvision.ops.BoxFormats.xyxy);
+                // prediction[TensorIndex.Ellipsis, ..4] = torchvision.ops.box_convert(prediction[TensorIndex.Ellipsis, ..4], torchvision.ops.BoxFormats.cxcywh, torchvision.ops.BoxFormats.xyxy);
 
 
                 List<Tensor> output = Enumerable.Range(0, bs).Select(_ => torch.zeros(new long[] { 0, 6 + extra }, device: prediction.device).clone().MoveToOuterDisposeScope()).ToList();

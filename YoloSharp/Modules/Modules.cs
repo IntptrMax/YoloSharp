@@ -1001,6 +1001,17 @@ namespace YoloSharp.Modules
 
             }
 
+            public void init_bias()
+            {
+                this.cv2[^1].named_parameters().Where(a => a.name.Contains("bias")).Select(a => a.parameter.fill_(2.0f));
+
+                for (int i = 0; i < this.stride.Length; i++)
+                {
+                    float cv3_value = (float)Math.Log(5 / this.nc / Math.Pow(640 / this.stride[i], 2));
+                    this.cv3[^1].named_parameters().Where(a => a.name.Contains("bias")).Select(a => a.parameter.fill_(cv3_value));
+                }
+            }
+
         }
 
         internal class Proto : Module<Tensor, Tensor>

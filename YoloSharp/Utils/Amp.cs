@@ -183,8 +183,10 @@ public class AMPWrapper : IDisposable
 	private torch.nn.Module<Tensor, Tensor[]> _model;
 	private Optimizer _optimizer;
 	private bool _isMixedPrecision;
+	public Optimizer Optimizer => _optimizer;
 
-	public AMPWrapper(
+
+    public AMPWrapper(
 		torch.nn.Module<Tensor, Tensor[]> model,
 		Optimizer optimizer,
 		ScalarType precision = ScalarType.Float32,

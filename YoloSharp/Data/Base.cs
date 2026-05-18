@@ -139,5 +139,7 @@ namespace Data
 
         public abstract Augment.ITransform build_transforms();
 
+        public abstract void CloseMosaic(bool closeMosaic);
+
     }
 }

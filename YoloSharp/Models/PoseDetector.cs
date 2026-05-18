@@ -30,7 +30,7 @@ namespace YoloSharp.Models
 
             yolo = config.YoloType switch
             {
-                YoloType.Yolov8 => new Yolo.Yolov8Pose(config.NumberClass, config.KeyPoint_Num,config.KeyPoint_Dim, config.YoloSize, config.Device, config.Dtype),
+                YoloType.Yolov8 => new Yolo.Yolov8Pose(config.NumberClass, config.KeyPoint_Num, config.KeyPoint_Dim, config.YoloSize, config.Device, config.Dtype),
                 YoloType.Yolov11 => new Yolo.Yolov11Pose(config.NumberClass, config.KeyPoint_Num, config.KeyPoint_Dim, config.YoloSize, config.Device, config.Dtype),
                 _ => throw new NotImplementedException("Yolo type not supported."),
             };
@@ -101,12 +101,11 @@ namespace YoloSharp.Models
 
         internal override (float[] loss, float[] metrics) Val(YoloDataLoader valDataLoader, AMPWrapper amp, int epoch)
         {
+            yolo.eval();
             string desc = GetValDescription();
             using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(valDataLoader, desc: desc, total: (int)valDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
-            using (NewDisposeScope())
             using (no_grad())
             {
-                yolo.eval();
                 Tensor loss_items = torch.empty(0);
                 long count = 0;
                 List<Tensor> tpList = new List<Tensor>();
@@ -117,59 +116,61 @@ namespace YoloSharp.Models
 
                 foreach (Dictionary<string, Tensor> data in pbar)
                 {
-                    if (data["batch_idx"].NumberOfElements < 1)
+                    using (NewDisposeScope())
                     {
-                        continue;
+                        if (data["batch_idx"].NumberOfElements < 1)
+                        {
+                            continue;
+                        }
+                        List<Tensor> preds = amp.Evaluate(data["images"].to(config.Dtype)).ToList();
+                        Tensor pred = preds[0];
+                        Tensor[] list = preds.Take(new Range(1, preds.Count)).ToArray();
+                        var (ls, ls_item) = loss.forward(list, data);
+
+                        float w = data["images"].shape[^1];
+                        float h = data["images"].shape[^2];
+                        torch.Tensor scale = torch.tensor(new float[] { w, h, w, h }, device: new Device(data["images"].device_type));
+                        List<Tensor> nms_results = Ops.non_max_suppression(pred, nc: config.NumberClass, conf_thres: 0.01f, iou_thres: 0.7f, rotated: false).output;
+
+                        for (int i = 0; i < nms_results.Count; i++)
+                        {
+                            Tensor pred_bboxes = nms_results[i][.., 0..4];
+                            Tensor pred_scores = nms_results[i][.., 4];
+                            Tensor pred_classes = nms_results[i][.., 5];
+                            Tensor pred_kpt = nms_results[i][.., 6..].view(new long[] { -1, config.KeyPoint_Num, config.KeyPoint_Dim });
+
+                            Tensor batch_idx = data["batch_idx"].squeeze(-1) == i;
+                            Tensor turn_classes = data["cls"][batch_idx].squeeze(-1);
+                            Tensor batch_bbox = data["bboxes"][batch_idx] * scale;
+                            Tensor batch_kpt = data["keypoints"][batch_idx];
+
+                            batch_bbox = Ops.xywh2xyxy(batch_bbox);
+                            Tensor iou = Metrics.box_iou(batch_bbox, pred_bboxes);
+                            Tensor tp_epoch = match_predictions(pred_classes, turn_classes, iou);
+                            Tensor kpt_scales = torch.tensor(new[] { w, h, 1.0f }, device: batch_kpt.device);
+                            batch_kpt = batch_kpt * kpt_scales;
+
+                            // `0.53` is from https://github.com/jin-s13/xtcocoapi/blob/master/xtcocotools/cocoeval.py#L384
+                            Tensor area = Ops.xyxy2xywh(batch_bbox)[.., 2..].prod(1) * 0.53f;
+                            Tensor piou = Metrics.kpt_iou(batch_kpt, pred_kpt, sigma: OKS_SIGMA, area: area);
+                            Tensor tp_p = match_predictions(pred_classes, turn_classes, piou);
+
+                            tpList.Add(tp_epoch.MoveToOuterDisposeScope());
+                            ptpList.Add(tp_p.MoveToOuterDisposeScope());
+                            pred_scoresList.Add(pred_scores.MoveToOuterDisposeScope());
+                            pred_classesList.Add(pred_classes.MoveToOuterDisposeScope());
+                            true_classesList.Add(turn_classes.MoveToOuterDisposeScope());
+                        }
+
+                        if (loss_items.NumberOfElements < 1)
+                        {
+                            loss_items = torch.zeros_like(ls_item);
+                        }
+                        loss_items = loss_items + ls_item.to(loss_items.dtype, loss_items.device);
+                        loss_items = loss_items.MoveToOuterDisposeScope();
+                        count += data["images"].shape[0];
+                        // pbar.SetPostfix(new (string key, object value)[] { ("Val Loss", $"{loss_items.sum().ToSingle() / count:f3}"), });
                     }
-                    List<Tensor> preds = amp.Evaluate(data["images"].to(config.Dtype)).ToList();
-                    Tensor pred = preds[0];
-                    Tensor[] list = preds.Take(new Range(1, preds.Count)).ToArray();
-                    var (ls, ls_item) = loss.forward(list, data);
-
-                    bool is_obb = (config.TaskType == TaskType.Obb);
-                    float conf_thres = is_obb ? 0.01f : 0.001f;
-
-                    List<Tensor> nms_results = Ops.non_max_suppression(pred, nc: config.NumberClass, conf_thres: conf_thres, iou_thres: 0.7f, rotated: is_obb).output;
-
-                    for (int i = 0; i < nms_results.Count; i++)
-                    {
-                        Tensor pred_bboxes = nms_results[i][.., 0..4];
-                        Tensor pred_scores = nms_results[i][.., 4];
-                        Tensor pred_classes = nms_results[i][.., 5];
-                        Tensor pred_kpt = nms_results[i][.., 6..].view(new long[] { -1, config.KeyPoint_Num, config.KeyPoint_Dim });
-
-                        Tensor batch_idx = data["batch_idx"].squeeze(-1) == i;
-                        Tensor turn_classes = data["cls"][batch_idx].squeeze(-1);
-                        Tensor batch_bbox = data["bboxes"][batch_idx] * config.ImageSize;
-                        Tensor batch_kpt = data["keypoints"][batch_idx];
-
-                        batch_bbox = Ops.xywh2xyxy(batch_bbox);
-                        Tensor iou = Metrics.box_iou(batch_bbox, pred_bboxes);
-                        Tensor tp_epoch = match_predictions(pred_classes, turn_classes, iou);
-                        Tensor kpt_scales = torch.tensor(new[] { config.ImageSize, config.ImageSize, 1.0f }, device: batch_kpt.device);
-                        batch_kpt = batch_kpt * kpt_scales;
-
-                        // `0.53` is from https://github.com/jin-s13/xtcocoapi/blob/master/xtcocotools/cocoeval.py#L384
-                        Tensor area = Ops.xyxy2xywh(batch_bbox)[.., 2..].prod(1) * 0.53f;
-                        Tensor piou = Metrics.kpt_iou(batch_kpt, pred_kpt, sigma: OKS_SIGMA, area: area);
-                        Tensor tp_p = match_predictions(pred_classes, turn_classes, piou);
-
-                        tpList.Add(tp_epoch.MoveToOuterDisposeScope());
-                        ptpList.Add(tp_p.MoveToOuterDisposeScope());
-                        pred_scoresList.Add(pred_scores.MoveToOuterDisposeScope());
-                        pred_classesList.Add(pred_classes.MoveToOuterDisposeScope());
-                        true_classesList.Add(turn_classes.MoveToOuterDisposeScope());
-                    }
-
-                    if (loss_items.NumberOfElements < 1)
-                    {
-                        loss_items = torch.zeros_like(ls_item);
-                    }
-                    loss_items = loss_items + ls_item.to(loss_items.dtype, loss_items.device);
-                    loss_items = loss_items.MoveToOuterDisposeScope();
-                    count += data["images"].shape[0];
-                    // pbar.SetPostfix(new (string key, object value)[] { ("Val Loss", $"{loss_items.sum().ToSingle() / count:f3}"), });
-
                 }
 
                 Tensor tp_total = torch.cat(tpList);
@@ -228,7 +229,7 @@ namespace YoloSharp.Models
             StringBuilder stringBuilder = new StringBuilder();
             foreach (string str in strs)
             {
-                stringBuilder.Append(str);
+                stringBuilder.AppendFormat("{0,10}", str);
             }
             return stringBuilder.ToString();
         }

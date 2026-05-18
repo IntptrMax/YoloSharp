@@ -28,6 +28,13 @@ Whether you're building a desktop application, a cloud service, or an edge devic
 
 ## 🔥 Recent Updates
 
+🚀 Added **warm‑up scheduling** for stable training start.  
+🚀 Added **rectangle‑resize transform** for validation (preserves aspect ratio).  
+🚀 Added **option to disable mosaic augmentation** during training.  
+🚀 Added **bias initialization** for detection head to improve convergence.  
+🚀 **Replaced** `CosineAnnealingLR` with `LambdaLR` for more flexible learning rate scheduling.  
+🐛 **Fixed** HSV transform implementation.
+
 **2026/05/07**  
 🚀 Added data augmentation: horizontal flip, vertical flip, RandomPerspective.  
 🐛 Fixed Mosaic4 implementation.

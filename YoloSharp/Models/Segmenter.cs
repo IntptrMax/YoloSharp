@@ -121,9 +121,12 @@ namespace YoloSharp.Models
                         preds = new List<Tensor>() { preds[1], preds[2], preds[3], preds[0][.., (int)(config.NumberClass + 4).., TensorIndex.Colon], preds[4] };
                         var (ls, ls_item) = loss.forward(preds.ToArray(), data);
                         Tensor protos = preds[4];
-                        bool is_obb = (config.TaskType == TaskType.Obb);
-                        float conf_thres = is_obb ? 0.01f : 0.001f;
-                        (List<Tensor> nms_results, _) = Ops.non_max_suppression(pred, nc: config.NumberClass, conf_thres: conf_thres, iou_thres: 0.7f, rotated: is_obb);
+
+                        float w = data["images"].shape[^1];
+                        float h = data["images"].shape[^2];
+                        torch.Tensor scale = torch.tensor(new float[] { w, h, w, h }, device: new Device(data["images"].device_type));
+
+                        (List<Tensor> nms_results, _) = Ops.non_max_suppression(pred, nc: config.NumberClass, conf_thres: 0.01f, iou_thres: 0.7f, rotated: false);
 
                         for (int i = 0; i < nms_results.Count; i++)
                         {
@@ -131,12 +134,12 @@ namespace YoloSharp.Models
                             Tensor pred_scores = nms_results[i][.., 4];
                             Tensor pred_classes = nms_results[i][.., 5];
                             Tensor coefficient = nms_results[i][.., 6..];
-                            long[] size = new long[] { protos.shape[protos.shape.Length - 2], protos.shape[protos.shape.Length - 1] };
+                            long[] size = new long[] { protos.shape[^2], protos.shape[^1] };
                             Tensor masks = Ops.process_mask(protos[i], coefficient, pred_bboxes, size);
 
                             Tensor batch_idx = data["batch_idx"].squeeze(-1) == i;
                             Tensor turn_classes = data["cls"][batch_idx].squeeze(-1);
-                            Tensor batch_bbox = data["bboxes"][batch_idx] * config.ImageSize;
+                            Tensor batch_bbox = data["bboxes"][batch_idx] * scale;
                             Tensor batch_mask = data["masks"];
                             batch_mask = batch_mask[i].squeeze(0);
 
@@ -203,7 +206,7 @@ namespace YoloSharp.Models
                 resultBuilder.AppendFormat("{0,10}", mAP50_95m.ToString("0.000"));
 
                 Console.WriteLine(resultBuilder.ToString());
-                return  (loss_items.@float().data<float>().ToArray(), new float[] { P, R, mAP50, mAP50_95, mP, mR, mAP50m, mAP50_95m });
+                return (loss_items.@float().data<float>().ToArray(), new float[] { P, R, mAP50, mAP50_95, mP, mR, mAP50m, mAP50_95m });
             }
         }
 

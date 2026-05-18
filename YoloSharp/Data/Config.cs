@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Runtime;
+using System.Text;
 using TorchSharp;
 using YoloSharp.Types;
 using static TorchSharp.torch;
@@ -64,6 +65,16 @@ namespace Data
         /// Learning rate
         /// </summary>
         public float LearningRate { get; set; } = 1e-4f;
+
+        /// <summary>
+        /// Use Cos LR
+        /// </summary>
+        public bool UseCosLR { get; set; } = false;
+
+        /// <summary>
+        /// Lrf
+        /// </summary>
+        public float Lrf { get; set; } = 0.01f;
 
         /// <summary>
         /// Workers for training
@@ -218,16 +229,26 @@ namespace Data
         /// </summary>
         public AutoAugmentType Auto_Augment { get; set; } = AutoAugmentType.AutoAugment;
 
+        /// <summary>
+        /// Warm Up Epoches
+        /// </summary>
+        public int WarmUpEpoches { get; set; } = 3;
+
+        public double WarmUpBiasLr { get; set; } = 0.1;
+
+        public int CloseMosaic { get; set; } = 0;
+
         public Config(string? rootPath = null, string? trainDataPath = null, string? valDataPath = null, string? outputPath = null,
             int? imageSize = null, int? batchSize = null, int? numberClass = null, int? epochs = null, float? predictThreshold = null,
-            float? iouThreshold = null, float? learningRate = null, int? workers = null, YoloType? yoloType = null,
+            float? iouThreshold = null, float? learningRate = null, bool? useCosLR = null, float? lrf = null, int? workers = null, YoloType? yoloType = null,
             YoloSize? yoloSize = null, TaskType? taskType = null, YoloSharp.Types.DeviceType? deviceType = null,
             YoloSharp.Types.ScalarType? dtype = null, ImageProcessType? imageProcessType = null,
             int? patience = null, float? delta = null, int? keyPoint_Num = null, int? keyPoint_dim = null, float? hsv_v = null,
             float? hsv_s = null, float? hsv_h = null, int? maskRation = null, float? mosaic = null, int? mosaicCount = null,
             float? degrees = null, float? translate = null, float? scale = null, float? shear = null, float? perspective = null,
             float? flipLR = null, float? flipUD = null, float? classifyRatioMax = null, float? classifyRatioMin = null,
-            float? classifyScaleMax = null, float? classifyScaleMin = null, float? erasing = null, AutoAugmentType? autoAugment = null)
+            float? classifyScaleMax = null, float? classifyScaleMin = null, float? erasing = null, AutoAugmentType? autoAugment = null,
+            int? warmUpEpoches = null, double? warmUpBiasLr = null, int? closeMosaic = null)
         {
             RootPath = rootPath ?? RootPath;
             TrainDataPath = trainDataPath ?? TrainDataPath;
@@ -269,6 +290,11 @@ namespace Data
             ClassifyScaleMin = classifyScaleMin ?? ClassifyScaleMin;
             Erasing = erasing ?? Erasing;
             Auto_Augment = autoAugment ?? Auto_Augment;
+            UseCosLR = useCosLR ?? UseCosLR;
+            Lrf = lrf ?? Lrf;
+            WarmUpEpoches = warmUpEpoches ?? WarmUpEpoches;
+            WarmUpBiasLr = warmUpBiasLr ?? WarmUpBiasLr;
+            CloseMosaic = closeMosaic ?? CloseMosaic;
         }
 
         public torch.Device Device => new Device((TorchSharp.DeviceType)DeviceType);
@@ -287,6 +313,10 @@ namespace Data
             stringBuilder.AppendLine($"Image Size: {ImageSize}");
             stringBuilder.AppendLine($"Epochs: {Epochs}");
             stringBuilder.AppendLine($"Learning Rate: {LearningRate}");
+            stringBuilder.AppendLine($"Use Cos LR: {UseCosLR}");
+            stringBuilder.AppendLine($"Lrf: {Lrf}");
+            stringBuilder.AppendLine($"Warm Up Epoches: {WarmUpEpoches}");
+            stringBuilder.AppendLine($"Warm Up Bias Learning Rate:{WarmUpBiasLr}");
             stringBuilder.AppendLine($"Batch Size: {BatchSize}");
             stringBuilder.AppendLine($"Num Workers: {Workers}");
             stringBuilder.AppendLine($"Key Points Shape (Only use in pose): [{KeyPoint_Num}, {KeyPoint_Dim}]");
@@ -303,6 +333,7 @@ namespace Data
             stringBuilder.AppendLine($"Mask Ratio: {MaskRatio}");
             stringBuilder.AppendLine($"Mosaic Augmentation Ratio: {Mosaic}");
             stringBuilder.AppendLine($"Mosaic Count: {MosaicCount}");
+            stringBuilder.AppendLine($"Close Mosaic: {CloseMosaic}");
             stringBuilder.AppendLine($"Degrees: {Degrees}");
             stringBuilder.AppendLine($"Translate: {Translate}");
             stringBuilder.AppendLine($"Scale: {Scale}");

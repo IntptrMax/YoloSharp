@@ -105,9 +105,10 @@ namespace YoloSharp.Models
                         Tensor[] list = preds.Take(new Range(1, preds.Count)).ToArray();
                         var (ls, ls_item) = loss.forward(list, data);
 
-                        bool is_obb = (config.TaskType == TaskType.Obb);
-                        float conf_thres = is_obb ? 0.01f : 0.001f;
-                        (List<Tensor> nms_results, _) = Ops.non_max_suppression(pred, nc: config.NumberClass, conf_thres: conf_thres, iou_thres: 0.7f, rotated: is_obb);
+                        float w = data["images"].shape[^1];
+                        float h = data["images"].shape[^2];
+                        torch.Tensor scale = torch.tensor(new float[] { w, h, w, h }, device: new Device(data["images"].device_type));
+                        (List<Tensor> nms_results, _) = Ops.non_max_suppression(pred, nc: config.NumberClass, conf_thres: 0.01f, iou_thres: 0.7f, rotated: true);
 
                         for (int i = 0; i < nms_results.Count; i++)
                         {
@@ -117,7 +118,7 @@ namespace YoloSharp.Models
 
                             Tensor batch_idx = data["batch_idx"].squeeze(-1) == i;
                             Tensor turn_classes = data["cls"][batch_idx].squeeze(-1);
-                            Tensor batch_bbox = torch.cat(new Tensor[] { data["bboxes"][batch_idx][.., 0..4] * config.ImageSize, data["bboxes"][batch_idx][.., 4..5] }, 1);
+                            Tensor batch_bbox = torch.cat(new Tensor[] { data["bboxes"][batch_idx][.., 0..4] * scale, data["bboxes"][batch_idx][.., 4..5] }, 1);
 
                             Tensor iou = Metrics.batch_probiou(batch_bbox, pred_bboxes);
                             Tensor tp_epoch = match_predictions(pred_classes, turn_classes, iou);
