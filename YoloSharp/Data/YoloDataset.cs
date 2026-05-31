@@ -141,11 +141,11 @@ namespace Data
                 };
             if (taskType == TaskType.Segmentation)
             {
-                targets.Add("masks", label.mask?.to(config.Device).MoveToOuterDisposeScope());
+                targets["masks"] = label.mask?.to(config.Device).MoveToOuterDisposeScope();
             }
             if (taskType == TaskType.Pose)
             {
-                targets.Add("keypoints", label.keypoints?.to(config.Device).MoveToOuterDisposeScope());
+                targets["keypoints"] = label.keypoints?.to(config.Device).MoveToOuterDisposeScope();
             }
             return targets;
         }

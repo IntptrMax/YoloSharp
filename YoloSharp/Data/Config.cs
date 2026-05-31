@@ -238,6 +238,8 @@ namespace Data
 
         public int CloseMosaic { get; set; } = 0;
 
+        public bool End2End { get; set; } = true;
+
         public Config(string? rootPath = null, string? trainDataPath = null, string? valDataPath = null, string? outputPath = null,
             int? imageSize = null, int? batchSize = null, int? numberClass = null, int? epochs = null, float? predictThreshold = null,
             float? iouThreshold = null, float? learningRate = null, bool? useCosLR = null, float? lrf = null, int? workers = null, YoloType? yoloType = null,
@@ -248,7 +250,7 @@ namespace Data
             float? degrees = null, float? translate = null, float? scale = null, float? shear = null, float? perspective = null,
             float? flipLR = null, float? flipUD = null, float? classifyRatioMax = null, float? classifyRatioMin = null,
             float? classifyScaleMax = null, float? classifyScaleMin = null, float? erasing = null, AutoAugmentType? autoAugment = null,
-            int? warmUpEpoches = null, double? warmUpBiasLr = null, int? closeMosaic = null)
+            int? warmUpEpoches = null, double? warmUpBiasLr = null, int? closeMosaic = null, bool? end2end = null)
         {
             RootPath = rootPath ?? RootPath;
             TrainDataPath = trainDataPath ?? TrainDataPath;
@@ -295,6 +297,7 @@ namespace Data
             WarmUpEpoches = warmUpEpoches ?? WarmUpEpoches;
             WarmUpBiasLr = warmUpBiasLr ?? WarmUpBiasLr;
             CloseMosaic = closeMosaic ?? CloseMosaic;
+            End2End = end2end?? End2End;
         }
 
         public torch.Device Device => new Device((TorchSharp.DeviceType)DeviceType);
@@ -347,6 +350,7 @@ namespace Data
             stringBuilder.AppendLine($"Classify Scale Min: {ClassifyScaleMin}");
             stringBuilder.AppendLine($"Classify Erasing: {Erasing}");
             stringBuilder.AppendLine($"Auto Augment Type: {Auto_Augment}");
+            stringBuilder.AppendLine($"End to End: {End2End}");
             return stringBuilder.ToString();
         }
 

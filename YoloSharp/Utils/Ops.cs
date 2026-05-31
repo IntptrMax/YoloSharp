@@ -1,4 +1,5 @@
 ﻿using OpenCvSharp;
+using ScottPlot.TickGenerators.Financial;
 using TorchSharp;
 using static TorchSharp.torch;
 
@@ -263,19 +264,19 @@ namespace YoloSharp.Utils
 
                 if (prediction.shape.Last() == 6 || end2end) // end-to-end model (BNC, i.e. 1,300,6)
                 {
-                    return (prediction.split(1)
-                   .Select(pred =>
-                   {
-                       var mask = pred[.., 4] > conf_thres;
-                       return pred[mask][max_det].MoveToOuterDisposeScope();
-                   })
-                   .ToList(), new List<Tensor> { torch.zeros(0).MoveToOuterDisposeScope() });
+                    List<Tensor> otpt = new List<Tensor>();
+                    for (int i = 0; i < prediction.shape[0]; i++)
+                    {
+                        Tensor pred = prediction[i];
+                        otpt.Add((pred[pred[TensorIndex.Colon, 4] > conf_thres][..max_det]).MoveToOuterDisposeScope());
+                    }
+                    return (otpt, new List<Tensor> { torch.zeros(0).MoveToOuterDisposeScope() });
                 }
 
                 nc = nc == 0 ? prediction.shape[1] - 4 : nc; // number of classes
                 long extra = prediction.shape[1] - nc - 4;  // number of extra info
                 long mi = 4 + nc; // mask start index
-                Tensor xc = prediction[.., 4..(int)mi].amax(1) > conf_thres; // candidates
+                Tensor xc = prediction[TensorIndex.Colon, 4..(int)mi].amax(1) > conf_thres; // candidates
 
                 List<Tensor> xindsList = new List<Tensor>();
                 for (int idx = 0; idx < xc.shape[0]; idx++)
@@ -300,9 +301,6 @@ namespace YoloSharp.Utils
                         prediction = torch.cat(new Tensor[] { xywh2xyxy(prediction[TensorIndex.Ellipsis, ..4]), prediction[TensorIndex.Ellipsis, 4..] }, dim: -1);  // xywh to xyxy
                     }
                 }
-
-                // prediction[TensorIndex.Ellipsis, ..4] = torchvision.ops.box_convert(prediction[TensorIndex.Ellipsis, ..4], torchvision.ops.BoxFormats.cxcywh, torchvision.ops.BoxFormats.xyxy);
-
 
                 List<Tensor> output = Enumerable.Range(0, bs).Select(_ => torch.zeros(new long[] { 0, 6 + extra }, device: prediction.device).clone().MoveToOuterDisposeScope()).ToList();
                 List<Tensor> keepi = Enumerable.Range(0, bs).Select(_ => torch.zeros(new long[] { 0, 1 }, device: prediction.device).clone().MoveToOuterDisposeScope()).ToList(); // to store the kept idxs
@@ -494,19 +492,60 @@ namespace YoloSharp.Utils
         /// <returns>The masks are being cropped to the bounding box.</returns>
         internal static Tensor crop_mask(Tensor masks, Tensor boxes)
         {
+            //using (NewDisposeScope())
+            //using (no_grad())
+            //{
+            //    long h = masks.shape[1];
+            //    long w = masks.shape[2];
+            //    Tensor[] x1y1x2y2 = chunk(boxes[.., .., TensorIndex.None], 4, 1);  // x1 shape(n,1,1)
+            //    Tensor x1 = x1y1x2y2[0];
+            //    Tensor y1 = x1y1x2y2[1];
+            //    Tensor x2 = x1y1x2y2[2];
+            //    Tensor y2 = x1y1x2y2[3];
+            //    Tensor r = arange(w, device: masks.device, dtype: x1.dtype)[TensorIndex.None, TensorIndex.None, ..]; //rows shape(1,1,w)
+            //    Tensor c = arange(h, device: masks.device, dtype: x1.dtype)[TensorIndex.None, .., TensorIndex.None]; //cols shape(1,h,1)
+            //    return (masks * ((r >= x1) * (r < x2) * (c >= y1) * (c < y2))).MoveToOuterDisposeScope();
+            //}
+
             using (NewDisposeScope())
-            using (no_grad())
             {
+                if (boxes.device != masks.device)
+                {
+                    boxes = boxes.to(masks.device);
+                }
+                long n = masks.shape[0];
                 long h = masks.shape[1];
                 long w = masks.shape[2];
-                Tensor[] x1y1x2y2 = chunk(boxes[.., .., TensorIndex.None], 4, 1);  // x1 shape(n,1,1)
-                Tensor x1 = x1y1x2y2[0];
-                Tensor y1 = x1y1x2y2[1];
-                Tensor x2 = x1y1x2y2[2];
-                Tensor y2 = x1y1x2y2[3];
-                Tensor r = arange(w, device: masks.device, dtype: x1.dtype)[TensorIndex.None, TensorIndex.None, ..]; //rows shape(1,1,w)
-                Tensor c = arange(h, device: masks.device, dtype: x1.dtype)[TensorIndex.None, .., TensorIndex.None]; //cols shape(1,h,1)
-                return (masks * ((r >= x1) * (r < x2) * (c >= y1) * (c < y2))).MoveToOuterDisposeScope();
+
+                if (n < 50 && !masks.is_cuda)
+                {
+                    for (int i = 0; i < boxes.shape[0]; i++)
+                    {
+                        int x1 = boxes[i, 0].ToInt32();
+                        int y1 = boxes[i, 1].ToInt32();
+                        int x2 = boxes[i, 2].ToInt32();
+                        int y2 = boxes[i, 3].ToInt32();
+
+                        masks[i, ..y1] = 0;
+                        masks[i, y2..] = 0;
+                        masks[i, TensorIndex.Colon, ..x1] = 0;
+                        masks[i, TensorIndex.Colon, x2..] = 0;
+                    }
+                    return masks.MoveToOuterDisposeScope();
+                }
+                else
+                {
+                    torch.Tensor[] x1_y1_x2_y2 = torch.chunk(boxes[TensorIndex.Colon, TensorIndex.Colon, TensorIndex.None], 4, 1);  // x1 shape(n,1,1)
+                    torch.Tensor x1 = x1_y1_x2_y2[0];
+                    torch.Tensor y1 = x1_y1_x2_y2[1];
+                    torch.Tensor x2 = x1_y1_x2_y2[2];
+                    torch.Tensor y2 = x1_y1_x2_y2[3];
+
+                    torch.Tensor r = torch.arange(w, device: masks.device, dtype: x1.dtype)[TensorIndex.None, TensorIndex.None, TensorIndex.Colon];  // rows shape(1,1,w)
+                    torch.Tensor c = torch.arange(h, device: masks.device, dtype: x1.dtype)[TensorIndex.None, TensorIndex.Colon, TensorIndex.None];  // cols shape(1,h,1)
+                    return (masks * ((r >= x1) * (r < x2) * (c >= y1) * (c < y2))).MoveToOuterDisposeScope();
+                }
+
             }
         }
 

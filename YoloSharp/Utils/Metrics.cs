@@ -33,6 +33,86 @@ namespace YoloSharp.Utils
             }
         }
 
+        internal static Tensor bbox_iou(Tensor box1, Tensor box2, bool xywh = true, bool GIoU = false, bool DIoU = false, bool CIoU = false, float eps = 1e-7f)
+        {
+            using (NewDisposeScope())
+            {
+                Tensor b1_x1, b1_x2, b1_y1, b1_y2;
+                Tensor b2_x1, b2_x2, b2_y1, b2_y2;
+                Tensor w1, h1, w2, h2;
+
+                if (xywh)  // transform from xywh to xyxy
+                {
+                    Tensor[] xywh1 = box1.chunk(4, -1);
+                    Tensor x1 = xywh1[0];
+                    Tensor y1 = xywh1[1];
+                    w1 = xywh1[2];
+                    h1 = xywh1[3];
+
+                    Tensor[] xywh2 = box2.chunk(4, -1);
+                    Tensor x2 = xywh2[0];
+                    Tensor y2 = xywh2[1];
+                    w2 = xywh2[2];
+                    h2 = xywh2[3];
+
+                    var (w1_, h1_, w2_, h2_) = (w1 / 2, h1 / 2, w2 / 2, h2 / 2);
+                    (b1_x1, b1_x2, b1_y1, b1_y2) = (x1 - w1_, x1 + w1_, y1 - h1_, y1 + h1_);
+                    (b2_x1, b2_x2, b2_y1, b2_y2) = (x2 - w2_, x2 + w2_, y2 - h2_, y2 + h2_);
+                }
+
+                else  // x1, y1, x2, y2 = box1
+                {
+                    Tensor[] b1x1y1x2y2 = box1.chunk(4, -1);
+                    b1_x1 = b1x1y1x2y2[0];
+                    b1_y1 = b1x1y1x2y2[1];
+                    b1_x2 = b1x1y1x2y2[2];
+                    b1_y2 = b1x1y1x2y2[3];
+
+                    Tensor[] b2x1y1x2y2 = box2.chunk(4, -1);
+                    b2_x1 = b2x1y1x2y2[0];
+                    b2_y1 = b2x1y1x2y2[1];
+                    b2_x2 = b2x1y1x2y2[2];
+                    b2_y2 = b2x1y1x2y2[3];
+
+                    (w1, h1) = (b1_x2 - b1_x1, (b1_y2 - b1_y1).clamp(eps));
+                    (w2, h2) = (b2_x2 - b2_x1, (b2_y2 - b2_y1).clamp(eps));
+                }
+
+                // Intersection area
+                var inter = (b1_x2.minimum(b2_x2) - b1_x1.maximum(b2_x1)).clamp(0) * (b1_y2.minimum(b2_y2) - b1_y1.maximum(b2_y1)).clamp(0);
+
+                // Union Area
+                var union = w1 * h1 + w2 * h2 - inter + eps;
+
+                // IoU
+                var iou = inter / union;
+                if (CIoU || DIoU || GIoU)
+                {
+                    var cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1);  //convex (smallest enclosing box) width
+                    var ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1);  // convex height
+                    if (CIoU || DIoU)  // Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+                    {
+                        var c2 = cw.pow(2) + ch.pow(2) + eps;   //convex diagonal squared
+                        var rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)) / 4;   //center dist ** 2
+
+                        if (CIoU)  // https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
+                        {
+                            var v = 4 / (MathF.PI * MathF.PI) * (atan(w2 / h2) - atan(w1 / h1)).pow(2);
+
+                            {
+                                var alpha = v / (v - iou + (1 + eps));
+                                return (iou - (rho2 / c2 + v * alpha)).MoveToOuterDisposeScope();  //CIoU
+                            }
+                        }
+                        return (iou - rho2 / c2).MoveToOuterDisposeScope();  // DIoU
+                    }
+                    var c_area = cw * ch + eps;    // convex area
+                    return (iou - (c_area - union) / c_area).MoveToOuterDisposeScope();  // GIoU https://arxiv.org/pdf/1902.09630.pdf
+                }
+                return iou.MoveToOuterDisposeScope(); //IoU
+            }
+        }
+
         /// <summary>
         /// Calculate masks IoU.
         /// </summary>
@@ -111,7 +191,7 @@ namespace YoloSharp.Utils
             using (NewDisposeScope())
             using (no_grad())
             {
-                Tensor d = (kpt1[.., TensorIndex.None, .., 0] - kpt2[TensorIndex.Ellipsis, 0]).pow(2) + (kpt1[.., TensorIndex.None, .., 1] - kpt2[TensorIndex.Ellipsis, 1]).pow(2);    //   (N, M, 17)
+                Tensor d = (kpt1[TensorIndex.Colon, TensorIndex.None, TensorIndex.Colon, 0] - kpt2[TensorIndex.Ellipsis, 0]).pow(2) + (kpt1[TensorIndex.Colon, TensorIndex.None, TensorIndex.Colon, 1] - kpt2[TensorIndex.Ellipsis, 1]).pow(2);    //   (N, M, 17)
                 long nkpt = kpt1.shape[1];
 
                 Tensor sigma_tensor = nkpt == 17 ? torch.tensor(sigma, device: kpt1.device, dtype: kpt1.dtype) : torch.ones(new long[] { nkpt }, device: kpt1.device, dtype: kpt1.dtype) / nkpt;  // (17, )
@@ -196,96 +276,96 @@ namespace YoloSharp.Utils
             }
         }
 
-        /// <summary>
-        /// Calculate the Intersection over Union (IoU) between bounding boxes.
-        /// </summary>
-        /// <param name="box1">A tensor representing one or more bounding boxes, with the last dimension being 4.</param>
-        /// <param name="box2">A tensor representing one or more bounding boxes, with the last dimension being 4.</param>
-        /// <param name="xywh">If True, input boxes are in (x, y, w, h) format. If False, input boxes are in (x1, y1, x2, y2) format.</param>
-        /// <param name="GIoU">If True, calculate Generalized IoU.</param>
-        /// <param name="DIoU">If True, calculate Distance IoU.</param>
-        /// <param name="CIoU">If True, calculate Complete IoU.</param>
-        /// <param name="eps">A small value to avoid division by zero.</param>
-        /// <returns>IoU, GIoU, DIoU, or CIoU values depending on the specified flags.</returns>
-        internal static Tensor bbox_iou(Tensor box1, Tensor box2, bool xywh = true, bool GIoU = false, bool DIoU = false, bool CIoU = false, float eps = 1e-7f)
-        {
-            using (NewDisposeScope())
-            using (no_grad())
-            {
-                Tensor b1_x1, b1_x2, b1_y1, b1_y2;
-                Tensor b2_x1, b2_x2, b2_y1, b2_y2;
-                Tensor w1, h1, w2, h2;
+        ///// <summary>
+        ///// Calculate the Intersection over Union (IoU) between bounding boxes.
+        ///// </summary>
+        ///// <param name="box1">A tensor representing one or more bounding boxes, with the last dimension being 4.</param>
+        ///// <param name="box2">A tensor representing one or more bounding boxes, with the last dimension being 4.</param>
+        ///// <param name="xywh">If True, input boxes are in (x, y, w, h) format. If False, input boxes are in (x1, y1, x2, y2) format.</param>
+        ///// <param name="GIoU">If True, calculate Generalized IoU.</param>
+        ///// <param name="DIoU">If True, calculate Distance IoU.</param>
+        ///// <param name="CIoU">If True, calculate Complete IoU.</param>
+        ///// <param name="eps">A small value to avoid division by zero.</param>
+        ///// <returns>IoU, GIoU, DIoU, or CIoU values depending on the specified flags.</returns>
+        //internal static Tensor bbox_iou(Tensor box1, Tensor box2, bool xywh = true, bool GIoU = false, bool DIoU = false, bool CIoU = false, float eps = 1e-7f)
+        //{
+        //    using (NewDisposeScope())
+        //    using (no_grad())
+        //    {
+        //        Tensor b1_x1, b1_x2, b1_y1, b1_y2;
+        //        Tensor b2_x1, b2_x2, b2_y1, b2_y2;
+        //        Tensor w1, h1, w2, h2;
 
-                if (xywh)  // transform from xywh to xyxy
-                {
-                    Tensor[] xywh1 = box1.chunk(4, -1);
-                    Tensor x1 = xywh1[0];
-                    Tensor y1 = xywh1[1];
-                    w1 = xywh1[2];
-                    h1 = xywh1[3];
+        //        if (xywh)  // transform from xywh to xyxy
+        //        {
+        //            Tensor[] xywh1 = box1.chunk(4, -1);
+        //            Tensor x1 = xywh1[0];
+        //            Tensor y1 = xywh1[1];
+        //            w1 = xywh1[2];
+        //            h1 = xywh1[3];
 
-                    Tensor[] xywh2 = box2.chunk(4, -1);
-                    Tensor x2 = xywh2[0];
-                    Tensor y2 = xywh2[1];
-                    w2 = xywh2[2];
-                    h2 = xywh2[3];
+        //            Tensor[] xywh2 = box2.chunk(4, -1);
+        //            Tensor x2 = xywh2[0];
+        //            Tensor y2 = xywh2[1];
+        //            w2 = xywh2[2];
+        //            h2 = xywh2[3];
 
-                    var (w1_, h1_, w2_, h2_) = (w1 / 2, h1 / 2, w2 / 2, h2 / 2);
-                    (b1_x1, b1_x2, b1_y1, b1_y2) = (x1 - w1_, x1 + w1_, y1 - h1_, y1 + h1_);
-                    (b2_x1, b2_x2, b2_y1, b2_y2) = (x2 - w2_, x2 + w2_, y2 - h2_, y2 + h2_);
-                }
+        //            var (w1_, h1_, w2_, h2_) = (w1 / 2, h1 / 2, w2 / 2, h2 / 2);
+        //            (b1_x1, b1_x2, b1_y1, b1_y2) = (x1 - w1_, x1 + w1_, y1 - h1_, y1 + h1_);
+        //            (b2_x1, b2_x2, b2_y1, b2_y2) = (x2 - w2_, x2 + w2_, y2 - h2_, y2 + h2_);
+        //        }
 
-                else  // x1, y1, x2, y2 = box1
-                {
-                    Tensor[] b1x1y1x2y2 = box1.chunk(4, -1);
-                    b1_x1 = b1x1y1x2y2[0];
-                    b1_y1 = b1x1y1x2y2[1];
-                    b1_x2 = b1x1y1x2y2[2];
-                    b1_y2 = b1x1y1x2y2[3];
+        //        else  // x1, y1, x2, y2 = box1
+        //        {
+        //            Tensor[] b1x1y1x2y2 = box1.chunk(4, -1);
+        //            b1_x1 = b1x1y1x2y2[0];
+        //            b1_y1 = b1x1y1x2y2[1];
+        //            b1_x2 = b1x1y1x2y2[2];
+        //            b1_y2 = b1x1y1x2y2[3];
 
-                    Tensor[] b2x1y1x2y2 = box2.chunk(4, -1);
-                    b2_x1 = b2x1y1x2y2[0];
-                    b2_y1 = b2x1y1x2y2[1];
-                    b2_x2 = b2x1y1x2y2[2];
-                    b2_y2 = b2x1y1x2y2[3];
+        //            Tensor[] b2x1y1x2y2 = box2.chunk(4, -1);
+        //            b2_x1 = b2x1y1x2y2[0];
+        //            b2_y1 = b2x1y1x2y2[1];
+        //            b2_x2 = b2x1y1x2y2[2];
+        //            b2_y2 = b2x1y1x2y2[3];
 
-                    (w1, h1) = (b1_x2 - b1_x1, (b1_y2 - b1_y1).clamp(eps));
-                    (w2, h2) = (b2_x2 - b2_x1, (b2_y2 - b2_y1).clamp(eps));
-                }
+        //            (w1, h1) = (b1_x2 - b1_x1, (b1_y2 - b1_y1).clamp(eps));
+        //            (w2, h2) = (b2_x2 - b2_x1, (b2_y2 - b2_y1).clamp(eps));
+        //        }
 
-                // Intersection area
-                Tensor inter = (b1_x2.minimum(b2_x2) - b1_x1.maximum(b2_x1)).clamp(0) * (b1_y2.minimum(b2_y2) - b1_y1.maximum(b2_y1)).clamp(0);
+        //        // Intersection area
+        //        Tensor inter = (b1_x2.minimum(b2_x2) - b1_x1.maximum(b2_x1)).clamp(0) * (b1_y2.minimum(b2_y2) - b1_y1.maximum(b2_y1)).clamp(0);
 
-                // Union Area
-                Tensor union = w1 * h1 + w2 * h2 - inter + eps;
+        //        // Union Area
+        //        Tensor union = w1 * h1 + w2 * h2 - inter + eps;
 
-                // IoU
-                Tensor iou = inter / union;
-                if (CIoU || DIoU || GIoU)
-                {
-                    Tensor cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1);  //convex (smallest enclosing box) width
-                    Tensor ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1);  // convex height
-                    if (CIoU || DIoU)  // Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
-                    {
-                        Tensor c2 = cw.pow(2) + ch.pow(2) + eps;   //convex diagonal squared
-                        Tensor rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)) / 4;   //center dist ** 2
+        //        // IoU
+        //        Tensor iou = inter / union;
+        //        if (CIoU || DIoU || GIoU)
+        //        {
+        //            Tensor cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1);  //convex (smallest enclosing box) width
+        //            Tensor ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1);  // convex height
+        //            if (CIoU || DIoU)  // Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+        //            {
+        //                Tensor c2 = cw.pow(2) + ch.pow(2) + eps;   //convex diagonal squared
+        //                Tensor rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)) / 4;   //center dist ** 2
 
-                        if (CIoU)  // https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
-                        {
-                            Tensor v = 4 / (MathF.PI * MathF.PI) * (atan(w2 / h2) - atan(w1 / h1)).pow(2);
-                            {
-                                Tensor alpha = v / (v - iou + (1 + eps));
-                                return (iou - (rho2 / c2 + v * alpha)).MoveToOuterDisposeScope();  //CIoU
-                            }
-                        }
-                        return (iou - rho2 / c2).MoveToOuterDisposeScope();  // DIoU
-                    }
-                    Tensor c_area = cw * ch + eps;    // convex area
-                    return (iou - (c_area - union) / c_area).MoveToOuterDisposeScope();  // GIoU https://arxiv.org/pdf/1902.09630.pdf
-                }
-                return iou.MoveToOuterDisposeScope(); //IoU
-            }
-        }
+        //                if (CIoU)  // https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
+        //                {
+        //                    Tensor v = 4 / (MathF.PI * MathF.PI) * (atan(w2 / h2) - atan(w1 / h1)).pow(2);
+        //                    {
+        //                        Tensor alpha = v / (v - iou + (1 + eps));
+        //                        return (iou - (rho2 / c2 + v * alpha)).MoveToOuterDisposeScope();  //CIoU
+        //                    }
+        //                }
+        //                return (iou - rho2 / c2).MoveToOuterDisposeScope();  // DIoU
+        //            }
+        //            Tensor c_area = cw * ch + eps;    // convex area
+        //            return (iou - (c_area - union) / c_area).MoveToOuterDisposeScope();  // GIoU https://arxiv.org/pdf/1902.09630.pdf
+        //        }
+        //        return iou.MoveToOuterDisposeScope(); //IoU
+        //    }
+        //}
 
         /// <summary>
         /// Compute the average precision per class for object detection evaluation.
