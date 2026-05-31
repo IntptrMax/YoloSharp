@@ -53,7 +53,7 @@ namespace YoloSharp.Models
 
                 Tensor input = functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros, 114) / 255.0f;
                 Tensor[] tensors = yolo.forward(input);
-                (List<Tensor> nms_result, var _) = Ops.non_max_suppression(tensors[0], nc: config.NumberClass, conf_thres: predictThreshold, iou_thres: iouThreshold, rotated: true);
+                List<Tensor> nms_result = Ops.non_max_suppression(inference["boxes"], nc: config.NumberClass, conf_thres: predictThreshold, iou_thres: iouThreshold, rotated: true, end2end: config.End2End).output;
                 List<YoloResult> results = new List<YoloResult>();
                 if (nms_result.Count > 0)
                 {
