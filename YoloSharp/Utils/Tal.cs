@@ -120,7 +120,7 @@ namespace YoloSharp.Utils
             {
                 using (NewDisposeScope())
                 {
-                    long na = pd_bboxes.shape[^2];
+                    long na = pd_bboxes.shape[pd_bboxes.shape.Length - 2];
                     mask_gt = mask_gt.@bool();
 
                     Tensor overlaps = torch.zeros(this.bs, this.n_max_boxes, na, dtype: pd_bboxes.dtype, device: pd_bboxes.device);
@@ -182,7 +182,7 @@ namespace YoloSharp.Utils
                     Tensor target_labels = gt_labels.@long().flatten()[target_gt_idx];
 
                     // Assigned target boxes, (b, max_num_obj, 4) -> (b, h*w, 4)
-                    Tensor target_bboxes = gt_bboxes.view(-1, gt_bboxes.shape[^1])[target_gt_idx];
+                    Tensor target_bboxes = gt_bboxes.view(-1, gt_bboxes.shape[gt_bboxes.shape.Length - 1])[target_gt_idx];
 
                     // Assigned target scores
                     target_labels = target_labels.clamp_(0);
@@ -219,11 +219,11 @@ namespace YoloSharp.Utils
                     //return bbox_deltas.amin(dims: new long[] { 3 }).gt_(eps).MoveToOuterDisposeScope();
 
                     Tensor gt_bboxes_xywh = Ops.xyxy2xywh(gt_bboxes);
-                    Tensor wh_mask = gt_bboxes_xywh[TensorIndex.Ellipsis, 2..] < this.stride[0];  // the smallest stride
-                    gt_bboxes_xywh[TensorIndex.Ellipsis, 2..] = torch.where(
+                    Tensor wh_mask = gt_bboxes_xywh[TensorIndex.Ellipsis, torch.TensorIndex.Slice(2)] < this.stride[0];  // the smallest stride
+                    gt_bboxes_xywh[TensorIndex.Ellipsis, torch.TensorIndex.Slice(2)] = torch.where(
                         (wh_mask * mask_gt).@bool(),
                         torch.tensor(this.stride_val, dtype: gt_bboxes_xywh.dtype, device: gt_bboxes_xywh.device),
-                        gt_bboxes_xywh[TensorIndex.Ellipsis, 2..]);
+                        gt_bboxes_xywh[TensorIndex.Ellipsis, torch.TensorIndex.Slice(2)]);
                     gt_bboxes = Ops.xywh2xyxy(gt_bboxes_xywh);
                     long n_anchors = xy_centers.shape[0];
                     long bs = gt_bboxes.shape[0];
@@ -295,11 +295,11 @@ namespace YoloSharp.Utils
             {
                 using (NewDisposeScope())
                 {
-                    Tensor wh_mask = gt_bboxes[TensorIndex.Ellipsis, 2..4] < this.stride[0];
-                    gt_bboxes[TensorIndex.Ellipsis, 2..4] = torch.where(
+                    Tensor wh_mask = gt_bboxes[TensorIndex.Ellipsis, torch.TensorIndex.Slice(2, 4)] < this.stride[0];
+                    gt_bboxes[TensorIndex.Ellipsis, torch.TensorIndex.Slice(2, 4)] = torch.where(
                        (wh_mask * mask_gt).@bool(),
                        torch.tensor(this.stride_val, dtype: gt_bboxes.dtype, device: gt_bboxes.device),
-                       gt_bboxes[TensorIndex.Ellipsis, 2..4]);
+                       gt_bboxes[TensorIndex.Ellipsis, torch.TensorIndex.Slice(2, 4)]);
 
                     // (b, n_boxes, 5) --> (b, n_boxes, 4, 2)
                     Tensor corners = Ops.xywhr2xyxyxyxy(gt_bboxes);

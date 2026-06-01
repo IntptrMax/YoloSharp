@@ -1,50 +1,52 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <OutputType>Library</OutputType>
-    <TargetFramework>net6.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <RootNamespace />
-    <AssemblyName>IntptrMax.YoloSharp</AssemblyName>
-    <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
-    <Authors>IntptrMax</Authors>
-    <PackageProjectUrl>https://github.com/IntptrMax/YoloSharp</PackageProjectUrl>
-    <Description>Train and run YOLO models in pure C# with TorchSharp.
-No Python required — from training to inference, everything stays in .NET.
-Requires reference to one of libtorch-cpu, libtorch-cuda-12.1, libtorch-cuda-12.1-win-x64 or libtorch-cuda-12.1-linux-x64 version 2.5.1.0 and OpenCvSharp4.runtime to execute.
-</Description>
-    <Version>1.1.23</Version>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
-  </PropertyGroup>
+	<PropertyGroup>
+		<OutputType>Library</OutputType>
+		<TargetFrameworks>net6.0;netstandard2.0</TargetFrameworks>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<LangVersion>latest</LangVersion>
+		<Nullable>enable</Nullable>
+		<RootNamespace />
+		<AssemblyName>IntptrMax.YoloSharp</AssemblyName>
+		<PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
+		<Authors>IntptrMax</Authors>
+		<PackageProjectUrl>https://github.com/IntptrMax/YoloSharp</PackageProjectUrl>
+		<Description>
+			Train and run YOLO models in pure C# with TorchSharp.
+			No Python required — from training to inference, everything stays in .NET.
+			Requires reference to one of libtorch-cpu, libtorch-cuda-12.1, libtorch-cuda-12.1-win-x64 or libtorch-cuda-12.1-linux-x64 version 2.5.1.0 and OpenCvSharp4.runtime to execute.
+		</Description>
+		<Version>1.1.24</Version>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <Compile Remove="Assets\**" />
-    <EmbeddedResource Remove="Assets\**" />
-    <None Remove="Assets\**" />
-  </ItemGroup>
+	<ItemGroup>
+		<Compile Remove="Assets\**" />
+		<EmbeddedResource Remove="Assets\**" />
+		<None Remove="Assets\**" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <None Remove="Yolo.cs~RF6d1ae515.TMP" />
-  </ItemGroup>
+	<ItemGroup>
+		<None Remove="Yolo.cs~RF6d1ae515.TMP" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <None Include="..\LICENSE.txt">
-      <Pack>True</Pack>
-      <PackagePath>\</PackagePath>
-    </None>
-    <None Include="..\README.md">
-      <Pack>True</Pack>
-      <PackagePath>\</PackagePath>
-    </None>
-  </ItemGroup>
+	<ItemGroup>
+		<None Include="..\LICENSE.txt">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+		<None Include="..\README.md">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+	</ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="OpenCvSharp4" Version="4.11.0.20250507" />
-    <PackageReference Include="ScottPlot" Version="5.1.57" />
-    <PackageReference Include="TorchSharp" Version="0.105.2" />
-    <PackageReference Include="TorchVision" Version="0.105.2" />
-  </ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+		<PackageReference Include="OpenCvSharp4" Version="4.11.0.20250507" />
+		<PackageReference Include="ScottPlot" Version="5.1.57" />
+		<PackageReference Include="TorchSharp" Version="0.105.2" />
+		<PackageReference Include="TorchVision" Version="0.105.2" />
+	</ItemGroup>
 
 </Project>

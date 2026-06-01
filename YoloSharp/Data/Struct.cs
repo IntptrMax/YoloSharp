@@ -86,7 +86,7 @@ namespace Data
                 this.bboxes = this.bboxes.mul(new float[] { w, h, w, h });
                 if (this.keypoints is not null)
                 {
-                    this.keypoints[torch.TensorIndex.Ellipsis, ..2] = this.keypoints[torch.TensorIndex.Ellipsis, ..2].mul(new float[] { w, h });
+                    this.keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)] = this.keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)].mul(new float[] { w, h });
                 }
                 if (this.obb_corners is not null)
                 {
@@ -111,7 +111,7 @@ namespace Data
 
                 if (this.keypoints is not null)
                 {
-                    this.keypoints[torch.TensorIndex.Ellipsis, ..2] = this.keypoints[torch.TensorIndex.Ellipsis, ..2].mul(new float[] { ww, hh });
+                    this.keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)] = this.keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)].mul(new float[] { ww, hh });
                 }
                 if (this.obb_corners is not null)
                 {

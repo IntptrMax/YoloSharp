@@ -97,7 +97,7 @@ namespace YoloSharp.Utils
 
                         if (CIoU)  // https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
                         {
-                            var v = 4 / (MathF.PI * MathF.PI) * (atan(w2 / h2) - atan(w1 / h1)).pow(2);
+                            var v = 4 / (Math.PI * Math.PI) * (atan(w2 / h2) - atan(w1 / h1)).pow(2);
 
                             {
                                 var alpha = v / (v - iou + (1 + eps));
@@ -123,7 +123,7 @@ namespace YoloSharp.Utils
         internal static Tensor mask_iou(torch.Tensor mask1, torch.Tensor mask2, float eps = 1e-7f)
         {
             Tensor intersection = torch.matmul(mask1, mask2.T).clamp_(0);
-            Tensor union = (mask1.sum(1)[.., TensorIndex.None] + mask2.sum(1)[TensorIndex.None]) - intersection; // (area1 + area2) - intersection
+            Tensor union = (mask1.sum(1)[torch.TensorIndex.Ellipsis, TensorIndex.None] + mask2.sum(1)[TensorIndex.None]) - intersection; // (area1 + area2) - intersection
             return intersection / (union + eps);
         }
 
@@ -142,10 +142,10 @@ namespace YoloSharp.Utils
             using (NewDisposeScope())
             using (no_grad())
             {
-                Tensor x1 = obb1[.., 0..1];
-                Tensor y1 = obb1[.., 1..2];
-                Tensor x2 = obb2[.., 0..1];
-                Tensor y2 = obb2[.., 1..2];
+                Tensor x1 = obb1[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 1)];
+                Tensor y1 = obb1[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(1, 2)];
+                Tensor x2 = obb2[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 1)];
+                Tensor y2 = obb2[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(1, 2)];
 
                 (Tensor a1, Tensor b1, Tensor c1) = _get_covariance_matrix(obb1);
                 (Tensor a2, Tensor b2, Tensor c2) = _get_covariance_matrix(obb2);
@@ -160,10 +160,10 @@ namespace YoloSharp.Utils
 
                 if (CIoU)  // only include the wh aspect ratio part
                 {
-                    Tensor w1 = obb1[.., 2];
-                    Tensor h1 = obb1[.., 3];
-                    Tensor w2 = obb2[.., 2];
-                    Tensor h2 = obb2[.., 3];
+                    Tensor w1 = obb1[torch.TensorIndex.Ellipsis, 2];
+                    Tensor h1 = obb1[torch.TensorIndex.Ellipsis, 3];
+                    Tensor w2 = obb2[torch.TensorIndex.Ellipsis, 2];
+                    Tensor h2 = obb2[torch.TensorIndex.Ellipsis, 3];
 
                     Tensor v = (4 / Math.Pow(Math.PI, 2)) * ((w2 / h2).atan() - (w1 / h1).atan()).pow(2);
 
@@ -196,10 +196,10 @@ namespace YoloSharp.Utils
 
                 Tensor sigma_tensor = nkpt == 17 ? torch.tensor(sigma, device: kpt1.device, dtype: kpt1.dtype) : torch.ones(new long[] { nkpt }, device: kpt1.device, dtype: kpt1.dtype) / nkpt;  // (17, )
                 Tensor kpt_mask = kpt1[TensorIndex.Ellipsis, 2] != 0;  // (N, 17)
-                Tensor e = d / ((2 * sigma_tensor).pow(2) * (area[.., TensorIndex.None, TensorIndex.None] + eps) * 2);  // from cocoeval
+                Tensor e = d / ((2 * sigma_tensor).pow(2) * (area[torch.TensorIndex.Ellipsis, TensorIndex.None, TensorIndex.None] + eps) * 2);  // from cocoeval
 
                 // e = d / ((area[None, :, None] + eps) * sigma) ** 2 / 2  # from formula
-                Tensor kpt_iou = ((-e).exp() * kpt_mask[.., TensorIndex.None]).sum(-1) / (kpt_mask.sum(-1)[.., TensorIndex.None] + eps);
+                Tensor kpt_iou = ((-e).exp() * kpt_mask[torch.TensorIndex.Ellipsis, TensorIndex.None]).sum(-1) / (kpt_mask.sum(-1)[torch.TensorIndex.Ellipsis, TensorIndex.None] + eps);
                 return kpt_iou.MoveToOuterDisposeScope();
             }
         }
@@ -218,10 +218,10 @@ namespace YoloSharp.Utils
             using (no_grad())
             {
                 // Split coordinates and get covariance matrices
-                Tensor x1 = obb1[.., 0].unsqueeze(-1);
-                Tensor y1 = obb1[.., 1].unsqueeze(-1);
-                Tensor x2 = obb2[.., 0].unsqueeze(0);
-                Tensor y2 = obb2[.., 1].unsqueeze(0);
+                Tensor x1 = obb1[torch.TensorIndex.Ellipsis, 0].unsqueeze(-1);
+                Tensor y1 = obb1[torch.TensorIndex.Ellipsis, 1].unsqueeze(-1);
+                Tensor x2 = obb2[torch.TensorIndex.Ellipsis, 0].unsqueeze(0);
+                Tensor y2 = obb2[torch.TensorIndex.Ellipsis, 1].unsqueeze(0);
 
                 (Tensor a1, Tensor b1, Tensor c1) = _get_covariance_matrix(obb1);
                 (Tensor a2, Tensor b2, Tensor c2) = _get_covariance_matrix(obb2);
@@ -260,7 +260,7 @@ namespace YoloSharp.Utils
             using (no_grad())
             {
                 // Gaussian bounding boxes, ignore the center points (the first two columns) because they are not needed here.
-                Tensor gbbs = torch.cat(new Tensor[] { boxes[.., 2..4].pow(2) / 12, boxes[.., 4..] }, dim: -1);
+                Tensor gbbs = torch.cat(new Tensor[] { boxes[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(2, 4)].pow(2) / 12, boxes[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(4)] }, dim: -1);
 
                 Tensor[] abc = gbbs.split(1, dim: -1);
                 Tensor a = abc[0];
@@ -432,16 +432,16 @@ namespace YoloSharp.Utils
 
                     // Recall
                     Tensor recall = tpc / (n_l + eps);  // recall curve
-                    r_curve[ci] = interp(-x, -conf[i], recall[.., 0], left: 0);
+                    r_curve[ci] = interp(-x, -conf[i], recall[torch.TensorIndex.Ellipsis, 0], left: 0);
 
                     // Precision
                     Tensor precision = tpc / (tpc + fpc); // precision curve
-                    p_curve[ci] = interp(-x, -conf[i], precision[.., 0], left: 1);  // p at pr_score
+                    p_curve[ci] = interp(-x, -conf[i], precision[torch.TensorIndex.Ellipsis, 0], left: 1);  // p at pr_score
 
                     // AP from recall-precision curve
                     for (int j = 0; j < tp.shape[1]; j++)
                     {
-                        (ap[ci, j], Tensor mpre, Tensor mrec) = compute_ap(recall[.., j], precision[.., j]);
+                        (ap[ci, j], Tensor mpre, Tensor mrec) = compute_ap(recall[torch.TensorIndex.Ellipsis, j], precision[torch.TensorIndex.Ellipsis, j]);
                         if (j == 0)
                         {
                             prec_values.Add(interp(x, mrec, mpre)); // precision at mAP@0.5
@@ -500,7 +500,7 @@ namespace YoloSharp.Utils
             }
             else // 'continuous'
             {
-                Tensor i = torch.where(mrec[1..] != mrec[..-1])[0];
+                Tensor i = torch.where(mrec[torch.TensorIndex.Slice(1)] != mrec[torch.TensorIndex.Slice(-1)])[0];
                 ap = torch.sum((mrec.index_select(0, i + 1) - mrec.index_select(0, i)) * mpre.index_select(0, i + 1)).item<float>();
             }
             return (ap, mpre, mrec);

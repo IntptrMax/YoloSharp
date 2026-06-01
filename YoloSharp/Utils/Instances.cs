@@ -38,11 +38,11 @@ namespace Utils
         {
             if (this.format == torchvision.ops.BoxFormats.xyxy)
             {
-                return (this.bboxes[.., 2] - this.bboxes[.., 0]) * (this.bboxes[.., 3] - this.bboxes[.., 1]);
+                return (this.bboxes[torch.TensorIndex.Ellipsis, 2] - this.bboxes[torch.TensorIndex.Ellipsis, 0]) * (this.bboxes[torch.TensorIndex.Ellipsis, 3] - this.bboxes[torch.TensorIndex.Ellipsis, 1]);
             }
             else
             {
-                return this.bboxes[.., 3] * this.bboxes[.., 2];
+                return this.bboxes[torch.TensorIndex.Ellipsis, 3] * this.bboxes[torch.TensorIndex.Ellipsis, 2];
             }
         }
 
@@ -52,10 +52,10 @@ namespace Utils
         /// <param name="scale"></param>
         internal void mul(float[] scale)
         {
-            this.bboxes[.., 0] = this.bboxes[.., 0] * scale[0];
-            this.bboxes[.., 1] = this.bboxes[.., 1] * scale[1];
-            this.bboxes[.., 2] = this.bboxes[.., 2] * scale[2];
-            this.bboxes[.., 3] = this.bboxes[.., 3] * scale[3];
+            this.bboxes[torch.TensorIndex.Ellipsis, 0] = this.bboxes[torch.TensorIndex.Ellipsis, 0] * scale[0];
+            this.bboxes[torch.TensorIndex.Ellipsis, 1] = this.bboxes[torch.TensorIndex.Ellipsis, 1] * scale[1];
+            this.bboxes[torch.TensorIndex.Ellipsis, 2] = this.bboxes[torch.TensorIndex.Ellipsis, 2] * scale[2];
+            this.bboxes[torch.TensorIndex.Ellipsis, 3] = this.bboxes[torch.TensorIndex.Ellipsis, 3] * scale[3];
         }
 
         /// <summary>
@@ -74,10 +74,10 @@ namespace Utils
         /// <param name="offset"></param>
         internal void add(float[] offset)
         {
-            this.bboxes[.., 0] = this.bboxes[.., 0] + offset[0];
-            this.bboxes[.., 1] = this.bboxes[.., 1] + offset[1];
-            this.bboxes[.., 2] = this.bboxes[.., 2] + offset[2];
-            this.bboxes[.., 3] = this.bboxes[.., 3] + offset[3];
+            this.bboxes[torch.TensorIndex.Ellipsis, 0] = this.bboxes[torch.TensorIndex.Ellipsis, 0] + offset[0];
+            this.bboxes[torch.TensorIndex.Ellipsis, 1] = this.bboxes[torch.TensorIndex.Ellipsis, 1] + offset[1];
+            this.bboxes[torch.TensorIndex.Ellipsis, 2] = this.bboxes[torch.TensorIndex.Ellipsis, 2] + offset[2];
+            this.bboxes[torch.TensorIndex.Ellipsis, 3] = this.bboxes[torch.TensorIndex.Ellipsis, 3] + offset[3];
         }
 
         /// <summary>
@@ -395,7 +395,7 @@ namespace Utils
 
         internal void update(torch.Tensor bboxes, torch.Tensor segments = null, torch.Tensor keypoints = null)
         {
-            this._bboxes = new Bboxes(bboxes,  format: this._bboxes.format);
+            this._bboxes = new Bboxes(bboxes, format: this._bboxes.format);
             if (segments is not null)
             {
                 this.segments = segments;

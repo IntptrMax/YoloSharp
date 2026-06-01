@@ -175,7 +175,7 @@ namespace YoloSharp.Modules
                     List<torch.Tensor> y = new List<torch.Tensor> { x };
                     foreach (var layer in m)
                     {
-                        y.Add(layer.forward(y[^1]));
+                        y.Add(layer.forward(y[y.Count - 1]));
                     }
 
                     torch.Tensor cat = torch.cat(y.ToArray(), dim: 1);
@@ -270,7 +270,7 @@ namespace YoloSharp.Modules
                     List<torch.Tensor> y = new List<torch.Tensor> { this.cv1.forward(x) };
                     for (int i = 0; i < this.n; i++)
                     {
-                        y.Add(this.m.forward(y[^1]));
+                        y.Add(this.m.forward(y[y.Count - 1]));
                     }
                     torch.Tensor result = this.cv2.forward(torch.cat(y, 1));
                     return (this.add ? result + x : result).MoveToOuterDisposeScope();
@@ -411,8 +411,8 @@ namespace YoloSharp.Modules
                 this.cv1 = new Convs.Conv(c1, c_, k[0], 1, device: device, dtype: dtype);
                 this.cv2 = new Convs.Conv(c_, c2, k[1], 1, g: g, device: device, dtype: dtype);
                 this.add = shortcut && c1 == c2;
-				RegisterComponents();
-			}
+                RegisterComponents();
+            }
 
             /// <summary>
             /// Apply bottleneck with optional shortcut connection.

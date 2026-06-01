@@ -7,7 +7,7 @@ namespace Data
     {
         public interface ITransform
         {
-            public Struct.LabelStruct Apply(Struct.LabelStruct label);
+            Struct.LabelStruct Apply(Struct.LabelStruct label);
         }
 
         internal class Compose : ITransform
@@ -201,12 +201,12 @@ namespace Data
                         (x1a, y1a, x2a, y2a) = (xc, yc, Math.Min(xc + w, s * 2), Math.Min(s * 2, yc + h));
                         (x1b, y1b, x2b, y2b) = (0, 0, Math.Min(w, x2a - x1a), Math.Min(y2a - y1a, h));
                     }
-                    img4[torch.TensorIndex.Ellipsis, y1a..y2a, x1a..x2a] = img[torch.TensorIndex.Ellipsis, y1b..y2b, x1b..x2b]; // img4[ymin:ymax, xmin:xmax]
+                    img4[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(y1a, y2a), torch.TensorIndex.Slice(x1a, x2a)] = img[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(y1b, y2b), torch.TensorIndex.Slice(x1b, x2b)]; // img4[ymin:ymax, xmin:xmax]
                     if (label.mask is not null)
                     {
                         int xl = (y2a / mask_ratio) - (y1a / mask_ratio);
                         int yl = (x2a / mask_ratio) - (x1a / mask_ratio);
-                        mask4[torch.TensorIndex.Ellipsis, (y1a / mask_ratio)..(y2a / mask_ratio), (x1a / mask_ratio)..(x2a / mask_ratio)] = mask[torch.TensorIndex.Ellipsis, (y1b / mask_ratio)..(y1b / mask_ratio + xl), (x1b / mask_ratio)..(x1b / mask_ratio + yl)];
+                        mask4[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice((y1a / mask_ratio), (y2a / mask_ratio)), torch.TensorIndex.Slice((x1a / mask_ratio), (x2a / mask_ratio))] = mask[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice((y1b / mask_ratio), (y1b / mask_ratio + xl)), torch.TensorIndex.Slice((x1b / mask_ratio), (x1b / mask_ratio + yl))];
                     }
                     int padw = x1a - x1b;
                     int padh = y1a - y1b;
@@ -221,7 +221,7 @@ namespace Data
                     if (keypoints is not null)
                     {
                         keypoints = label_patch.keypoints.clone();
-                        keypoints[torch.TensorIndex.Ellipsis, 0..2] = keypoints[torch.TensorIndex.Ellipsis, 0..2].add(new long[] { padw, padh });
+                        keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)] = keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)].add(new long[] { padw, padh });
                         keypointsList.Add(keypoints);
                     }
                     if (obb_corners is not null)
@@ -322,8 +322,8 @@ namespace Data
                     // Center
                     torch.Tensor C = torch.eye(3, dtype: torch.ScalarType.Float32);
 
-                    C[0, 2] = -img.shape[^1] / 2;  // x translation (pixels)
-                    C[1, 2] = -img.shape[^2] / 2;  // y translation (pixels)
+                    C[0, 2] = -img.shape[img.shape.Length - 1] / 2;  // x translation (pixels)
+                    C[1, 2] = -img.shape[img.shape.Length - 2] / 2;  // y translation (pixels)
 
                     // Perspective
                     torch.Tensor P = torch.eye(3, dtype: torch.ScalarType.Float32);
@@ -338,7 +338,7 @@ namespace Data
                     float s = 1 + (float)(torch.rand_float() * 2 - 1) * this.scale;
                     // s = 2 ** random.uniform(-scale, scale)
 
-                    R[..2] = GetRotationMatrix2D(0, 0, angle: a, scale: s);
+                    R[torch.TensorIndex.Slice(0, 2)] = GetRotationMatrix2D(0, 0, angle: a, scale: s);
 
                     // Shear
                     torch.Tensor S = torch.eye(3, dtype: torch.ScalarType.Float32);
@@ -365,7 +365,7 @@ namespace Data
                         }
                         else
                         {
-                            outImg = WarpAffineWithGridSample(img, M[..2], (this.size.w, this.size.h), new float[] { 114, 114, 114 });
+                            outImg = WarpAffineWithGridSample(img, M[torch.TensorIndex.Slice(0, 2)], (this.size.w, this.size.h), new float[] { 114, 114, 114 });
                         }
 
                         if (mask is not null)
@@ -384,7 +384,7 @@ namespace Data
                             }
                             else
                             {
-                                outMask = WarpAffineWithGridSample(mask, M_mask[..2], (maskOutW, maskOutH), new float[] { 0 });
+                                outMask = WarpAffineWithGridSample(mask, M_mask[torch.TensorIndex.Slice(0, 2)], (maskOutW, maskOutH), new float[] { 0 });
                             }
                         }
                     }
@@ -425,14 +425,14 @@ namespace Data
                     torch.Tensor gridHom = torch.stack(new[] { gridX, gridY, ones }, dim: 0);  // (3, outH, outW)
                     torch.Tensor gridFlat = gridHom.view(3, -1);
                     torch.Tensor srcFlat = M_inv.mm(gridFlat);
-                    torch.Tensor srcXY = srcFlat[..2, ..];
-                    torch.Tensor w_ = srcFlat[2, ..].unsqueeze(0);
+                    torch.Tensor srcXY = srcFlat[torch.TensorIndex.Slice(0, 2), torch.TensorIndex.Ellipsis];
+                    torch.Tensor w_ = srcFlat[2, torch.TensorIndex.Ellipsis].unsqueeze(0);
                     torch.Tensor src = srcXY / w_;   // (2, N)
                     src = src.view(2, outH, outW);   // (2, outH, outW)
 
                     torch.Tensor grid = torch.zeros(1, outH, outW, 2, device: img.device);
-                    grid[0, .., .., 0] = src[0] / (inW - 1) * 2 - 1;
-                    grid[0, .., .., 1] = src[1] / (inH - 1) * 2 - 1;
+                    grid[0, torch.TensorIndex.Colon, torch.TensorIndex.Colon, 0] = src[0] / (inW - 1) * 2 - 1;
+                    grid[0, torch.TensorIndex.Colon, torch.TensorIndex.Colon, 1] = src[1] / (inH - 1) * 2 - 1;
 
                     img = img.unsqueeze(0);
                     torch.Tensor sampled = torch.nn.functional.grid_sample(
@@ -502,16 +502,16 @@ namespace Data
                     torch.Tensor gridHom = torch.stack(new[] { gridX, gridY, ones }, dim: 0);   // (3, outH, outW)
                     torch.Tensor gridFlat = gridHom.view(3, -1);                               // (3, N)
                     torch.Tensor srcFlat = M_inv.mm(gridFlat);                                 // (3, N)
-                    torch.Tensor srcXY = srcFlat[..2, ..];
-                    torch.Tensor w_ = srcFlat[2, ..].unsqueeze(0);                             // (1, N)
+                    torch.Tensor srcXY = srcFlat[torch.TensorIndex.Slice(0, 2), torch.TensorIndex.Ellipsis];
+                    torch.Tensor w_ = srcFlat[2, torch.TensorIndex.Ellipsis].unsqueeze(0);                             // (1, N)
                     torch.Tensor src = srcXY / w_;
                     src = src.view(2, outH, outW);                                            // (2, outH, outW)
                     torch.Tensor srcX = src[0];
                     torch.Tensor srcY = src[1];
 
                     torch.Tensor grid = torch.zeros(1, outH, outW, 2, device: img.device);
-                    grid[0, .., .., 0] = srcX / (inW - 1) * 2 - 1;
-                    grid[0, .., .., 1] = srcY / (inH - 1) * 2 - 1;
+                    grid[0, torch.TensorIndex.Colon, torch.TensorIndex.Colon, 0] = srcX / (inW - 1) * 2 - 1;
+                    grid[0, torch.TensorIndex.Colon, torch.TensorIndex.Colon, 1] = srcY / (inH - 1) * 2 - 1;
 
                     torch.Tensor sampled = torch.nn.functional.grid_sample(
                         img.unsqueeze(0), grid,
@@ -554,10 +554,10 @@ namespace Data
                         return bboxes.clone();
                     }
                     torch.Tensor xy = torch.ones(new long[] { n * 4, 3 }, dtype: bboxes.dtype);
-                    xy[torch.TensorIndex.Colon, ..2] = bboxes[torch.TensorIndex.Colon, torch.TensorIndex.Tensor(new long[] { 0, 1, 2, 3, 0, 3, 2, 1 })].reshape(n * 4, 2);  // x1y1, x2y2, x1y2, x2y1
+                    xy[torch.TensorIndex.Colon, torch.TensorIndex.Slice(0, 2)] = bboxes[torch.TensorIndex.Colon, torch.TensorIndex.Tensor(new long[] { 0, 1, 2, 3, 0, 3, 2, 1 })].reshape(n * 4, 2);  // x1y1, x2y2, x1y2, x2y1
                     xy = xy.mm(M.T); // transform
 
-                    xy = (this.perspective > 0 ? (xy[torch.TensorIndex.Colon, ..2] / xy[torch.TensorIndex.Colon, 2..3]) : xy[torch.TensorIndex.Colon, ..2]).reshape(n, 8); // perspective rescale or affine   
+                    xy = (this.perspective > 0 ? (xy[torch.TensorIndex.Colon, torch.TensorIndex.Slice(0, 2)] / xy[torch.TensorIndex.Colon, torch.TensorIndex.Slice(2, 3)]) : xy[torch.TensorIndex.Colon, torch.TensorIndex.Slice(0, 2)]).reshape(n, 8); // perspective rescale or affine   
 
                     // Create new boxes
                     torch.Tensor x = xy[torch.TensorIndex.Colon, torch.TensorIndex.Tensor(new long[] { 0, 2, 4, 6 })];
@@ -591,9 +591,9 @@ namespace Data
                     }
                     torch.Tensor xy = torch.ones(new long[] { n * nkpt, 3 }, dtype: keypoints.dtype);
                     torch.Tensor visible = keypoints[torch.TensorIndex.Ellipsis, 2].reshape(n * nkpt, 1);
-                    xy[torch.TensorIndex.Colon, ..2] = keypoints[torch.TensorIndex.Ellipsis, ..2].reshape(n * nkpt, 2);
+                    xy[torch.TensorIndex.Colon, torch.TensorIndex.Slice(0, 2)] = keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)].reshape(n * nkpt, 2);
                     xy = xy.mm(M.T);  // transform
-                    xy = xy[torch.TensorIndex.Colon, ..2] / xy[torch.TensorIndex.Colon, 2..3];  // perspective rescale or affine
+                    xy = xy[torch.TensorIndex.Colon, torch.TensorIndex.Slice(0, 2)] / xy[torch.TensorIndex.Colon, torch.TensorIndex.Slice(2, 3)];  // perspective rescale or affine
                     torch.Tensor out_mask = (xy[torch.TensorIndex.Colon, 0] < 0) | (xy[torch.TensorIndex.Colon, 1] < 0) | (xy[torch.TensorIndex.Colon, 0] > this.size.w) | (xy[torch.TensorIndex.Colon, 1] > this.size.h);
                     visible[out_mask] = 0;
                     return torch.concatenate(new torch.Tensor[] { xy, visible }, axis: -1).reshape(n, nkpt, 3).MoveToOuterDisposeScope();
@@ -622,11 +622,11 @@ namespace Data
                     torch.Tensor xyTrans;
                     if (this.perspective > 0)
                     {
-                        xyTrans = transformed[torch.TensorIndex.Colon, ..2] / transformed[torch.TensorIndex.Colon, 2..3];
+                        xyTrans = transformed[torch.TensorIndex.Colon, torch.TensorIndex.Slice(0, 2)] / transformed[torch.TensorIndex.Colon, torch.TensorIndex.Slice(2, 3)];
                     }
                     else
                     {
-                        xyTrans = transformed[torch.TensorIndex.Colon, ..2];
+                        xyTrans = transformed[torch.TensorIndex.Colon, torch.TensorIndex.Slice(0, 2)];
                     }
 
                     torch.Tensor newBboxes = xyTrans.reshape(n, 4, 2);
@@ -740,7 +740,7 @@ namespace Data
 
                 if (transformedLabel.keypoints is not null)
                 {
-                    transformedLabel.keypoints[torch.TensorIndex.Ellipsis, 0..2] = transformedLabel.keypoints[torch.TensorIndex.Ellipsis, 0..2].add(new float[] { pad_l, pad_u });
+                    transformedLabel.keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)] = transformedLabel.keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)].add(new float[] { pad_l, pad_u });
                 }
 
                 if (transformedLabel.obb_corners is not null)
@@ -819,7 +819,7 @@ namespace Data
 
                 if (transformedLabel.keypoints is not null)
                 {
-                    transformedLabel.keypoints[torch.TensorIndex.Ellipsis, 0..2] = transformedLabel.keypoints[torch.TensorIndex.Ellipsis, 0..2].add(new float[] { pad_l, pad_u });
+                    transformedLabel.keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)] = transformedLabel.keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)].add(new float[] { pad_l, pad_u });
                 }
 
                 if (transformedLabel.obb_corners is not null)

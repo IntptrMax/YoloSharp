@@ -388,7 +388,7 @@ namespace YoloSharp.Models
                 Tensor correct = torch.zeros(new long[] { pred_classes.shape[0], iouv.shape[0] }, dtype: torch.ScalarType.Bool);
 
                 // LxD matrix where L - labels (rows), D - detections (columns)
-                Tensor correct_class = true_classes[.., TensorIndex.None] == pred_classes;
+                Tensor correct_class = true_classes[torch.TensorIndex.Ellipsis, TensorIndex.None] == pred_classes;
                 iou = iou * correct_class;  // zero out the wrong classes
                 for (int i = 0; i < iouv.NumberOfElements; i++)
                 {
@@ -398,11 +398,11 @@ namespace YoloSharp.Models
                     {
                         if (matches.shape[0] > 1)
                         {
-                            matches = matches[iou[matches[.., 0], matches[.., 1]].argsort(descending: true)];
+                            matches = matches[iou[matches[torch.TensorIndex.Ellipsis, 0], matches[torch.TensorIndex.Ellipsis, 1]].argsort(descending: true)];
                             matches = GetUniqueMatches(matches);
                         }
 
-                        correct[matches[.., 1], i] = true;
+                        correct[matches[torch.TensorIndex.Ellipsis, 1], i] = true;
                     }
                 }
                 return correct.to(pred_classes.device).MoveToOuterDisposeScope();
@@ -427,7 +427,7 @@ namespace YoloSharp.Models
                 using (NewDisposeScope())
                 using (no_grad())
                 {
-                    Tensor columnValues = matches[.., columnIndex];
+                    Tensor columnValues = matches[torch.TensorIndex.Ellipsis, columnIndex];
                     (Tensor uniqueValues, Tensor inverseIndices, _) = columnValues.unique(return_inverse: true);
 
                     long n = columnValues.shape[0];
@@ -522,7 +522,7 @@ namespace YoloSharp.Models
                 throw new ArgumentException("xp and fp must not be empty.");
 
             if (x <= xp[0]) return fp[0];
-            if (x >= xp[^1]) return fp[^1];
+            if (x >= xp[xp.Length - 1]) return fp[fp.Length - 1];
 
             int index = Array.BinarySearch(xp, x);
             if (index >= 0)

@@ -17,11 +17,11 @@ namespace YoloSharp.Utils
             using (NewDisposeScope())
             using (no_grad())
             {
-                Tensor ctr = x[TensorIndex.Ellipsis, ..2];
+                Tensor ctr = x[TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)];
 
-                Tensor w = x[TensorIndex.Ellipsis, 2..3];
-                Tensor h = x[TensorIndex.Ellipsis, 3..4];
-                Tensor angle = x[TensorIndex.Ellipsis, 4..5];
+                Tensor w = x[TensorIndex.Ellipsis, torch.TensorIndex.Slice(2, 3)];
+                Tensor h = x[TensorIndex.Ellipsis, torch.TensorIndex.Slice(3, 4)];
+                Tensor angle = x[TensorIndex.Ellipsis, torch.TensorIndex.Slice(4, 5)];
                 Tensor cos_value = cos(angle);
                 Tensor sin_value = sin(angle);
                 Tensor[] v1 = new Tensor[] { w / 2 * cos_value, w / 2 * sin_value };
@@ -171,7 +171,7 @@ namespace YoloSharp.Utils
             Tensor keypoints = kpts.clone();
             int w = (int)shape[1];
             int h = (int)shape[0];
-            if (keypoints.shape[^1] == 3)
+            if (keypoints.shape[keypoints.shape.Length - 1] == 3)
             {
                 keypoints[torch.TensorIndex.Ellipsis, 2][
                                (keypoints[torch.TensorIndex.Ellipsis, 0] < 0)
@@ -268,7 +268,7 @@ namespace YoloSharp.Utils
                     for (int i = 0; i < prediction.shape[0]; i++)
                     {
                         Tensor pred = prediction[i];
-                        otpt.Add((pred[pred[TensorIndex.Colon, 4] > conf_thres][..max_det]).MoveToOuterDisposeScope());
+                        otpt.Add((pred[pred[TensorIndex.Colon, 4] > conf_thres][torch.TensorIndex.Slice(0, max_det)]).MoveToOuterDisposeScope());
                     }
                     return (otpt, new List<Tensor> { torch.zeros(0).MoveToOuterDisposeScope() });
                 }
@@ -276,7 +276,7 @@ namespace YoloSharp.Utils
                 nc = nc == 0 ? prediction.shape[1] - 4 : nc; // number of classes
                 long extra = prediction.shape[1] - nc - 4;  // number of extra info
                 long mi = 4 + nc; // mask start index
-                Tensor xc = prediction[TensorIndex.Colon, 4..(int)mi].amax(1) > conf_thres; // candidates
+                Tensor xc = prediction[TensorIndex.Colon, torch.TensorIndex.Slice(4, (int)mi)].amax(1) > conf_thres; // candidates
 
                 List<Tensor> xindsList = new List<Tensor>();
                 for (int idx = 0; idx < xc.shape[0]; idx++)
@@ -294,11 +294,11 @@ namespace YoloSharp.Utils
                 {
                     if (in_place)
                     {
-                        prediction[TensorIndex.Ellipsis, ..4] = xywh2xyxy(prediction[TensorIndex.Ellipsis, ..4]);  // xywh to xyxy
+                        prediction[TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)] = xywh2xyxy(prediction[TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)]);  // xywh to xyxy
                     }
                     else
                     {
-                        prediction = torch.cat(new Tensor[] { xywh2xyxy(prediction[TensorIndex.Ellipsis, ..4]), prediction[TensorIndex.Ellipsis, 4..] }, dim: -1);  // xywh to xyxy
+                        prediction = torch.cat(new Tensor[] { xywh2xyxy(prediction[TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)]), prediction[TensorIndex.Ellipsis, torch.TensorIndex.Slice(4)] }, dim: -1);  // xywh to xyxy
                     }
                 }
 
@@ -344,27 +344,27 @@ namespace YoloSharp.Utils
 
                     if (n > max_nms)//  # excess boxes
                     {
-                        filt = x[.., 4].argsort(descending: true)[..max_nms];  // sort by confidence and remove excess boxes
+                        filt = x[torch.TensorIndex.Ellipsis, 4].argsort(descending: true)[torch.TensorIndex.Slice(0, max_nms)];  // sort by confidence and remove excess boxes
                         (x, xk) = (x[filt], xk[filt]);
                     }
 
                     // Batched NMS
-                    Tensor c = x[.., 5..6] * max_wh;  // classes
-                    Tensor scores = x[.., 4];  // scores
+                    Tensor c = x[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(5, 6)] * max_wh;  // classes
+                    Tensor scores = x[torch.TensorIndex.Ellipsis, 4];  // scores
 
                     Tensor i = torch.zeros(0);
                     if (rotated)
                     {
-                        Tensor boxes = torch.cat(new Tensor[] { x[.., ..2] + c, x[.., 2..4], x[.., (int)(x.shape[1] - 1)..] }, dim: -1); // xywhr
+                        Tensor boxes = torch.cat(new Tensor[] { x[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)] + c, x[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(2, 4)], x[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice((int)(x.shape[1] - 1))] }, dim: -1); // xywhr
                         i = nms_rotated(boxes, scores, threshold: iou_thres); // NMS
                     }
                     else
                     {
-                        Tensor boxes = x[.., ..4] + c;  // boxes (offset by class)
+                        Tensor boxes = x[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)] + c;  // boxes (offset by class)
                         i = torchvision.ops.nms(boxes, scores, iou_thres);  // NMS
                     }
 
-                    i = i[..max_det]; // limit detections
+                    i = i[torch.TensorIndex.Slice(0, max_det)]; // limit detections
                     (output[xi], keepi[xi]) = (x[i].MoveToOuterDisposeScope(), xk[i].reshape(-1).MoveToOuterDisposeScope());
                     if ((DateTime.Now - t).TotalSeconds > time_limit)
                     {
@@ -526,10 +526,10 @@ namespace YoloSharp.Utils
                         int x2 = boxes[i, 2].ToInt32();
                         int y2 = boxes[i, 3].ToInt32();
 
-                        masks[i, ..y1] = 0;
-                        masks[i, y2..] = 0;
-                        masks[i, TensorIndex.Colon, ..x1] = 0;
-                        masks[i, TensorIndex.Colon, x2..] = 0;
+                        masks[i, torch.TensorIndex.Slice(0, y1)] = 0;
+                        masks[i, torch.TensorIndex.Slice(y2)] = 0;
+                        masks[i, torch.TensorIndex.Colon, torch.TensorIndex.Slice(0, x1)] = 0;
+                        masks[i, torch.TensorIndex.Colon, torch.TensorIndex.Slice(x2)] = 0;
                     }
                     return masks.MoveToOuterDisposeScope();
                 }
@@ -574,10 +574,10 @@ namespace YoloSharp.Utils
                 float height_ratio = (float)mh / ih;
 
                 Tensor downsampled_bboxes = bboxes.clone();
-                downsampled_bboxes[.., 0] *= width_ratio;
-                downsampled_bboxes[.., 2] *= width_ratio;
-                downsampled_bboxes[.., 3] *= height_ratio;
-                downsampled_bboxes[.., 1] *= height_ratio;
+                downsampled_bboxes[torch.TensorIndex.Ellipsis, 0] *= width_ratio;
+                downsampled_bboxes[torch.TensorIndex.Ellipsis, 2] *= width_ratio;
+                downsampled_bboxes[torch.TensorIndex.Ellipsis, 3] *= height_ratio;
+                downsampled_bboxes[torch.TensorIndex.Ellipsis, 1] *= height_ratio;
                 masks = crop_mask(masks, downsampled_bboxes); //  # CHW
 
                 if (upsample)

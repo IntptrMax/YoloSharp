@@ -8,145 +8,145 @@ using static TorchSharp.torch;
 
 namespace YoloSharp.Models
 {
-	internal class Classifier : YoloBaseTaskModel
-	{
-		public Classifier(Config config)
-		{
-			this.config = config;
-			yolo = config.YoloType switch
-			{
-				YoloType.Yolov5u => new Yolo.Yolov5uClassify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
-				YoloType.Yolov8 => new Yolo.Yolov8Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
-				YoloType.Yolov11 => new Yolo.Yolov11Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
-				YoloType.Yolov12 => new Yolo.Yolov12Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
-				_ => throw new NotImplementedException("Yolo type not supported."),
-			};
-			loss = new Loss.v8ClassificationLoss();
+    internal class Classifier : YoloBaseTaskModel
+    {
+        public Classifier(Config config)
+        {
+            this.config = config;
+            yolo = config.YoloType switch
+            {
+                YoloType.Yolov5u => new Yolo.Yolov5uClassify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+                YoloType.Yolov8 => new Yolo.Yolov8Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+                YoloType.Yolov11 => new Yolo.Yolov11Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+                YoloType.Yolov12 => new Yolo.Yolov12Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+                _ => throw new NotImplementedException("Yolo type not supported."),
+            };
+            loss = new Loss.v8ClassificationLoss();
 
-			// Tools.TransModelFromSafetensors(yolo, @".\yolov8n-cls.safetensors", @".\PreTrainedModels\yolov8n-cls.bin");
-		}
+            // Tools.TransModelFromSafetensors(yolo, @".\yolov8n-cls.safetensors", @".\PreTrainedModels\yolov8n-cls.bin");
+        }
 
-		internal override List<YoloResult> ImagePredict(Tensor orgImage, float predictThreshold, float iouThreshold)
-		{
-			using (no_grad())
-			{
-				yolo.eval();
-				// Change RGB → BGR
-				orgImage = orgImage.to(config.Dtype, config.Device).unsqueeze(0);
+        internal override List<YoloResult> ImagePredict(Tensor orgImage, float predictThreshold, float iouThreshold)
+        {
+            using (no_grad())
+            {
+                yolo.eval();
+                // Change RGB → BGR
+                orgImage = orgImage.to(config.Dtype, config.Device).unsqueeze(0);
 
-				int w = (int)orgImage.shape[3];
-				int h = (int)orgImage.shape[2];
-				int padHeight = 32 - (int)(orgImage.shape[2] % 32);
-				int padWidth = 32 - (int)(orgImage.shape[3] % 32);
+                int w = (int)orgImage.shape[3];
+                int h = (int)orgImage.shape[2];
+                int padHeight = 32 - (int)(orgImage.shape[2] % 32);
+                int padWidth = 32 - (int)(orgImage.shape[3] % 32);
 
-				padHeight = padHeight == 32 ? 0 : padHeight;
-				padWidth = padWidth == 32 ? 0 : padWidth;
+                padHeight = padHeight == 32 ? 0 : padHeight;
+                padWidth = padWidth == 32 ? 0 : padWidth;
 
-				Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros, 114) / 255.0f;
+                Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros, 114) / 255.0f;
 
-				Tensor inference = yolo.forward(input)?.inference["cls"];
-				List<YoloResult> results = new List<YoloResult>();
-				for (int i = 0; i < config.NumberClass; i++)
-				{
-					results.Add(new YoloResult()
-					{
-						ClassID = i,
-						Score = inference[0][i].ToSingle(),
-					});
-				}
-				results.Sort((a, b) => b.Score.CompareTo(a.Score));
-				return results;
-			}
-		}
+                Tensor inference = yolo.forward(input)?.inference["cls"];
+                List<YoloResult> results = new List<YoloResult>();
+                for (int i = 0; i < config.NumberClass; i++)
+                {
+                    results.Add(new YoloResult()
+                    {
+                        ClassID = i,
+                        Score = inference[0][i].ToSingle(),
+                    });
+                }
+                results.Sort((a, b) => b.Score.CompareTo(a.Score));
+                return results;
+            }
+        }
 
 
-		internal override (float[] loss, float[] metrics) Val(YoloDataLoader valDataLoader, AMPWrapper amp, int epoch)
-		{
-			string desc = GetValDescription();
-			using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(valDataLoader, desc: desc.ToString(), total: (int)valDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
-			using (no_grad())
-			{
-				yolo.eval();
-				Tensor loss_items = torch.empty(0);
-				long count = 0;
-				List<Tensor> pred_list = new List<Tensor>();
-				List<float> target_list = new List<float>();
+        internal override (float[] loss, float[] metrics) Val(YoloDataLoader valDataLoader, AMPWrapper amp, int epoch)
+        {
+            string desc = GetValDescription();
+            using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(valDataLoader, desc: desc.ToString(), total: (int)valDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
+            using (no_grad())
+            {
+                yolo.eval();
+                Tensor loss_items = torch.empty(0);
+                long count = 0;
+                List<Tensor> pred_list = new List<Tensor>();
+                List<float> target_list = new List<float>();
 
-				foreach (Dictionary<string, Tensor> data in pbar)
-				{
-					using (NewDisposeScope())
-					{
-						if (data["batch_idx"].NumberOfElements < 1)
-						{
-							continue;
-						}
-						(Dictionary<string, Tensor> inference, Dictionary<string, object> preds) = amp.Evaluate(data["images"].to(config.Dtype)).Value;
-						Tensor loss_detach = loss.forward(preds, data).loss_detach;
+                foreach (Dictionary<string, Tensor> data in pbar)
+                {
+                    using (NewDisposeScope())
+                    {
+                        if (data["batch_idx"].NumberOfElements < 1)
+                        {
+                            continue;
+                        }
+                        (Dictionary<string, Tensor> inference, Dictionary<string, object> preds) = amp.Evaluate(data["images"].to(config.Dtype)).Value;
+                        Tensor loss_detach = loss.forward(preds, data).loss_detach;
 
-						Tensor pred = inference["cls"];
+                        Tensor pred = inference["cls"];
 
-						int n5 = Math.Min(config.NumberClass, 5);
-						Tensor n5sort = pred.argsort(1, descending: true)[.., ..n5];
-						pred_list.Add(n5sort.MoveToOuterDisposeScope());
+                        int n5 = Math.Min(config.NumberClass, 5);
+                        Tensor n5sort = pred.argsort(1, descending: true)[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, n5)];
+                        pred_list.Add(n5sort.MoveToOuterDisposeScope());
 
-						target_list.AddRange(data["cls"].@float().data<float>().ToArray());
+                        target_list.AddRange(data["cls"].@float().data<float>().ToArray());
 
-						if (loss_items.NumberOfElements < 1)
-						{
-							loss_items = torch.zeros_like(loss_detach);
-						}
-						loss_items = loss_items + loss_detach.to(loss_items.dtype, loss_items.device);
-						loss_items = loss_items.MoveToOuterDisposeScope();
-						count += data["images"].shape[0];
-						// pbar.SetPostfix(new (string key, object value)[] { ("Val Loss", $"{loss_items.sum().ToSingle() / count:f3}"), });
-					}
-				}
+                        if (loss_items.NumberOfElements < 1)
+                        {
+                            loss_items = torch.zeros_like(loss_detach);
+                        }
+                        loss_items = loss_items + loss_detach.to(loss_items.dtype, loss_items.device);
+                        loss_items = loss_items.MoveToOuterDisposeScope();
+                        count += data["images"].shape[0];
+                        // pbar.SetPostfix(new (string key, object value)[] { ("Val Loss", $"{loss_items.sum().ToSingle() / count:f3}"), });
+                    }
+                }
 
-				Tensor pred_total = torch.cat(pred_list);
-				Tensor target_total = torch.tensor(target_list, device: pred_total.device);
-				Tensor correct = (target_total[.., TensorIndex.None] == pred_total).@float();
-				Tensor acc = torch.stack(new Tensor[] { correct[.., 0], correct.max(1).values }, dim: 1);  // (top1, top5) accuracy
-				float[] top = acc.mean(new long[] { 0 }).data<float>().ToArray();
-				float top1 = top[0];
-				float top5 = top[1];
+                Tensor pred_total = torch.cat(pred_list);
+                Tensor target_total = torch.tensor(target_list, device: pred_total.device);
+                Tensor correct = (target_total[torch.TensorIndex.Ellipsis, TensorIndex.None] == pred_total).@float();
+                Tensor acc = torch.stack(new Tensor[] { correct[torch.TensorIndex.Ellipsis, 0], correct.max(1).values }, dim: 1);  // (top1, top5) accuracy
+                float[] top = acc.mean(new long[] { 0 }).data<float>().ToArray();
+                float top1 = top[0];
+                float top5 = top[1];
 
-				StringBuilder resultBuilder = new StringBuilder();
-				resultBuilder.AppendFormat("{0,10}", "All");
-				resultBuilder.AppendFormat("{0,10}", top1.ToString("0.000"));
-				resultBuilder.AppendFormat("{0,10}", top5.ToString("0.000"));
+                StringBuilder resultBuilder = new StringBuilder();
+                resultBuilder.AppendFormat("{0,10}", "All");
+                resultBuilder.AppendFormat("{0,10}", top1.ToString("0.000"));
+                resultBuilder.AppendFormat("{0,10}", top5.ToString("0.000"));
 
-				Console.WriteLine(resultBuilder.ToString());
+                Console.WriteLine(resultBuilder.ToString());
 
-				return (loss_items.@float().data<float>().ToArray(), new float[] { top1, top5 });
-			}
-		}
+                return (loss_items.@float().data<float>().ToArray(), new float[] { top1, top5 });
+            }
+        }
 
-		internal override string GetTrainDescription()
-		{
-			string[] strs = new string[] { "Epoch", "loss", "Instances", "Size" };
-			StringBuilder stringBuilder = new StringBuilder();
-			foreach (string str in strs)
-			{
-				stringBuilder.AppendFormat("{0,10}", str);
-			}
-			return stringBuilder.ToString();
-		}
+        internal override string GetTrainDescription()
+        {
+            string[] strs = new string[] { "Epoch", "loss", "Instances", "Size" };
+            StringBuilder stringBuilder = new StringBuilder();
+            foreach (string str in strs)
+            {
+                stringBuilder.AppendFormat("{0,10}", str);
+            }
+            return stringBuilder.ToString();
+        }
 
-		internal override string GetValDescription()
-		{
-			string[] strs = new string[] { "Class", "top1_acc", "top5_acc" };
-			StringBuilder stringBuilder = new StringBuilder();
-			foreach (string str in strs)
-			{
-				stringBuilder.AppendFormat("{0,10}", str);
-			}
-			return stringBuilder.ToString();
-		}
+        internal override string GetValDescription()
+        {
+            string[] strs = new string[] { "Class", "top1_acc", "top5_acc" };
+            StringBuilder stringBuilder = new StringBuilder();
+            foreach (string str in strs)
+            {
+                stringBuilder.AppendFormat("{0,10}", str);
+            }
+            return stringBuilder.ToString();
+        }
 
-		internal override string GetSeperatLogHeaders()
-		{
-			return "Epoch, Time, train/loss, val/loss, metrics/accuracy_top1, metrics/accuracy_top5, train_total/loss, val_total/loss";
-		}
+        internal override string GetSeperatLogHeaders()
+        {
+            return "Epoch, Time, train/loss, val/loss, metrics/accuracy_top1, metrics/accuracy_top5, train_total/loss, val_total/loss";
+        }
 
-	}
+    }
 }

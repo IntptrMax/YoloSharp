@@ -185,9 +185,9 @@ namespace Data
 
             private (int i, int j, int h, int w, torch.Tensor v) get_params(torch.Tensor img, float scaleMin, float scaleMax, float ratioMin, float ratioMax, float[]? value = null)
             {
-                int img_c = (int)img.shape[^3];
-                int img_h = (int)img.shape[^2];
-                int img_w = (int)img.shape[^1];
+                int img_c = (int)img.shape[img.shape.Length - 3];
+                int img_h = (int)img.shape[img.shape.Length - 2];
+                int img_w = (int)img.shape[img.shape.Length - 1];
                 int area = img_h * img_w;
                 torch.Tensor log_ratio = torch.log(torch.tensor(new float[] { this.ratioMin, this.ratioMax }));
                 float log_ratio_min = (float)Math.Log(this.ratioMin);
