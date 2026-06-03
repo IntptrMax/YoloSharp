@@ -1,8 +1,6 @@
-﻿using System.Runtime;
-using System.Text;
+﻿using System.Text;
 using TorchSharp;
 using YoloSharp.Types;
-using static TorchSharp.torch;
 
 namespace Data
 {
@@ -297,10 +295,10 @@ namespace Data
             WarmUpEpoches = warmUpEpoches ?? WarmUpEpoches;
             WarmUpBiasLr = warmUpBiasLr ?? WarmUpBiasLr;
             CloseMosaic = closeMosaic ?? CloseMosaic;
-            End2End = end2end?? End2End;
+            End2End = end2end ?? End2End;
         }
 
-        public torch.Device Device => new Device((TorchSharp.DeviceType)DeviceType);
+        public torch.Device Device => new torch.Device((TorchSharp.DeviceType)DeviceType);
         public torch.ScalarType Dtype => (torch.ScalarType)ScalarType;
 
         public override string ToString()

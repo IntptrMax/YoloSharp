@@ -432,7 +432,7 @@ namespace YoloSharp.Modules
         /// <summary>
         /// Concatenate a list of torch.Tensors along specified dimension.
         /// </summary>
-        internal class Concat : torch.nn.Module<List<torch.Tensor>, torch.Tensor>
+        internal class Concat : torch.nn.Module<IList<torch.Tensor>, torch.Tensor>
         {
             private readonly int d;
 
@@ -441,7 +441,7 @@ namespace YoloSharp.Modules
                 d = dimension;
             }
 
-            public override torch.Tensor forward(List<torch.Tensor> x)
+            public override torch.Tensor forward(IList<torch.Tensor> x)
             {
                 return torch.cat(x, d);
             }

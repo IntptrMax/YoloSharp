@@ -10,9 +10,6 @@ using Utils;
 using YoloSharp.Modules;
 using YoloSharp.Types;
 using YoloSharp.Utils;
-using static TorchSharp.torch;
-using static TorchSharp.torch.nn;
-using static TorchSharp.torch.optim;
 
 namespace YoloSharp.Models
 {
@@ -20,7 +17,7 @@ namespace YoloSharp.Models
     {
         protected Config config = new Config();
         protected Yolo.Yolov8 yolo;
-        protected Module<Dictionary<string, object>, Dictionary<string, Tensor>, (Tensor loss, Tensor loss_detach)> loss;
+        protected torch.nn.Module<Dictionary<string, object>, Dictionary<string, torch.Tensor>, (torch.Tensor loss, torch.Tensor loss_detach)> loss;
 
         internal YoloBaseTaskModel()
         {
@@ -30,7 +27,7 @@ namespace YoloSharp.Models
         internal virtual void LoadModel(string path, bool skipNcNotEqualLayers = false)
         {
             Console.WriteLine("Loading model...");
-            Dictionary<string, Tensor> state_dict = Lib.LoadModel(path, skipNcNotEqualLayers);
+            Dictionary<string, torch.Tensor> state_dict = Lib.LoadModel(path, skipNcNotEqualLayers);
             var yolo_state_dict = yolo.state_dict();
             if (state_dict.Count != yolo.state_dict().Count)
             {
@@ -44,7 +41,7 @@ namespace YoloSharp.Models
                 List<string> skipList = new List<string>();
                 if (skipNcNotEqualLayers)
                 {
-                    nn.Module mod = yolo.children().First().named_children().Last().module;
+                    torch.nn.Module mod = yolo.children().First().named_children().Last().module;
                     int modelCount = yolo.children().First().named_children().Count();
 
                     switch (mod)
@@ -153,14 +150,14 @@ namespace YoloSharp.Models
             AdamW.ParamGroup bnGroup = new AdamW.ParamGroup();
             bnGroup.Parameters = yolo.named_parameters().Where(a => a.name.Contains("bn")).Select(a => a.parameter);
 
-            Optimizer optimizer = new AdamW(new AdamW.ParamGroup[] { biasGroup, weightGroup, bnGroup }, lr: lr_fit, weight_decay: 5e-4f);
+            torch.optim.Optimizer optimizer = new AdamW(new AdamW.ParamGroup[] { biasGroup, weightGroup, bnGroup }, lr: lr_fit, weight_decay: 5e-4f);
 
             Func<int, double> lrLambda = config.UseCosLR ?
                 OneCycle(1.0, config.Lrf, config.Epochs) :
                 LrLambda(1.0, config.Lrf, config.Epochs);
 
 
-            lr_scheduler.LRScheduler lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lrLambda);
+            torch.optim.lr_scheduler.LRScheduler lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lrLambda);
             Console.WriteLine();
 
             AMPWrapper amp = new AMPWrapper(yolo, optimizer, precision: config.Dtype);
@@ -297,14 +294,14 @@ namespace YoloSharp.Models
                     OneCycle(1.0, config.Lrf, config.Epochs) :
                     LrLambda(1.0, config.Lrf, config.Epochs);
 
-            using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(trainDataLoader, total: (int)trainDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
+            using (Tqdm<Dictionary<string, torch.Tensor>> pbar = new Tqdm<Dictionary<string, torch.Tensor>>(trainDataLoader, total: (int)trainDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
             {
                 yolo.train();
-                Tensor loss_items = torch.empty(0);
+                torch.Tensor loss_items = torch.empty(0);
                 int i = 0;
-                foreach (Dictionary<string, Tensor> data in pbar)
+                foreach (Dictionary<string, torch.Tensor> data in pbar)
                 {
-                    using (NewDisposeScope())
+                    using (torch.NewDisposeScope())
                     {
                         // Warm Up
                         long ni = i + nb * epoch;
@@ -327,7 +324,7 @@ namespace YoloSharp.Models
                         }
                         yolo.train();
 
-                        (Tensor ls, Tensor loss_detach) = amp.TrainStep(data["images"].to(config.Dtype), data, loss);
+                        (torch.Tensor ls, torch.Tensor loss_detach) = amp.TrainStep(data["images"].to(config.Dtype), data, loss);
 
                         if (loss_items.NumberOfElements < 1)
                         {
@@ -358,12 +355,12 @@ namespace YoloSharp.Models
             }
         }
 
-        internal List<YoloResult> ImagePredict(Tensor orgImage)
+        internal List<YoloResult> ImagePredict(torch.Tensor orgImage)
         {
             return ImagePredict(orgImage, config.PredictThreshold, config.IouThreshold);
         }
 
-        internal abstract List<YoloResult> ImagePredict(Tensor orgImage, float predictThreshold, float iouThreshold);
+        internal abstract List<YoloResult> ImagePredict(torch.Tensor orgImage, float predictThreshold, float iouThreshold);
 
         internal abstract (float[] loss, float[] metrics) Val(YoloDataLoader valDataLoader, AMPWrapper amp, int epoch);
 
@@ -377,23 +374,23 @@ namespace YoloSharp.Models
         /// <param name="iou">An NxM tensor containing the pairwise IoU values for predictions and ground truth.</param>
         /// <param name="use_scipy">Whether to use scipy for matching (more precise).</param>
         /// <returns>Correct tensor of shape (N, 10) for 10 IoU thresholds.</returns>
-        internal Tensor match_predictions(torch.Tensor pred_classes, torch.Tensor true_classes, torch.Tensor iou, bool use_scipy = false)
+        internal torch.Tensor match_predictions(torch.Tensor pred_classes, torch.Tensor true_classes, torch.Tensor iou, bool use_scipy = false)
         {
-            using (NewDisposeScope())
-            using (no_grad())
+            using (torch.NewDisposeScope())
+            using (torch.no_grad())
             {
-                Tensor iouv = torch.linspace(0.5f, 0.95f, 10, dtype: torch.ScalarType.Float32);
+                torch.Tensor iouv = torch.linspace(0.5f, 0.95f, 10, dtype: torch.ScalarType.Float32);
 
                 // Dx10 matrix, where D - detections, 10 - IoU thresholds
-                Tensor correct = torch.zeros(new long[] { pred_classes.shape[0], iouv.shape[0] }, dtype: torch.ScalarType.Bool);
+                torch.Tensor correct = torch.zeros(new long[] { pred_classes.shape[0], iouv.shape[0] }, dtype: torch.ScalarType.Bool);
 
                 // LxD matrix where L - labels (rows), D - detections (columns)
-                Tensor correct_class = true_classes[torch.TensorIndex.Ellipsis, TensorIndex.None] == pred_classes;
+                torch.Tensor correct_class = true_classes[torch.TensorIndex.Ellipsis, torch.TensorIndex.None] == pred_classes;
                 iou = iou * correct_class;  // zero out the wrong classes
                 for (int i = 0; i < iouv.NumberOfElements; i++)
                 {
                     float threshold = iouv[i].ToSingle();
-                    Tensor matches = torch.nonzero(iou >= threshold);  // IoU > threshold and classes match
+                    torch.Tensor matches = torch.nonzero(iou >= threshold);  // IoU > threshold and classes match
                     if (matches.shape[0] > 0)
                     {
                         if (matches.shape[0] > 1)
@@ -408,9 +405,9 @@ namespace YoloSharp.Models
                 return correct.to(pred_classes.device).MoveToOuterDisposeScope();
             }
 
-            Tensor GetUniqueMatches(Tensor matches)
+            torch.Tensor GetUniqueMatches(torch.Tensor matches)
             {
-                using (no_grad())
+                using (torch.no_grad())
                 {
                     if (matches.ndim != 2 || matches.shape[1] != 2)
                     {
@@ -422,13 +419,13 @@ namespace YoloSharp.Models
                 }
             }
 
-            Tensor GetUniqueByColumn(Tensor matches, int columnIndex)
+            torch.Tensor GetUniqueByColumn(torch.Tensor matches, int columnIndex)
             {
-                using (NewDisposeScope())
-                using (no_grad())
+                using (torch.NewDisposeScope())
+                using (torch.no_grad())
                 {
-                    Tensor columnValues = matches[torch.TensorIndex.Ellipsis, columnIndex];
-                    (Tensor uniqueValues, Tensor inverseIndices, _) = columnValues.unique(return_inverse: true);
+                    torch.Tensor columnValues = matches[torch.TensorIndex.Ellipsis, columnIndex];
+                    (torch.Tensor uniqueValues, torch.Tensor inverseIndices, _) = columnValues.unique(return_inverse: true);
 
                     long n = columnValues.shape[0];
                     var firstOccurrence = torch.full(new long[] { uniqueValues.shape[0] }, -1L, torch.ScalarType.Int64, device: matches.device);
@@ -473,7 +470,7 @@ namespace YoloSharp.Models
         internal void SaveWeight(string path)
         {
             List<string> skipList = new List<string>();
-            Dictionary<string, Tensor> sd = new Dictionary<string, Tensor>();
+            Dictionary<string, torch.Tensor> sd = new Dictionary<string, torch.Tensor>();
             foreach (var li in yolo.state_dict())
             {
                 if (!li.Key.Contains("one2one"))
@@ -485,7 +482,7 @@ namespace YoloSharp.Models
             using FileStream output = File.Create(path);
             using BinaryWriter writer = new BinaryWriter(output);
             Encode(writer, sd.Count);
-            foreach (KeyValuePair<string, Tensor> item2 in sd)
+            foreach (KeyValuePair<string, torch.Tensor> item2 in sd)
             {
                 writer.Write(item2.Key);
                 item2.Value.Save(writer);

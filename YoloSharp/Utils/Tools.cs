@@ -31,14 +31,6 @@ namespace YoloSharp.Utils
             }
             Dictionary<string, Tensor> state_dict = model.state_dict();
 
-            //var ldd = TorchSharp.PyBridge.Safetensors.LoadStateDict(safetensorName);
-            //Dictionary<string, Tensor> dd = new Dictionary<string, Tensor>();
-            //foreach (var ld in ldd)
-            //{
-            //	dd.Add(ld.Key.Remove(0, 6), ld.Value);
-            //}
-            //var (loadMissing1, unexp1) = model.load_state_dict(dd, false);
-
             var (loadMissing, unexp) = model.load_state_dict(dict, false);
             model.save(outName);
 

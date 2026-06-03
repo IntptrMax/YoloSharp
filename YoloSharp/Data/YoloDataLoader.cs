@@ -1,6 +1,5 @@
 ﻿using TorchSharp;
 using TorchSharp.Modules;
-using static TorchSharp.torch;
 
 namespace Data
 {
@@ -23,7 +22,7 @@ namespace Data
             {
                 Dictionary<string, torch.Tensor> dictionary = new Dictionary<string, torch.Tensor>();
                 torch.Tensor[] classes = dic.Select((Dictionary<string, torch.Tensor> k) => k["cls"].unsqueeze(0)).ToArray();
-                Tensor[] batch_ids = new Tensor[classes.Length];
+                torch.Tensor[] batch_ids = new torch.Tensor[classes.Length];
                 for (int i = 0; i < classes.Length; i++)
                 {
                     batch_ids[i] = torch.full(new long[] { classes[i].shape[1] }, i, classes[i].dtype, device);

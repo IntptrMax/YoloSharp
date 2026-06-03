@@ -4,7 +4,6 @@ using TorchSharp;
 using Utils;
 using YoloSharp.Types;
 using YoloSharp.Utils;
-using static TorchSharp.torch;
 
 namespace YoloSharp.Models
 {
@@ -26,9 +25,9 @@ namespace YoloSharp.Models
             // Tools.TransModelFromSafetensors(yolo, @".\yolov8n-cls.safetensors", @".\PreTrainedModels\yolov8n-cls.bin");
         }
 
-        internal override List<YoloResult> ImagePredict(Tensor orgImage, float predictThreshold, float iouThreshold)
+        internal override List<YoloResult> ImagePredict(torch.Tensor orgImage, float predictThreshold, float iouThreshold)
         {
-            using (no_grad())
+            using (torch.no_grad())
             {
                 yolo.eval();
                 // Change RGB → BGR
@@ -42,9 +41,9 @@ namespace YoloSharp.Models
                 padHeight = padHeight == 32 ? 0 : padHeight;
                 padWidth = padWidth == 32 ? 0 : padWidth;
 
-                Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros, 114) / 255.0f;
+                torch.Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros, 114) / 255.0f;
 
-                Tensor inference = yolo.forward(input)?.inference["cls"];
+                torch.Tensor inference = yolo.forward(input)?.inference["cls"];
                 List<YoloResult> results = new List<YoloResult>();
                 for (int i = 0; i < config.NumberClass; i++)
                 {
@@ -63,30 +62,30 @@ namespace YoloSharp.Models
         internal override (float[] loss, float[] metrics) Val(YoloDataLoader valDataLoader, AMPWrapper amp, int epoch)
         {
             string desc = GetValDescription();
-            using (Tqdm<Dictionary<string, Tensor>> pbar = new Tqdm<Dictionary<string, Tensor>>(valDataLoader, desc: desc.ToString(), total: (int)valDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
-            using (no_grad())
+            using (Tqdm<Dictionary<string, torch.Tensor>> pbar = new Tqdm<Dictionary<string, torch.Tensor>>(valDataLoader, desc: desc.ToString(), total: (int)valDataLoader.Count, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
+            using (torch.no_grad())
             {
                 yolo.eval();
-                Tensor loss_items = torch.empty(0);
+                torch.Tensor loss_items = torch.empty(0);
                 long count = 0;
-                List<Tensor> pred_list = new List<Tensor>();
+                List<torch.Tensor> pred_list = new List<torch.Tensor>();
                 List<float> target_list = new List<float>();
 
-                foreach (Dictionary<string, Tensor> data in pbar)
+                foreach (Dictionary<string, torch.Tensor> data in pbar)
                 {
-                    using (NewDisposeScope())
+                    using (torch.NewDisposeScope())
                     {
                         if (data["batch_idx"].NumberOfElements < 1)
                         {
                             continue;
                         }
-                        (Dictionary<string, Tensor> inference, Dictionary<string, object> preds) = amp.Evaluate(data["images"].to(config.Dtype)).Value;
-                        Tensor loss_detach = loss.forward(preds, data).loss_detach;
+                        (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds) = amp.Evaluate(data["images"].to(config.Dtype)).Value;
+                        torch.Tensor loss_detach = loss.forward(preds, data).loss_detach;
 
-                        Tensor pred = inference["cls"];
+                        torch.Tensor pred = inference["cls"];
 
                         int n5 = Math.Min(config.NumberClass, 5);
-                        Tensor n5sort = pred.argsort(1, descending: true)[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, n5)];
+                        torch.Tensor n5sort = pred.argsort(1, descending: true)[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, n5)];
                         pred_list.Add(n5sort.MoveToOuterDisposeScope());
 
                         target_list.AddRange(data["cls"].@float().data<float>().ToArray());
@@ -102,10 +101,10 @@ namespace YoloSharp.Models
                     }
                 }
 
-                Tensor pred_total = torch.cat(pred_list);
-                Tensor target_total = torch.tensor(target_list, device: pred_total.device);
-                Tensor correct = (target_total[torch.TensorIndex.Ellipsis, TensorIndex.None] == pred_total).@float();
-                Tensor acc = torch.stack(new Tensor[] { correct[torch.TensorIndex.Ellipsis, 0], correct.max(1).values }, dim: 1);  // (top1, top5) accuracy
+                torch.Tensor pred_total = torch.cat(pred_list);
+                torch.Tensor target_total = torch.tensor(target_list, device: pred_total.device);
+                torch.Tensor correct = (target_total[torch.TensorIndex.Ellipsis, torch.TensorIndex.None] == pred_total).@float();
+                torch.Tensor acc = torch.stack(new torch.Tensor[] { correct[torch.TensorIndex.Ellipsis, 0], correct.max(1).values }, dim: 1);  // (top1, top5) accuracy
                 float[] top = acc.mean(new long[] { 0 }).data<float>().ToArray();
                 float top1 = top[0];
                 float top5 = top[1];

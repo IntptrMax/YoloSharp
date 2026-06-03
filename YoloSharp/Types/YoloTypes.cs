@@ -7,7 +7,6 @@
 	/// specific versions of the YOLO algorithm, which may differ in architecture, performance, and use cases.</remarks>
 	public enum YoloType
 	{
-		Yolov5,
 		Yolov5u,
 		Yolov8,
 		Yolov11,
