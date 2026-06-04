@@ -1,13 +1,12 @@
 ﻿using OpenCvSharp;
 using SkiaSharp;
 using TorchSharp;
-using static TorchSharp.torch;
 
 namespace YoloSharp.Utils
 {
 	internal class Lib
 	{
-		internal static Dictionary<string, Tensor> LoadModel(string path, bool skipNcNotEqualLayers = false)
+		internal static Dictionary<string, torch.Tensor> LoadModel(string path, bool skipNcNotEqualLayers = false)
 		{
 			long Decode(BinaryReader reader)
 			{
@@ -31,7 +30,7 @@ namespace YoloSharp.Utils
 			using BinaryReader reader = new BinaryReader(input);
 			long tensorCount = Decode(reader);
 
-			Dictionary<string, Tensor> state_dict = new Dictionary<string, Tensor>();
+			Dictionary<string, torch.Tensor> state_dict = new Dictionary<string, torch.Tensor>();
 			torch.ScalarType modelType = torch.ScalarType.Float32;
 			for (int i = 0; i < tensorCount; i++)
 			{
@@ -47,7 +46,7 @@ namespace YoloSharp.Utils
 				{
 					shape[j] = Decode(reader);
 				}
-				Tensor tensor = zeros(shape, dtype: dtype);
+                torch.Tensor tensor = torch.zeros(shape, dtype: dtype);
 				tensor.ReadBytesFromStream(reader.BaseStream);
 				state_dict.Add(tensorName, tensor);
 			}
@@ -56,33 +55,33 @@ namespace YoloSharp.Utils
 
 
 
-		internal static Tensor GetTensorFromImage(SKBitmap skBitmap, torchvision.io.ImageReadMode readMode = torchvision.io.ImageReadMode.RGB)
+		internal static torch.Tensor GetTensorFromImage(SKBitmap skBitmap, torchvision.io.ImageReadMode readMode = torchvision.io.ImageReadMode.RGB)
 		{
 			using (MemoryStream stream = new MemoryStream())
 			{
 				skBitmap.Encode(stream, SKEncodedImageFormat.Png, 100);
 				stream.Position = 0;
-				Tensor tensor = torchvision.io.read_image(stream, readMode);
+                torch.Tensor tensor = torchvision.io.read_image(stream, readMode);
 				return tensor;
 			}
 		}
 
-		internal static Tensor GetTensorFromImage(string imagePath, torchvision.io.ImageReadMode readMode = torchvision.io.ImageReadMode.RGB)
+		internal static torch.Tensor GetTensorFromImage(string imagePath, torchvision.io.ImageReadMode readMode = torchvision.io.ImageReadMode.RGB)
 		{
 			using (FileStream stream = new FileStream(imagePath, FileMode.Open, FileAccess.Read))
 			{
-				Tensor tensor = torchvision.io.read_image(stream, readMode);
+                torch.Tensor tensor = torchvision.io.read_image(stream, readMode);
 				return tensor;
 			}
 		}
 
-		internal static Tensor GetTensorFromImage(Mat mat, torchvision.io.ImageReadMode readMode = torchvision.io.ImageReadMode.RGB)
+		internal static torch.Tensor GetTensorFromImage(Mat mat, torchvision.io.ImageReadMode readMode = torchvision.io.ImageReadMode.RGB)
 		{
-			Tensor tensor = torchvision.io.read_image(mat.ToMemoryStream(), readMode);
+            torch.Tensor tensor = torchvision.io.read_image(mat.ToMemoryStream(), readMode);
 			return tensor;
 		}
 
-		internal static SKBitmap GetSKBitmapFromTensor(Tensor tensor)
+		internal static SKBitmap GetSKBitmapFromTensor(torch.Tensor tensor)
 		{
 			using (MemoryStream memoryStream = new MemoryStream())
 			{
@@ -93,7 +92,7 @@ namespace YoloSharp.Utils
 			}
 		}
 
-		internal static Mat GetMatFromTensor(Tensor tensor)
+		internal static Mat GetMatFromTensor(torch.Tensor tensor)
 		{
 			using (MemoryStream memoryStream = new MemoryStream())
 			{

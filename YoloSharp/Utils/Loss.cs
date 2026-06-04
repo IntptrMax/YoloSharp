@@ -1,11 +1,6 @@
-﻿using Newtonsoft.Json.Converters;
-using ScottPlot.TickGenerators.Financial;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using TorchSharp;
 using TorchSharp.Modules;
-using static Tensorboard.TensorShapeProto.Types;
-using static TorchSharp.torch;
-using static TorchSharp.torch.nn;
 
 namespace YoloSharp.Utils
 {
@@ -31,62 +26,64 @@ namespace YoloSharp.Utils
             return (1.0f - 0.5f * eps, 0.5f * eps);
         }
 
-        private class BCEBlurWithLogitsLoss : Module<Tensor, Tensor, Tensor>
+        private class BCEBlurWithLogitsLoss : torch.nn.Module<torch.Tensor, torch.Tensor, torch.Tensor>
         {
             private readonly BCEWithLogitsLoss loss_fcn;
             private readonly float alpha;
-            public BCEBlurWithLogitsLoss(float alpha = 0.05f, Reduction reduction = Reduction.None) : base(nameof(BCEBlurWithLogitsLoss))
+            public BCEBlurWithLogitsLoss(float alpha = 0.05f, torch.nn.Reduction reduction = torch.nn.Reduction.None) : base(nameof(BCEBlurWithLogitsLoss))
             {
-                this.loss_fcn = BCEWithLogitsLoss(reduction: reduction);  // must be nn.BCEWithLogitsLoss()
+                this.loss_fcn = torch.nn.BCEWithLogitsLoss(reduction: reduction);  // must be nn.BCEWithLogitsLoss()
                 this.alpha = alpha;
+                RegisterComponents();
             }
 
-            public override Tensor forward(Tensor pred, Tensor t)
+            public override torch.Tensor forward(torch.Tensor pred, torch.Tensor t)
             {
-                using (NewDisposeScope())
+                using (torch.NewDisposeScope())
                 {
-                    Tensor loss = loss_fcn.forward(pred, t);
-                    pred = sigmoid(pred);  // prob from logits
-                    Tensor dx = pred - t;// ;  // reduce only missing label effects
-                                         // dx = (pred - true).abs()  ;  // reduce missing label and false label effects
-                    Tensor alpha_factor = 1 - exp((dx - 1) / (alpha + 1e-4));
+                    torch.Tensor loss = loss_fcn.forward(pred, t);
+                    pred = torch.sigmoid(pred);  // prob from logits
+                    torch.Tensor dx = pred - t;// ;  // reduce only missing label effects
+                                               // dx = (pred - true).abs()  ;  // reduce missing label and false label effects
+                    torch.Tensor alpha_factor = 1 - torch.exp((dx - 1) / (alpha + 1e-4));
                     loss *= alpha_factor;
                     return loss.mean();
                 }
             }
         }
 
-        private class FocalLoss : Module<Tensor, Tensor, Tensor>
+        private class FocalLoss : torch.nn.Module<torch.Tensor, torch.Tensor, torch.Tensor>
         {
             private readonly BCEWithLogitsLoss loss_fcn;
             private readonly float alpha;
             private readonly float gamma;
-            private Reduction reduction;
+            private torch.nn.Reduction reduction;
             public FocalLoss(BCEWithLogitsLoss loss_fcn, float gamma = 1.5f, float alpha = 0.25f) : base(nameof(FocalLoss))
             {
                 this.loss_fcn = loss_fcn;  // must be nn.BCEWithLogitsLoss()
                 this.gamma = gamma;
                 this.alpha = alpha;
                 reduction = loss_fcn.reduction;
+                RegisterComponents();
             }
 
-            public override Tensor forward(Tensor pred, Tensor t)
+            public override torch.Tensor forward(torch.Tensor pred, torch.Tensor t)
             {
-                using (NewDisposeScope())
+                using (torch.NewDisposeScope())
                 {
-                    Tensor loss = loss_fcn.forward(pred, t);
-                    Tensor pred_prob = sigmoid(pred);  // prob from logits
-                    Tensor p_t = true * pred_prob + (1 - t) * (1 - pred_prob);
-                    Tensor alpha_factor = t * alpha + (1 - t) * (1 - alpha);
-                    Tensor modulating_factor = (1.0 - p_t).pow(gamma);
+                    torch.Tensor loss = loss_fcn.forward(pred, t);
+                    torch.Tensor pred_prob = torch.sigmoid(pred);  // prob from logits
+                    torch.Tensor p_t = true * pred_prob + (1 - t) * (1 - pred_prob);
+                    torch.Tensor alpha_factor = t * alpha + (1 - t) * (1 - alpha);
+                    torch.Tensor modulating_factor = (1.0 - p_t).pow(gamma);
 
                     loss *= alpha_factor * modulating_factor;
 
                     loss = reduction switch
                     {
-                        Reduction.Mean => loss.mean(),
-                        Reduction.Sum => loss.sum(),
-                        Reduction.None => loss,
+                        torch.nn.Reduction.Mean => loss.mean(),
+                        torch.nn.Reduction.Sum => loss.sum(),
+                        torch.nn.Reduction.None => loss,
                         _ => loss
                     };
                     return loss.MoveToOuterDisposeScope();
@@ -94,7 +91,7 @@ namespace YoloSharp.Utils
             }
         }
 
-        internal class DFLoss : Module<Tensor, Tensor, Tensor>
+        internal class DFLoss : torch.nn.Module<torch.Tensor, torch.Tensor, torch.Tensor>
         {
             private readonly int reg_max;
             public int regMax => reg_max;
@@ -104,25 +101,25 @@ namespace YoloSharp.Utils
                 this.reg_max = reg_max;
             }
 
-            public override Tensor forward(Tensor pred_dist, Tensor target)
+            public override torch.Tensor forward(torch.Tensor pred_dist, torch.Tensor target)
             {
-                using (NewDisposeScope())
+                using (torch.NewDisposeScope())
                 {
                     target = target.clamp_(0, reg_max - 1 - 0.01);
 
-                    Tensor tl = target.@long(); // target left
-                    Tensor tr = tl + 1; //target right
-                    Tensor wl = tr - target; //weight left
-                    Tensor wr = 1 - wl; //weight right
+                    torch.Tensor tl = target.@long(); // target left
+                    torch.Tensor tr = tl + 1; //target right
+                    torch.Tensor wl = tr - target; //weight left
+                    torch.Tensor wr = 1 - wl; //weight right
                     return (
-                        functional.cross_entropy(pred_dist, tl.view(-1), reduction: Reduction.None).view(tl.shape) * wl
-                        + functional.cross_entropy(pred_dist, tr.view(-1), reduction: Reduction.None).view(tl.shape) * wr
+                        torch.nn.functional.cross_entropy(pred_dist, tl.view(-1), reduction: torch.nn.Reduction.None).view(tl.shape) * wl
+                        + torch.nn.functional.cross_entropy(pred_dist, tr.view(-1), reduction: torch.nn.Reduction.None).view(tl.shape) * wr
                     ).mean(new long[] { -1 }, keepdim: true).MoveToOuterDisposeScope();
                 }
             }
         }
 
-        internal class BboxLoss : Module
+        internal class BboxLoss : torch.nn.Module
         {
             protected readonly DFLoss? dfl_loss;
             protected readonly int reg_max;
@@ -131,63 +128,36 @@ namespace YoloSharp.Utils
             {
                 dfl_loss = regMax > 1 ? new DFLoss(regMax) : null;
                 reg_max = regMax;
+                RegisterComponents();
             }
 
-            public virtual (Tensor loss_iou, Tensor loss_dfl) forward(Tensor pred_dist, Tensor pred_bboxes, Tensor anchor_points, Tensor target_bboxes, Tensor target_scores, Tensor target_scores_sum, Tensor fg_mask)
+            public virtual (torch.Tensor loss_iou, torch.Tensor loss_dfl) forward(torch.Tensor pred_dist, torch.Tensor pred_bboxes, torch.Tensor anchor_points, torch.Tensor target_bboxes, torch.Tensor target_scores, torch.Tensor target_scores_sum, torch.Tensor fg_mask, torch.Tensor imgsz, torch.Tensor stride)
             {
-                using (NewDisposeScope())
+                using (torch.NewDisposeScope())
                 {
-                    // Step 1: Compute weight
-                    Tensor weight = target_scores.sum(new long[] { -1 })[fg_mask].unsqueeze(-1);
-
-                    // Step 2: Compute IoU
-                    Tensor iou = Metrics.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], false, true);
-                    Tensor lossIou = ((1.0 - iou) * weight).sum() / target_scores_sum;
+                    torch.Tensor weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1);
+                    torch.Tensor iou = Metrics.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh: false, CIoU: true);
+                    torch.Tensor loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum;
 
                     // Step 3: Compute DFL loss
-                    Tensor lossDfl;
+                    torch.Tensor loss_dfl;
                     if (dfl_loss is not null)
                     {
-                        Tensor targetLtrb = Tal.bbox2dist(anchor_points, target_bboxes, reg_max - 1);
-                        lossDfl = dfl_loss.forward(pred_dist[fg_mask].view(-1, reg_max), targetLtrb[fg_mask]) * weight;
-                        lossDfl = lossDfl.sum() / target_scores_sum;
-                    }
-                    else
-                    {
-                        lossDfl = tensor(0.0, device: pred_dist.device);
-                    }
-
-                    return (lossIou.MoveToOuterDisposeScope(), lossDfl.MoveToOuterDisposeScope());
-                }
-            }
-
-            public virtual (Tensor loss_iou, Tensor loss_dfl) forward(Tensor pred_dist, Tensor pred_bboxes, Tensor anchor_points, Tensor target_bboxes, Tensor target_scores, Tensor target_scores_sum, Tensor fg_mask, Tensor imgsz, Tensor stride)
-            {
-                using (NewDisposeScope())
-                {
-                    Tensor weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1);
-                    Tensor iou = Metrics.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh: false, CIoU: true);
-                    Tensor loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum;
-
-                    // Step 3: Compute DFL loss
-                    Tensor loss_dfl;
-                    if (dfl_loss is not null)
-                    {
-                        Tensor target_ltrb = Tal.bbox2dist(anchor_points, target_bboxes, reg_max - 1);
+                        torch.Tensor target_ltrb = Tal.bbox2dist(anchor_points, target_bboxes, reg_max - 1);
                         loss_dfl = this.dfl_loss.forward(pred_dist[fg_mask].view(-1, reg_max), target_ltrb[fg_mask]) * weight;
                         loss_dfl = loss_dfl.sum() / target_scores_sum;
                     }
                     else
                     {
-                        Tensor target_ltrb = Tal.bbox2dist(anchor_points, target_bboxes);
+                        torch.Tensor target_ltrb = Tal.bbox2dist(anchor_points, target_bboxes);
                         // normalize ltrb by image size
                         target_ltrb = target_ltrb * stride;
-                        target_ltrb[TensorIndex.Ellipsis, TensorIndex.Slice(start: 0, step: 2)] /= imgsz[1];
-                        target_ltrb[TensorIndex.Ellipsis, TensorIndex.Slice(start: 1, step: 2)] /= imgsz[0];
+                        target_ltrb[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(start: 0, step: 2)] /= imgsz[1];
+                        target_ltrb[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(start: 1, step: 2)] /= imgsz[0];
                         pred_dist = pred_dist * stride;
-                        pred_dist[TensorIndex.Ellipsis, TensorIndex.Slice(start: 0, step: 2)] /= imgsz[1];
-                        pred_dist[TensorIndex.Ellipsis, TensorIndex.Slice(start: 1, step: 2)] /= imgsz[0];
-                        loss_dfl = (torch.nn.functional.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction: Reduction.None).mean(new long[] { -1 }, keepdim: true) * weight);
+                        pred_dist[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(start: 0, step: 2)] /= imgsz[1];
+                        pred_dist[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(start: 1, step: 2)] /= imgsz[0];
+                        loss_dfl = (torch.nn.functional.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction: torch.nn.Reduction.None).mean(new long[] { -1 }, keepdim: true) * weight);
                         loss_dfl = loss_dfl.sum() / target_scores_sum;
                     }
 
@@ -196,19 +166,19 @@ namespace YoloSharp.Utils
             }
         }
 
-        private class KeypointLoss : Module<torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor>
+        private class KeypointLoss : torch.nn.Module<torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor>
         {
-            private readonly Tensor sigmas;
+            private readonly torch.Tensor sigmas;
             internal KeypointLoss(torch.Tensor sigmas) : base(nameof(KeypointLoss))
             {
                 this.sigmas = sigmas;
             }
 
-            public override Tensor forward(torch.Tensor pred_kpts, torch.Tensor gt_kpts, torch.Tensor kpt_mask, torch.Tensor area)
+            public override torch.Tensor forward(torch.Tensor pred_kpts, torch.Tensor gt_kpts, torch.Tensor kpt_mask, torch.Tensor area)
             {
-                using (NewDisposeScope())
+                using (torch.NewDisposeScope())
                 {
-                    torch.Tensor d = (pred_kpts[TensorIndex.Ellipsis, 0] - gt_kpts[TensorIndex.Ellipsis, 0]).pow(2) + (pred_kpts[TensorIndex.Ellipsis, 1] - gt_kpts[TensorIndex.Ellipsis, 1]).pow(2);
+                    torch.Tensor d = (pred_kpts[torch.TensorIndex.Ellipsis, 0] - gt_kpts[torch.TensorIndex.Ellipsis, 0]).pow(2) + (pred_kpts[torch.TensorIndex.Ellipsis, 1] - gt_kpts[torch.TensorIndex.Ellipsis, 1]).pow(2);
                     torch.Tensor kpt_loss_factor = kpt_mask.shape[1] / (torch.sum(kpt_mask != 0, dim: 1) + 1e-6);
                     // e = d / (2 * (area * self.sigmas) ** 2 + 1e-9)  # from formula
                     torch.Tensor e = d / ((2 * this.sigmas.to(pred_kpts.device)).pow(2) * (area + 1e-9) * 2); // from cocoeval
@@ -224,33 +194,32 @@ namespace YoloSharp.Utils
 
             }
 
-            public override (Tensor loss_iou, Tensor loss_dfl) forward(Tensor pred_dist, Tensor pred_bboxes, Tensor anchor_points, Tensor target_bboxes, Tensor target_scores, Tensor target_scores_sum, Tensor fg_mask, Tensor imgsz, Tensor stride)
+            public override (torch.Tensor loss_iou, torch.Tensor loss_dfl) forward(torch.Tensor pred_dist, torch.Tensor pred_bboxes, torch.Tensor anchor_points, torch.Tensor target_bboxes, torch.Tensor target_scores, torch.Tensor target_scores_sum, torch.Tensor fg_mask, torch.Tensor imgsz, torch.Tensor stride)
             {
-                using (no_grad())
-                using (NewDisposeScope())
+                using (torch.NewDisposeScope())
                 {
-                    Tensor weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1);
-                    Tensor iou = Metrics.probiou(pred_bboxes[fg_mask], target_bboxes[fg_mask]);
-                    Tensor loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum;
-                    Tensor loss_dfl = torch.zeros(0);
+                    torch.Tensor weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1);
+                    torch.Tensor iou = Metrics.probiou(pred_bboxes[fg_mask], target_bboxes[fg_mask]);
+                    torch.Tensor loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum;
+                    torch.Tensor loss_dfl = torch.zeros(0);
 
                     // DFL loss
                     if (dfl_loss is not null)
                     {
-                        Tensor target_ltrb = Tal.rbox2dist(target_bboxes[TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)], anchor_points, target_bboxes[TensorIndex.Ellipsis, torch.TensorIndex.Slice(4, 5)], reg_max: this.reg_max - 1);
+                        torch.Tensor target_ltrb = Tal.rbox2dist(target_bboxes[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)], anchor_points, target_bboxes[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(4, 5)], reg_max: this.reg_max - 1);
                         loss_dfl = this.dfl_loss.forward(pred_dist[fg_mask].view(-1, this.reg_max), target_ltrb[fg_mask]) * weight;
                         loss_dfl = loss_dfl.sum() / target_scores_sum;
                     }
                     else
                     {
-                        Tensor target_ltrb = Tal.rbox2dist(target_bboxes[TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)], anchor_points, target_bboxes[TensorIndex.Ellipsis, torch.TensorIndex.Slice(4, 5)]);
+                        torch.Tensor target_ltrb = Tal.rbox2dist(target_bboxes[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)], anchor_points, target_bboxes[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(4, 5)]);
                         target_ltrb = target_ltrb * stride;
-                        target_ltrb[TensorIndex.Ellipsis, TensorIndex.Slice(0, null, 2)] /= imgsz[1];
-                        target_ltrb[TensorIndex.Ellipsis, TensorIndex.Slice(1, null, 2)] /= imgsz[0];
+                        target_ltrb[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, null, 2)] /= imgsz[1];
+                        target_ltrb[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(1, null, 2)] /= imgsz[0];
                         pred_dist = pred_dist * stride;
-                        pred_dist[TensorIndex.Ellipsis, TensorIndex.Slice(0, null, 2)] /= imgsz[1];
-                        pred_dist[TensorIndex.Ellipsis, TensorIndex.Slice(1, null, 2)] /= imgsz[0];
-                        loss_dfl = (torch.nn.functional.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction: Reduction.None).mean(new long[] { -1 }, keepdim: true) * weight);
+                        pred_dist[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, null, 2)] /= imgsz[1];
+                        pred_dist[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(1, null, 2)] /= imgsz[0];
+                        loss_dfl = (torch.nn.functional.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction: torch.nn.Reduction.None).mean(new long[] { -1 }, keepdim: true) * weight);
                         loss_dfl = loss_dfl.sum() / target_scores_sum;
                     }
                     return (loss_iou.MoveToOuterDisposeScope(), loss_dfl.MoveToOuterDisposeScope());
@@ -261,16 +230,16 @@ namespace YoloSharp.Utils
         /// <summary>
         /// /Criterion class for computing multi-channel Dice losses.
         /// </summary>
-        private class MultiChannelDiceLoss : Module<torch.Tensor, torch.Tensor, torch.Tensor>
+        private class MultiChannelDiceLoss : torch.nn.Module<torch.Tensor, torch.Tensor, torch.Tensor>
         {
             private readonly float smooth;
-            private readonly Reduction reduction;
+            private readonly torch.nn.Reduction reduction;
             /// <summary>
             /// Initialize MultiChannelDiceLoss with smoothing and reduction options.
             /// </summary>
             /// <param name="smooth">Smoothing factor to avoid division by zero.</param>
             /// <param name="reduction">Reduction method ('mean', 'sum', or 'none').</param>
-            internal MultiChannelDiceLoss(float smooth = 1e-6f, Reduction reduction = Reduction.Mean) : base(nameof(MultiChannelDiceLoss))
+            internal MultiChannelDiceLoss(float smooth = 1e-6f, torch.nn.Reduction reduction = torch.nn.Reduction.Mean) : base(nameof(MultiChannelDiceLoss))
             {
                 this.smooth = smooth;
                 this.reduction = reduction;
@@ -282,7 +251,7 @@ namespace YoloSharp.Utils
             /// <param name="pred"></param>
             /// <param name="target"></param>
             /// <returns></returns>
-            public override Tensor forward(torch.Tensor pred, torch.Tensor target)
+            public override torch.Tensor forward(torch.Tensor pred, torch.Tensor target)
             {
                 Debug.Assert(pred.shape == target.shape, "the size of predict and target must be equal.");
 
@@ -293,11 +262,11 @@ namespace YoloSharp.Utils
                 torch.Tensor dice_loss = 1.0 - dice;
                 dice_loss = dice_loss.mean(dimensions: new long[] { 1 });
 
-                if (this.reduction == Reduction.Mean)
+                if (this.reduction == torch.nn.Reduction.Mean)
                 {
                     return dice_loss.mean();
                 }
-                else if (this.reduction == Reduction.Sum)
+                else if (this.reduction == torch.nn.Reduction.Sum)
                 {
                     return dice_loss.sum();
                 }
@@ -311,7 +280,7 @@ namespace YoloSharp.Utils
         /// <summary>
         /// Criterion class for computing combined BCE and Dice losses.
         /// </summary>
-        private class BCEDiceLoss : Module<torch.Tensor, torch.Tensor, torch.Tensor>
+        private class BCEDiceLoss : torch.nn.Module<torch.Tensor, torch.Tensor, torch.Tensor>
         {
             private readonly float weight_bce;
             private readonly float weight_dice;
@@ -328,7 +297,7 @@ namespace YoloSharp.Utils
             {
                 this.weight_bce = weight_bce;
                 this.weight_dice = weight_dice;
-                this.bce = nn.BCEWithLogitsLoss();
+                this.bce = torch.nn.BCEWithLogitsLoss();
                 this.dice = new MultiChannelDiceLoss(smooth: 1);
 
                 RegisterComponents();
@@ -341,7 +310,7 @@ namespace YoloSharp.Utils
             /// <param name="target"></param>
             /// <returns></returns>
             /// <exception cref="NotImplementedException"></exception>
-            public override Tensor forward(Tensor pred, Tensor target)
+            public override torch.Tensor forward(torch.Tensor pred, torch.Tensor target)
             {
                 long mask_h = pred.shape[2];
                 long mask_w = pred.shape[3];
@@ -349,32 +318,32 @@ namespace YoloSharp.Utils
                 // downsample to the same size as pred
                 if (target.shape[target.shape.Length - 2] != mask_h || target.shape[target.shape.Length - 1] != mask_w)
                 {
-                    target = torch.nn.functional.interpolate(target, new long[] { mask_h, mask_w }, mode: InterpolationMode.Nearest);
+                    target = torch.nn.functional.interpolate(target, new long[] { mask_h, mask_w }, mode: torch.InterpolationMode.Nearest);
                 }
                 return this.weight_bce * this.bce.forward(pred, target) + this.weight_dice * this.dice.forward(pred, target);
             }
         }
 
 
-        internal class v8DetectionLoss : Module<Dictionary<string, object>, Dictionary<string, Tensor>, (Tensor loss, Tensor loss_detach)>
+        internal class v8DetectionLoss : torch.nn.Module<Dictionary<string, object>, Dictionary<string, torch.Tensor>, (torch.Tensor loss, torch.Tensor loss_detach)>
         {
             protected BCEWithLogitsLoss bce;
             protected int[] stride;
             protected int nc;
             protected int no;
             protected int reg_max;
-            protected Device device;
+            protected torch.Device device;
             protected bool use_dfl;
             protected Tal.TaskAlignedAssigner assigner;
             protected BboxLoss bbox_loss;
-            protected readonly Tensor proj;
+            protected readonly torch.Tensor proj;
             protected readonly float hyp_box;
             protected readonly float hyp_cls;
             protected readonly float hyp_dfl;
 
-            internal v8DetectionLoss(int nc, int reg_max = 16, int[]? stride = null, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(v8DetectionLoss))
+            internal v8DetectionLoss(int nc, int reg_max = 16, int[]? stride = null, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nameof(v8DetectionLoss))
             {
-                this.bce = nn.BCEWithLogitsLoss(reduction: Reduction.None);
+                this.bce = torch.nn.BCEWithLogitsLoss(reduction: torch.nn.Reduction.None);
                 this.stride = stride ?? new int[] { 8, 16, 32 };  // model strides
                 this.nc = nc;  // number of classes
                 this.no = nc + reg_max * 4;
@@ -391,30 +360,30 @@ namespace YoloSharp.Utils
                 RegisterComponents();
             }
 
-            private Tensor preprocess(torch.Tensor targets, int batch_size, torch.Tensor scale_tensor)
+            private torch.Tensor preprocess(torch.Tensor targets, int batch_size, torch.Tensor scale_tensor)
             {
-                using (NewDisposeScope())
+                using (torch.NewDisposeScope())
                 {
                     long nl = targets.shape[0];
                     long ne = targets.shape[1];
 
-                    Tensor @out;
+                    torch.Tensor @out;
                     if (nl == 0)
                     {
                         @out = torch.zeros(batch_size, 0, ne - 1, device: this.device);
                     }
                     else
                     {
-                        Tensor batch_idx = targets[TensorIndex.Colon, 0].@long();  // image index
-                        Tensor counts = batch_idx.unique(return_counts: true).counts;
+                        torch.Tensor batch_idx = targets[torch.TensorIndex.Colon, 0].@long();  // image index
+                        torch.Tensor counts = batch_idx.unique(return_counts: true).counts;
                         counts = counts.to(torch.int32);
                         @out = torch.zeros(batch_size, counts.max().ToInt32(), ne - 1, device: this.device);
-                        Tensor offsets = torch.zeros(batch_size + 1, dtype: torch.int64, device: this.device);
+                        torch.Tensor offsets = torch.zeros(batch_size + 1, dtype: torch.int64, device: this.device);
                         offsets = offsets.scatter_add_(0, batch_idx + 1, torch.ones_like(batch_idx));
                         offsets = offsets.cumsum(0);
-                        Tensor within_idx = torch.arange(nl, device: this.device) - offsets[batch_idx];
-                        @out[batch_idx, within_idx] = targets[TensorIndex.Colon, torch.TensorIndex.Slice(1)];
-                        @out[TensorIndex.Ellipsis, torch.TensorIndex.Slice(1, 5)] = Ops.xywh2xyxy(@out[TensorIndex.Ellipsis, torch.TensorIndex.Slice(1, 5)].mul_(scale_tensor));
+                        torch.Tensor within_idx = torch.arange(nl, device: this.device) - offsets[batch_idx];
+                        @out[batch_idx, within_idx] = targets[torch.TensorIndex.Colon, torch.TensorIndex.Slice(1)];
+                        @out[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(1, 5)] = Ops.xywh2xyxy(@out[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(1, 5)].mul_(scale_tensor));
                     }
                     return @out.MoveToOuterDisposeScope();
                 }
@@ -426,7 +395,7 @@ namespace YoloSharp.Utils
             /// <param name="anchor_points"></param>
             /// <param name="pred_dist"></param>
             /// <returns></returns>
-            private Tensor bbox_decode(Tensor anchor_points, Tensor pred_dist)
+            private torch.Tensor bbox_decode(torch.Tensor anchor_points, torch.Tensor pred_dist)
             {
                 if (this.use_dfl)
                 {
@@ -439,32 +408,32 @@ namespace YoloSharp.Utils
                 return Tal.dist2bbox(pred_dist, anchor_points, xywh: false);
             }
 
-            protected ((Tensor fg_mask, Tensor target_gt_idx, Tensor target_bboxes, Tensor anchor_points, Tensor stride_tensor) target, Tensor loss, Tensor loss_detach) get_assigned_targets_and_loss(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            protected ((torch.Tensor fg_mask, torch.Tensor target_gt_idx, torch.Tensor target_bboxes, torch.Tensor anchor_points, torch.Tensor stride_tensor) target, torch.Tensor loss, torch.Tensor loss_detach) get_assigned_targets_and_loss(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
-                using (NewDisposeScope())
+                using (torch.NewDisposeScope())
                 {
-                    Tensor loss = torch.zeros(3, device: this.device);  // box, cls, dfl
-                    Tensor pred_distri = ((Tensor)preds["boxes"]).permute(0, 2, 1).contiguous();
-                    Tensor pred_scores = ((Tensor)preds["scores"]).permute(0, 2, 1).contiguous();
-                    (Tensor anchor_points, Tensor stride_tensor) = Tal.make_anchors((Tensor[])preds["feats"], this.stride, 0.5f);
-                    ScalarType dtype = pred_scores.dtype;
+                    torch.Tensor loss = torch.zeros(3, device: this.device);  // box, cls, dfl
+                    torch.Tensor pred_distri = ((torch.Tensor)preds["boxes"]).permute(0, 2, 1).contiguous();
+                    torch.Tensor pred_scores = ((torch.Tensor)preds["scores"]).permute(0, 2, 1).contiguous();
+                    (torch.Tensor anchor_points, torch.Tensor stride_tensor) = Tal.make_anchors((torch.Tensor[])preds["feats"], this.stride, 0.5f);
+                    torch.ScalarType dtype = pred_scores.dtype;
                     int batch_size = (int)pred_scores.shape[0];
-                    Tensor imgsz = torch.tensor(new long[] { ((Tensor[])preds["feats"])[0].shape[2], ((Tensor[])preds["feats"])[0].shape[3] }, device: this.device, dtype: dtype) * this.stride[0];
+                    torch.Tensor imgsz = torch.tensor(new long[] { ((torch.Tensor[])preds["feats"])[0].shape[2], ((torch.Tensor[])preds["feats"])[0].shape[3] }, device: this.device, dtype: dtype) * this.stride[0];
 
                     // Targets
-                    Tensor targets = torch.cat(new Tensor[] { ((Tensor)batch["batch_idx"]).view(-1, 1), ((Tensor)batch["cls"]).view(-1, 1), (Tensor)batch["bboxes"] }, 1);
+                    torch.Tensor targets = torch.cat(new torch.Tensor[] { ((torch.Tensor)batch["batch_idx"]).view(-1, 1), ((torch.Tensor)batch["cls"]).view(-1, 1), (torch.Tensor)batch["bboxes"] }, 1);
                     var indices = torch.tensor(new long[] { 1, 0, 1, 0 }, device: device);
                     targets = this.preprocess(targets.to(this.device), batch_size, scale_tensor: imgsz[indices]);
 
-                    Tensor[] gt_labels_bboxes = targets.split(new long[] { 1, 4 }, 2);  // cls, xyxy
-                    Tensor gt_labels = gt_labels_bboxes[0];
-                    Tensor gt_bboxes = gt_labels_bboxes[1];
-                    Tensor mask_gt = gt_bboxes.sum(2, keepdim: true).gt_(0.0);
+                    torch.Tensor[] gt_labels_bboxes = targets.split(new long[] { 1, 4 }, 2);  // cls, xyxy
+                    torch.Tensor gt_labels = gt_labels_bboxes[0];
+                    torch.Tensor gt_bboxes = gt_labels_bboxes[1];
+                    torch.Tensor mask_gt = gt_bboxes.sum(2, keepdim: true).gt_(0.0);
 
                     // Pboxes
-                    Tensor pred_bboxes = this.bbox_decode(anchor_points, pred_distri);  // xyxy, (b, h*w, 4)
+                    torch.Tensor pred_bboxes = this.bbox_decode(anchor_points, pred_distri);  // xyxy, (b, h*w, 4)
 
-                    (_, Tensor target_bboxes, Tensor target_scores, Tensor fg_mask, Tensor target_gt_idx) = this.assigner.forward(
+                    (_, torch.Tensor target_bboxes, torch.Tensor target_scores, torch.Tensor fg_mask, torch.Tensor target_gt_idx) = this.assigner.forward(
                            pred_scores.detach().sigmoid(),
                            (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
                            anchor_points * stride_tensor,
@@ -498,16 +467,16 @@ namespace YoloSharp.Utils
                 }
             }
 
-            (Tensor loss, Tensor loss_items) loss(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            (torch.Tensor loss, torch.Tensor loss_items) loss(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
-                long batch_size = ((Tensor)preds["boxes"]).shape[0];
-                (_, Tensor loss, Tensor loss_detach) = this.get_assigned_targets_and_loss(preds, batch);
+                long batch_size = ((torch.Tensor)preds["boxes"]).shape[0];
+                (_, torch.Tensor loss, torch.Tensor loss_detach) = this.get_assigned_targets_and_loss(preds, batch);
                 //Tensor loss_detach = l.loss_detach;
 
                 return (loss * batch_size, loss.detach());
             }
 
-            public override (Tensor loss, Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            public override (torch.Tensor loss, torch.Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 return this.loss(preds, batch);
             }
@@ -517,7 +486,7 @@ namespace YoloSharp.Utils
         internal class v8OBBLoss : v8DetectionLoss
         {
             private readonly float hyp_angle;
-            internal v8OBBLoss(int nc, int reg_max = 16, int[]? stride = null, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, float hyp_angle = 1.0f, Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, reg_max: reg_max, stride: stride, tal_topk: tal_topk, tal_topk2: tal_topk2, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, device: device, dtype: dtype)
+            internal v8OBBLoss(int nc, int reg_max = 16, int[]? stride = null, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, float hyp_angle = 1.0f, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, reg_max: reg_max, stride: stride, tal_topk: tal_topk, tal_topk2: tal_topk2, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, device: device, dtype: dtype)
             {
                 this.hyp_angle = hyp_angle;
                 this.assigner = new Tal.RotatedTaskAlignedAssigner(
@@ -538,7 +507,7 @@ namespace YoloSharp.Utils
             /// <param name="batch_size"></param>
             /// <param name="scale_tensor"></param>
             /// <returns></returns>
-            private Tensor preprocess(Tensor targets, int batch_size, Tensor scale_tensor)
+            private torch.Tensor preprocess(torch.Tensor targets, int batch_size, torch.Tensor scale_tensor)
             {
                 using (torch.NewDisposeScope())
                 {
@@ -549,7 +518,7 @@ namespace YoloSharp.Utils
                     }
                     else
                     {
-                        torch.Tensor batch_idx = targets[TensorIndex.Colon, 0].@long();  // image index
+                        torch.Tensor batch_idx = targets[torch.TensorIndex.Colon, 0].@long();  // image index
                         torch.Tensor counts = batch_idx.unique(return_counts: true).counts;
                         counts = counts.to(torch.int32);
                         torch.Tensor @out = torch.zeros(new long[] { batch_size, counts.max().ToInt32(), 6 }, device: this.device);
@@ -571,7 +540,7 @@ namespace YoloSharp.Utils
             /// <param name="preds"></param>
             /// <param name="batch"></param>
             /// <returns></returns>
-            private (Tensor loss, Tensor loss_items) loss(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            private (torch.Tensor loss, torch.Tensor loss_items) loss(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 using (torch.NewDisposeScope())
                 {
@@ -582,15 +551,15 @@ namespace YoloSharp.Utils
 
                     (torch.Tensor anchor_points, torch.Tensor stride_tensor) = Tal.make_anchors((torch.Tensor[])preds["feats"], this.stride, 0.5f);
                     int batch_size = (int)pred_angle.shape[0];  // batch size
-                    ScalarType dtype = pred_scores.dtype;
+                    torch.ScalarType dtype = pred_scores.dtype;
                     torch.Tensor imgsz = torch.tensor(new long[] { ((torch.Tensor[])preds["feats"])[0].shape[2], ((torch.Tensor[])preds["feats"])[0].shape[3] }, device: this.device, dtype: dtype) * this.stride[0];
 
                     torch.Tensor batch_idx = batch["batch_idx"].view(-1, 1);
                     torch.Tensor targets = torch.cat(new torch.Tensor[] { batch_idx, batch["cls"].view(-1, 1), batch["bboxes"].view(-1, 5) }, 1);
-                    torch.Tensor rw = targets[TensorIndex.Colon, 4] * (imgsz[1].ToSingle());
-                    torch.Tensor rh = targets[TensorIndex.Colon, 5] * (imgsz[0].ToSingle());
+                    torch.Tensor rw = targets[torch.TensorIndex.Colon, 4] * (imgsz[1].ToSingle());
+                    torch.Tensor rh = targets[torch.TensorIndex.Colon, 5] * (imgsz[0].ToSingle());
                     targets = targets[(rw >= 2) & (rh >= 2)];  // filter rboxes of tiny size to stabilize training
-                    Tensor indices = tensor(new long[] { 1, 0, 1, 0 }, device: device);
+                    torch.Tensor indices = torch.tensor(new long[] { 1, 0, 1, 0 }, device: device);
 
                     targets = this.preprocess(targets.to(this.device), batch_size, scale_tensor: imgsz[indices]);
 
@@ -605,7 +574,7 @@ namespace YoloSharp.Utils
                     torch.Tensor bboxes_for_assigner = pred_bboxes.clone().detach();
 
                     // Only the first four elements need to be scaled
-                    bboxes_for_assigner[TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)] *= stride_tensor;
+                    bboxes_for_assigner[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)] *= stride_tensor;
 
                     (_, torch.Tensor target_bboxes, torch.Tensor target_scores, torch.Tensor fg_mask, _) = this.assigner.forward(
                                                                                pred_scores.detach().sigmoid(),
@@ -625,7 +594,7 @@ namespace YoloSharp.Utils
                     // Bbox loss
                     if (fg_mask.sum().ToSingle() > 0)
                     {
-                        target_bboxes[TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)] /= stride_tensor;
+                        target_bboxes[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)] /= stride_tensor;
                         (loss[0], loss[2]) = this.bbox_loss.forward(
                                                  pred_distri,
                                                  pred_bboxes,
@@ -689,10 +658,10 @@ namespace YoloSharp.Utils
             {
                 using (torch.NewDisposeScope())
                 {
-                    torch.Tensor w_gt = target_bboxes[TensorIndex.Ellipsis, 2];
-                    torch.Tensor h_gt = target_bboxes[TensorIndex.Ellipsis, 3];
-                    torch.Tensor pred_theta = pred_bboxes[TensorIndex.Ellipsis, 4];
-                    torch.Tensor target_theta = target_bboxes[TensorIndex.Ellipsis, 4];
+                    torch.Tensor w_gt = target_bboxes[torch.TensorIndex.Ellipsis, 2];
+                    torch.Tensor h_gt = target_bboxes[torch.TensorIndex.Ellipsis, 3];
+                    torch.Tensor pred_theta = pred_bboxes[torch.TensorIndex.Ellipsis, 4];
+                    torch.Tensor target_theta = target_bboxes[torch.TensorIndex.Ellipsis, 4];
 
                     torch.Tensor log_ar = torch.log((w_gt + 1e-9) / (h_gt + 1e-9));
                     torch.Tensor scale_weight = torch.exp(-(torch.pow(log_ar, 2)) / (torch.pow(lambda_val, 2)));
@@ -707,7 +676,7 @@ namespace YoloSharp.Utils
                 }
             }
 
-            public override (Tensor loss, Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            public override (torch.Tensor loss, torch.Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 return this.loss(preds, batch);
             }
@@ -721,14 +690,14 @@ namespace YoloSharp.Utils
             private readonly bool overlap;
             private readonly BCEDiceLoss bcedice_loss;
 
-            internal v8SegmentationLoss(int nc, int reg_max = 16, int[]? stride = null, bool overlap_mask = true, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, reg_max: reg_max, stride: stride, tal_topk: tal_topk, tal_topk2: tal_topk2, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, device: device, dtype: dtype)
+            internal v8SegmentationLoss(int nc, int reg_max = 16, int[]? stride = null, bool overlap_mask = true, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, reg_max: reg_max, stride: stride, tal_topk: tal_topk, tal_topk2: tal_topk2, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, device: device, dtype: dtype)
             {
                 this.overlap = overlap_mask;
                 this.bcedice_loss = new BCEDiceLoss(weight_bce: 0.5f, weight_dice: 0.5f);
                 RegisterComponents();
             }
 
-            public override (Tensor loss, Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            public override (torch.Tensor loss, torch.Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 return this.loss(preds, batch);
             }
@@ -739,22 +708,22 @@ namespace YoloSharp.Utils
             /// <param name="preds"></param>
             /// <param name="batch"></param>
             /// <returns></returns>
-            (Tensor loss, Tensor loss_items) loss(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            (torch.Tensor loss, torch.Tensor loss_items) loss(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 using (torch.NewDisposeScope())
                 {
-                    Tensor pred_masks = ((Tensor)preds["mask_coefficient"]).permute(0, 2, 1).contiguous();
-                    Tensor proto = (Tensor)preds["proto"];
+                    torch.Tensor pred_masks = ((torch.Tensor)preds["mask_coefficient"]).permute(0, 2, 1).contiguous();
+                    torch.Tensor proto = (torch.Tensor)preds["proto"];
                     preds.TryGetValue("pred_semseg", out object pred_semseg);
 
-                    Tensor loss = torch.zeros(5, device: this.device);  // box, seg, cls, dfl, semseg
+                    torch.Tensor loss = torch.zeros(5, device: this.device);  // box, seg, cls, dfl, semseg
 
-                    ((Tensor fg_mask, Tensor target_gt_idx, Tensor target_bboxes, Tensor _, Tensor __) target, torch.Tensor det_loss, torch.Tensor _) p = this.get_assigned_targets_and_loss(preds, batch);
+                    ((torch.Tensor fg_mask, torch.Tensor target_gt_idx, torch.Tensor target_bboxes, torch.Tensor _, torch.Tensor __) target, torch.Tensor det_loss, torch.Tensor _) p = this.get_assigned_targets_and_loss(preds, batch);
 
-                    Tensor fg_mask = p.target.fg_mask;
-                    Tensor target_gt_idx = p.target.target_gt_idx;
-                    Tensor target_bboxes = p.target.target_bboxes;
-                    Tensor det_loss = p.det_loss;
+                    torch.Tensor fg_mask = p.target.fg_mask;
+                    torch.Tensor target_gt_idx = p.target.target_gt_idx;
+                    torch.Tensor target_bboxes = p.target.target_bboxes;
+                    torch.Tensor det_loss = p.det_loss;
 
                     // NOTE: re-assign index for consistency for now. Need to be removed in the future.
                     loss[0] = det_loss[0];
@@ -770,7 +739,7 @@ namespace YoloSharp.Utils
                         if (masks.shape[masks.shape.Length - 2] != mask_h || masks.shape[masks.shape.Length - 1] != mask_w) // downsample
                         {
                             // masks = F.interpolate(masks[None], (mask_h, mask_w), mode="nearest")[0]
-                            proto = torch.nn.functional.interpolate(proto, new long[] { masks.shape[masks.shape.Length - 2], masks.shape[masks.shape.Length - 1] }, mode: InterpolationMode.Bilinear, align_corners: false);
+                            proto = torch.nn.functional.interpolate(proto, new long[] { masks.shape[masks.shape.Length - 2], masks.shape[masks.shape.Length - 1] }, mode: torch.InterpolationMode.Bilinear, align_corners: false);
                         }
                         torch.Tensor imgsz = torch.tensor(new long[] { ((torch.Tensor[])preds["feats"])[0].shape[2], ((torch.Tensor[])preds["feats"])[0].shape[3] }, device: this.device, dtype: pred_masks.dtype) * this.stride[0];
                         loss[1] = this.calculate_segmentation_loss(fg_mask, masks, target_gt_idx, target_bboxes, batch["batch_idx"].view(-1, 1), proto, pred_masks, imgsz);
@@ -794,7 +763,7 @@ namespace YoloSharp.Utils
                                     {
                                         continue;
                                     }
-                                    sem_masks[i, TensorIndex.Colon, instance_mask_i.sum(dim: 0) == 0] = 0;
+                                    sem_masks[i, torch.TensorIndex.Colon, instance_mask_i.sum(dim: 0) == 0] = 0;
                                 }
                             }
                             loss[4] = this.bcedice_loss.forward((torch.Tensor)pred_semseg, sem_masks);
@@ -824,10 +793,10 @@ namespace YoloSharp.Utils
             /// <returns>The calculated mask loss for a single image.</returns>
             private torch.Tensor single_mask_loss(torch.Tensor gt_mask, torch.Tensor pred, torch.Tensor proto, torch.Tensor xyxy, torch.Tensor area)
             {
-                using (NewDisposeScope())
+                using (torch.NewDisposeScope())
                 {
                     torch.Tensor pred_mask = torch.einsum("in,nhw->ihw", pred, proto);  // (n, 32) @ (32, 80, 80) -> (n, 80, 80)
-                    torch.Tensor loss = torch.nn.functional.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction: Reduction.None);
+                    torch.Tensor loss = torch.nn.functional.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction: torch.nn.Reduction.None);
                     return ((Ops.crop_mask(loss, xyxy).mean(dimensions: new long[] { 1, 2 }) / area).sum()).MoveToOuterDisposeScope();
                 }
             }
@@ -838,14 +807,14 @@ namespace YoloSharp.Utils
             /// <remarks>
             /// The batch loss can be computed for improved speed at higher memory usage. For example, pred_mask can be computed as follows: <br/>pred_mask = torch.einsum('in,nhw->ihw', pred, proto)  # (i, 32) @ (32, 160, 160) -> (i, 160, 160)
             /// </remarks>
-            /// <param name="fg_mask">A binary tensor of shape (BS, N_anchors) indicating which anchors are positive.</param>
+            /// <param name="fg_mask">A binary torch.Tensor of shape (BS, N_anchors) indicating which anchors are positive.</param>
             /// <param name="masks">Ground truth masks of shape (BS, H, W) if `overlap` is False, otherwise (BS, ?, H, W).</param>
             /// <param name="target_gt_idx">Indexes of ground truth objects for each anchor of shape (BS, N_anchors).</param>
             /// <param name="target_bboxes">Ground truth bounding boxes for each anchor of shape (BS, N_anchors, 4).</param>
             /// <param name="batch_idx">Batch indices of shape (N_labels_in_batch, 1).</param>
             /// <param name="proto">Prototype masks of shape (BS, 32, H, W).</param>
             /// <param name="pred_masks">Predicted masks for each anchor of shape (BS, N_anchors, 32).</param>
-            /// <param name="imgsz">Size of the input image as a tensor of shape (2), i.e., (H, W).</param>
+            /// <param name="imgsz">Size of the input image as a torch.Tensor of shape (2), i.e., (H, W).</param>
             /// <returns>The calculated loss for instance segmentation.</returns>
             private torch.Tensor calculate_segmentation_loss(torch.Tensor fg_mask, torch.Tensor masks, torch.Tensor target_gt_idx, torch.Tensor target_bboxes, torch.Tensor batch_idx, torch.Tensor proto, torch.Tensor pred_masks, torch.Tensor imgsz)
             {
@@ -857,11 +826,11 @@ namespace YoloSharp.Utils
                     torch.Tensor loss = torch.zeros(1, device: proto.device);
 
                     // Normalize to 0-1
-                    Tensor indices = tensor(new long[] { 1, 0, 1, 0 }, device: device);
+                    torch.Tensor indices = torch.tensor(new long[] { 1, 0, 1, 0 }, device: device);
                     torch.Tensor target_bboxes_normalized = target_bboxes / imgsz[indices];
 
                     // Areas of target bboxes
-                    torch.Tensor marea = Ops.xyxy2xywh(target_bboxes_normalized)[TensorIndex.Ellipsis, torch.TensorIndex.Slice(2)].prod(2);
+                    torch.Tensor marea = Ops.xyxy2xywh(target_bboxes_normalized)[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(2)].prod(2);
 
                     // Normalize to mask size
                     torch.Tensor mxyxy = target_bboxes_normalized * torch.tensor(new long[] { mask_w, mask_h, mask_w, mask_h }, device: proto.device);
@@ -924,7 +893,7 @@ namespace YoloSharp.Utils
             /// <param name="hyp_pose"></param>
             /// <param name="device"></param>
             /// <param name="dtype"></param>
-            internal v8PoseLoss(int nc, int kpt_num = 17, int kpt_dim = 3, int reg_max = 16, int[]? stride = null, int tal_topk = 10, int? tal_topk2 = 10, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, float hyp_pose = 12.0f, float hyp_kobj = 1.0f, Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, reg_max: reg_max, stride: stride, tal_topk: tal_topk, tal_topk2: tal_topk2, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, device: device, dtype: dtype)
+            internal v8PoseLoss(int nc, int kpt_num = 17, int kpt_dim = 3, int reg_max = 16, int[]? stride = null, int tal_topk = 10, int? tal_topk2 = 10, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, float hyp_pose = 12.0f, float hyp_kobj = 1.0f, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nc: nc, reg_max: reg_max, stride: stride, tal_topk: tal_topk, tal_topk2: tal_topk2, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, device: device, dtype: dtype)
             {
                 this.kpt_num = kpt_num;
                 this.kpt_dim = kpt_dim;
@@ -938,7 +907,7 @@ namespace YoloSharp.Utils
                 RegisterComponents();
             }
 
-            public override (Tensor loss, Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            public override (torch.Tensor loss, torch.Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 return this.loss(preds, batch);
             }
@@ -949,11 +918,11 @@ namespace YoloSharp.Utils
             /// <param name="preds"></param>
             /// <param name="batch"></param>
             /// <returns></returns>
-            private (Tensor loss, Tensor loss_items) loss(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            private (torch.Tensor loss, torch.Tensor loss_items) loss(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 using (torch.NewDisposeScope())
                 {
-                    torch.Tensor pred_kpts = ((Tensor)preds["kpts"]).permute(0, 2, 1).contiguous();
+                    torch.Tensor pred_kpts = ((torch.Tensor)preds["kpts"]).permute(0, 2, 1).contiguous();
                     torch.Tensor loss = torch.zeros(5, device: this.device);  // box, kpt_location, kpt_visibility, cls, dfl
                     ((torch.Tensor fg_mask, torch.Tensor target_gt_idx, torch.Tensor target_bboxes, torch.Tensor anchor_points, torch.Tensor stride_tensor) target, torch.Tensor det_loss, _) = this.get_assigned_targets_and_loss(preds, batch);
 
@@ -978,8 +947,8 @@ namespace YoloSharp.Utils
                     if (fg_mask.sum().ToSingle() > 0)
                     {
                         torch.Tensor keypoints = batch["keypoints"].to(this.device).@float().clone();
-                        keypoints[TensorIndex.Ellipsis, 0] *= imgsz[1];
-                        keypoints[TensorIndex.Ellipsis, 1] *= imgsz[0];
+                        keypoints[torch.TensorIndex.Ellipsis, 0] *= imgsz[1];
+                        keypoints[torch.TensorIndex.Ellipsis, 1] *= imgsz[0];
 
                         (loss[1], loss[2]) = this.calculate_keypoints_loss(
                             fg_mask,
@@ -1008,9 +977,9 @@ namespace YoloSharp.Utils
             private torch.Tensor kpts_decode(torch.Tensor anchor_points, torch.Tensor pred_kpts)
             {
                 torch.Tensor y = pred_kpts.clone();
-                y[TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)] *= 2.0;
-                y[TensorIndex.Ellipsis, 0] += anchor_points[TensorIndex.Colon, torch.TensorIndex.Slice(0, 1)] - 0.5f;
-                y[TensorIndex.Ellipsis, 1] += anchor_points[TensorIndex.Colon, torch.TensorIndex.Slice(1, 2)] - 0.5f;
+                y[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)] *= 2.0;
+                y[torch.TensorIndex.Ellipsis, 0] += anchor_points[torch.TensorIndex.Colon, torch.TensorIndex.Slice(0, 1)] - 0.5f;
+                y[torch.TensorIndex.Ellipsis, 1] += anchor_points[torch.TensorIndex.Colon, torch.TensorIndex.Slice(1, 2)] - 0.5f;
                 return y;
             }
 
@@ -1018,10 +987,10 @@ namespace YoloSharp.Utils
             /// Select target keypoints for each anchor based on batch index and target ground truth index.
             /// </summary>
             /// <param name="keypoints">Ground truth keypoints, shape (N_kpts_in_batch, N_kpts_per_object, kpts_dim).</param>
-            /// <param name="batch_idx">Batch index tensor for keypoints, shape (N_kpts_in_batch, 1).</param>
-            /// <param name="target_gt_idx">Index tensor mapping anchors to ground truth objects, shape (BS, N_anchors).</param>
-            /// <param name="masks">Binary mask tensor indicating object presence, shape (BS, N_anchors).</param>
-            /// <returns>Selected keypoints tensor, shape (BS, N_anchors, N_kpts_per_object, kpts_dim).</returns>
+            /// <param name="batch_idx">Batch index torch.Tensor for keypoints, shape (N_kpts_in_batch, 1).</param>
+            /// <param name="target_gt_idx">Index torch.Tensor mapping anchors to ground truth objects, shape (BS, N_anchors).</param>
+            /// <param name="masks">Binary mask torch.Tensor indicating object presence, shape (BS, N_anchors).</param>
+            /// <returns>Selected keypoints torch.Tensor, shape (BS, N_anchors, N_kpts_per_object, kpts_dim).</returns>
             private torch.Tensor _select_target_keypoints(torch.Tensor keypoints, torch.Tensor batch_idx, torch.Tensor target_gt_idx, torch.Tensor masks)
             {
                 using (torch.NewDisposeScope())
@@ -1032,7 +1001,7 @@ namespace YoloSharp.Utils
                     // Find the maximum number of keypoints in a single image
                     long max_kpts = torch.unique(batch_idx, return_counts: true).counts.max().ToInt64();
 
-                    // Create a tensor to hold batched keypoints
+                    // Create a torch.Tensor to hold batched keypoints
                     torch.Tensor batched_keypoints = torch.zeros(new long[] { batch_size, max_kpts, keypoints.shape[1], keypoints.shape[2] }, device: keypoints.device);
 
                     // Vectorized fill: compute within-batch position for each keypoint using cumulative offsets
@@ -1060,15 +1029,15 @@ namespace YoloSharp.Utils
             /// <remarks>
             /// This function calculates the keypoints loss and keypoints object loss for a given batch. The keypoints loss is based on the difference between the predicted keypoints and ground truth keypoints.The keypoints object loss is a binary classification loss that classifies whether a keypoint is present or not.
             /// </remarks>
-            /// <param name="masks">Binary mask tensor indicating object presence, shape (BS, N_anchors).</param>
-            /// <param name="target_gt_idx">Index tensor mapping anchors to ground truth objects, shape (BS, N_anchors).</param>
+            /// <param name="masks">Binary mask torch.Tensor indicating object presence, shape (BS, N_anchors).</param>
+            /// <param name="target_gt_idx">Index torch.Tensor mapping anchors to ground truth objects, shape (BS, N_anchors).</param>
             /// <param name="keypoints">Ground truth keypoints, shape (N_kpts_in_batch, N_kpts_per_object, kpts_dim).</param>
-            /// <param name="batch_idx">Batch index tensor for keypoints, shape (N_kpts_in_batch, 1).</param>
-            /// <param name="stride_tensor">Stride tensor for anchors, shape (N_anchors, 1).</param>
+            /// <param name="batch_idx">Batch index torch.Tensor for keypoints, shape (N_kpts_in_batch, 1).</param>
+            /// <param name="stride_tensor">Stride torch.Tensor for anchors, shape (N_anchors, 1).</param>
             /// <param name="target_bboxes">Ground truth boxes in (x1, y1, x2, y2) format, shape (BS, N_anchors, 4).</param>
             /// <param name="pred_kpts">Predicted keypoints, shape (BS, N_anchors, N_kpts_per_object, kpts_dim).</param>
             /// <returns></returns>
-            private (Tensor kpts_loss, Tensor kpts_obj_loss) calculate_keypoints_loss(torch.Tensor masks, torch.Tensor target_gt_idx, torch.Tensor keypoints, torch.Tensor batch_idx, torch.Tensor stride_tensor, torch.Tensor target_bboxes, torch.Tensor pred_kpts)
+            private (torch.Tensor kpts_loss, torch.Tensor kpts_obj_loss) calculate_keypoints_loss(torch.Tensor masks, torch.Tensor target_gt_idx, torch.Tensor keypoints, torch.Tensor batch_idx, torch.Tensor stride_tensor, torch.Tensor target_bboxes, torch.Tensor pred_kpts)
             {
                 using (torch.NewDisposeScope())
                 {
@@ -1076,7 +1045,7 @@ namespace YoloSharp.Utils
                     torch.Tensor selected_keypoints = this._select_target_keypoints(keypoints, batch_idx, target_gt_idx, masks);
 
                     // Divide coordinates by stride
-                    selected_keypoints[TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)] /= stride_tensor.view(1, -1, 1, 1);
+                    selected_keypoints[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 2)] /= stride_tensor.view(1, -1, 1, 1);
 
                     torch.Tensor kpts_loss = 0;
                     torch.Tensor kpts_obj_loss = 0;
@@ -1085,14 +1054,14 @@ namespace YoloSharp.Utils
                     {
                         target_bboxes /= stride_tensor;
                         torch.Tensor gt_kpt = selected_keypoints[masks];
-                        torch.Tensor area = Ops.xyxy2xywh(target_bboxes[masks])[TensorIndex.Colon, torch.TensorIndex.Slice(2)].prod(1, keepdim: true);
+                        torch.Tensor area = Ops.xyxy2xywh(target_bboxes[masks])[torch.TensorIndex.Colon, torch.TensorIndex.Slice(2)].prod(1, keepdim: true);
                         torch.Tensor pred_kpt = pred_kpts[masks];
-                        torch.Tensor kpt_mask = gt_kpt.shape[gt_kpt.shape.Length - 1] == 3 ? gt_kpt[TensorIndex.Ellipsis, 2] != 0 : torch.full_like(gt_kpt[TensorIndex.Ellipsis, 0], true);
+                        torch.Tensor kpt_mask = gt_kpt.shape[gt_kpt.shape.Length - 1] == 3 ? gt_kpt[torch.TensorIndex.Ellipsis, 2] != 0 : torch.full_like(gt_kpt[torch.TensorIndex.Ellipsis, 0], true);
                         kpts_loss = this.keypoint_loss.forward(pred_kpt, gt_kpt, kpt_mask, area);  // pose loss
 
                         if (pred_kpt.shape[pred_kpt.shape.Length - 1] == 3)
                         {
-                            kpts_obj_loss = this.bce_pose.forward(pred_kpt[TensorIndex.Ellipsis, 2], kpt_mask.@float());  // keypoint obj loss
+                            kpts_obj_loss = this.bce_pose.forward(pred_kpt[torch.TensorIndex.Ellipsis, 2], kpt_mask.@float());  // keypoint obj loss
                         }
                     }
 
@@ -1101,19 +1070,19 @@ namespace YoloSharp.Utils
             }
         }
 
-        internal class v8ClassificationLoss : Module<Dictionary<string, object>, Dictionary<string, Tensor>, (Tensor loss, Tensor loss_detach)>
+        internal class v8ClassificationLoss : torch.nn.Module<Dictionary<string, object>, Dictionary<string, torch.Tensor>, (torch.Tensor loss, torch.Tensor loss_detach)>
         {
             internal v8ClassificationLoss() : base(nameof(v8ClassificationLoss))
             {
 
             }
 
-            public override (Tensor loss, Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            public override (torch.Tensor loss, torch.Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 using (torch.NewDisposeScope())
                 {
-                    torch.Tensor pred = (Tensor)(preds["cls"]);
-                    Tensor loss = torch.nn.functional.cross_entropy(pred, batch["cls"].view(-1), reduction: Reduction.Mean);
+                    torch.Tensor pred = (torch.Tensor)(preds["cls"]);
+                    torch.Tensor loss = torch.nn.functional.cross_entropy(pred, batch["cls"].view(-1), reduction: torch.nn.Reduction.Mean);
 
                     return (loss.MoveToOuterDisposeScope(), loss.detach().MoveToOuterDisposeScope());
 
@@ -1122,18 +1091,18 @@ namespace YoloSharp.Utils
         }
 
 
-        internal class E2EDetectLoss : Module<Dictionary<string, object>, Dictionary<string, Tensor>, (Tensor loss, Tensor loss_detach)>
+        internal class E2EDetectLoss : torch.nn.Module<Dictionary<string, object>, Dictionary<string, torch.Tensor>, (torch.Tensor loss, torch.Tensor loss_detach)>
         {
             private readonly v8DetectionLoss one2many;
             private readonly v8DetectionLoss one2one;
-            internal E2EDetectLoss(int nc, int reg_max = 16, int[]? stride = null, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(E2EDetectLoss))
+            internal E2EDetectLoss(int nc, int reg_max = 16, int[]? stride = null, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nameof(E2EDetectLoss))
             {
                 this.one2many = new v8DetectionLoss(nc, reg_max, stride, tal_topk: 10, device: device, dtype: dtype);
                 this.one2one = new v8DetectionLoss(nc, reg_max, stride, tal_topk: 1, device: device, dtype: dtype);
                 RegisterComponents();
             }
 
-            public override (Tensor loss, Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            public override (torch.Tensor loss, torch.Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 Dictionary<string, object> local_preds = preds;
 
@@ -1148,7 +1117,7 @@ namespace YoloSharp.Utils
             }
         }
 
-        internal class E2EOBBLoss : Module<Dictionary<string, object>, Dictionary<string, Tensor>, (Tensor loss, Tensor loss_detach)>
+        internal class E2EOBBLoss : torch.nn.Module<Dictionary<string, object>, Dictionary<string, torch.Tensor>, (torch.Tensor loss, torch.Tensor loss_detach)>
         {
             private readonly v8OBBLoss one2many;
             private readonly v8OBBLoss one2one;
@@ -1161,7 +1130,7 @@ namespace YoloSharp.Utils
             private float final_o2m;
             private int epochs;
 
-            internal E2EOBBLoss(int nc, int reg_max = 16, int[]? stride = null, int epoches = 100, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, float hyp_angle = 1.0f, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(E2EOBBLoss))
+            internal E2EOBBLoss(int nc, int reg_max = 16, int[]? stride = null, int epoches = 100, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, float hyp_angle = 1.0f, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nameof(E2EOBBLoss))
             {
                 this.one2many = new v8OBBLoss(nc, reg_max, stride, tal_topk: 10, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, hyp_angle: hyp_angle, device: device, dtype: dtype);
                 this.one2one = new v8OBBLoss(nc, reg_max, stride, tal_topk: 7, tal_topk2: 1, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, hyp_angle: hyp_angle, device: device, dtype: dtype);
@@ -1181,7 +1150,7 @@ namespace YoloSharp.Utils
                 RegisterComponents();
             }
 
-            public override (Tensor loss, Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            public override (torch.Tensor loss, torch.Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 Dictionary<string, object> local_preds = preds;
 
@@ -1207,7 +1176,7 @@ namespace YoloSharp.Utils
             }
         }
 
-        internal class E2ESegmentLoss : Module<Dictionary<string, object>, Dictionary<string, Tensor>, (Tensor loss, Tensor loss_detach)>
+        internal class E2ESegmentLoss : torch.nn.Module<Dictionary<string, object>, Dictionary<string, torch.Tensor>, (torch.Tensor loss, torch.Tensor loss_detach)>
         {
             private readonly v8SegmentationLoss one2many;
             private readonly v8SegmentationLoss one2one;
@@ -1220,7 +1189,7 @@ namespace YoloSharp.Utils
             private float final_o2m;
             private int epochs;
 
-            internal E2ESegmentLoss(int nc, int reg_max = 16, int[]? stride = null, int epoches = 100, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(E2EOBBLoss))
+            internal E2ESegmentLoss(int nc, int reg_max = 16, int[]? stride = null, int epoches = 100, int tal_topk = 10, int? tal_topk2 = null, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nameof(E2EOBBLoss))
             {
                 this.one2many = new v8SegmentationLoss(nc: nc, reg_max: reg_max, stride: stride, tal_topk: 10, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, device: device, dtype: dtype);
                 this.one2one = new v8SegmentationLoss(nc: nc, reg_max: reg_max, stride: stride, tal_topk: 7, tal_topk2: 1, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, device: device, dtype: dtype);
@@ -1240,7 +1209,7 @@ namespace YoloSharp.Utils
                 RegisterComponents();
             }
 
-            public override (Tensor loss, Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            public override (torch.Tensor loss, torch.Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 Dictionary<string, object> local_preds = preds;
 
@@ -1266,7 +1235,7 @@ namespace YoloSharp.Utils
             }
         }
 
-        internal class E2EPoseLoss : Module<Dictionary<string, object>, Dictionary<string, Tensor>, (Tensor loss, Tensor loss_detach)>
+        internal class E2EPoseLoss : torch.nn.Module<Dictionary<string, object>, Dictionary<string, torch.Tensor>, (torch.Tensor loss, torch.Tensor loss_detach)>
         {
             private readonly v8PoseLoss one2many;
             private readonly v8PoseLoss one2one;
@@ -1279,7 +1248,7 @@ namespace YoloSharp.Utils
             private float final_o2m;
             private int epochs;
 
-            internal E2EPoseLoss(int nc, int kpt_num = 17, int kpt_dim = 3, int reg_max = 16, int[]? stride = null, int epoches = 100, int tal_topk = 10, int? tal_topk2 = 10, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, float hyp_pose = 12.0f, float hyp_kobj = 1.0f, Device? device = null, torch.ScalarType? dtype = null) : base(nameof(E2EOBBLoss))
+            internal E2EPoseLoss(int nc, int kpt_num = 17, int kpt_dim = 3, int reg_max = 16, int[]? stride = null, int epoches = 100, int tal_topk = 10, int? tal_topk2 = 10, float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f, float hyp_pose = 12.0f, float hyp_kobj = 1.0f, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nameof(E2EOBBLoss))
             {
                 this.one2many = new v8PoseLoss(nc: nc, kpt_num: kpt_num, kpt_dim: kpt_dim, reg_max: reg_max, stride: stride, tal_topk: 10, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, hyp_pose: hyp_pose, hyp_kobj: hyp_kobj, device: device, dtype: dtype);
                 this.one2one = new v8PoseLoss(nc: nc, kpt_num: kpt_num, kpt_dim: kpt_dim, reg_max: reg_max, stride: stride, tal_topk: 7, tal_topk2: 1, hyp_box: hyp_box, hyp_cls: hyp_cls, hyp_dfl: hyp_dfl, hyp_pose: hyp_pose, hyp_kobj: hyp_kobj, device: device, dtype: dtype);
@@ -1299,7 +1268,7 @@ namespace YoloSharp.Utils
                 RegisterComponents();
             }
 
-            public override (Tensor loss, Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, Tensor> batch)
+            public override (torch.Tensor loss, torch.Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
             {
                 Dictionary<string, object> local_preds = preds;
 

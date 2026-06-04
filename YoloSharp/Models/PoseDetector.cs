@@ -62,7 +62,6 @@ namespace YoloSharp.Models
                     {
                         for (int i = 0; i < nms_result[0].shape[0]; i++)
                         {
-
                             int x = nms_result[0][i][0].ToInt32();
                             int y = nms_result[0][i][1].ToInt32();
                             int rw = nms_result[0][i][2].ToInt32() - x;
@@ -83,8 +82,8 @@ namespace YoloSharp.Models
                             {
                                 keyPoints[j] = new KeyPoint()
                                 {
-                                    X = nms_result[0][i][6 + j * 3].ToSingle(),
-                                    Y = nms_result[0][i][6 + j * 3 + 1].ToSingle(),
+                                    X = nms_result[0][i][6 + j * config.KeyPoint_Dim].ToSingle(),
+                                    Y = nms_result[0][i][6 + j * config.KeyPoint_Dim + 1].ToSingle(),
                                     VisibilityScore = config.KeyPoint_Dim == 3 ? nms_result[0][i][6 + j * 3 + 2].ToSingle() : 2.0f
                                 };
                             }

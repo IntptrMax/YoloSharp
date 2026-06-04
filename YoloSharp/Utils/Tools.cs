@@ -1,10 +1,7 @@
-﻿using System.Data;
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Text;
 using TorchSharp;
 using YoloSharp.ModelLoader;
-using static TorchSharp.torch;
-using static TorchSharp.torch.nn;
 
 namespace YoloSharp.Utils
 {
@@ -16,20 +13,20 @@ namespace YoloSharp.Utils
         /// <param name="model">Model in TorchSharp</param>
         /// <param name="safetensorName">safetensors file</param>
         /// <param name="outName">file to write on disk</param>
-        public static void TransModelFromSafetensors(Module<Tensor, Tensor[]> model, string safetensorName, string outName)
+        public static void TransModelFromSafetensors(torch.nn.Module<torch.Tensor, torch.Tensor[]> model, string safetensorName, string outName)
         {
-            Dictionary<string, Tensor> dict = new Dictionary<string, Tensor>();
+            Dictionary<string, torch.Tensor> dict = new Dictionary<string, torch.Tensor>();
             SafetensorsLoader safetensorLoader = new SafetensorsLoader();
             List<CommonTensor> safetensorTensors = safetensorLoader.ReadTensorsInfoFromFile(safetensorName);
 
             foreach (CommonTensor li in safetensorTensors)
             {
-                Tensor t = zeros(li.Shape.ToArray(), dtype: li.Type);
+                torch.Tensor t = torch.zeros(li.Shape.ToArray(), dtype: li.Type);
                 byte[] dt = safetensorLoader.ReadByteFromFile(li);
                 t.bytes = dt;
                 dict.Add(li.Name, t);
             }
-            Dictionary<string, Tensor> state_dict = model.state_dict();
+            Dictionary<string, torch.Tensor> state_dict = model.state_dict();
 
             var (loadMissing, unexp) = model.load_state_dict(dict, false);
             model.save(outName);
@@ -42,7 +39,7 @@ namespace YoloSharp.Utils
         /// </summary>
         /// <param name="path">tensor path</param>
         /// <returns>Tensor in TorchSharp</returns>
-        public static Tensor LoadTensorFromPT(string path)
+        public static torch.Tensor LoadTensorFromPT(string path)
         {
             torch.ScalarType dtype = torch.ScalarType.Float32;
             List<long> shape = new List<long>();
@@ -98,7 +95,7 @@ namespace YoloSharp.Utils
                 }
             }
 
-            Tensor tensor = zeros(shape.ToArray(), dtype: dtype);
+            torch.Tensor tensor = torch.zeros(shape.ToArray(), dtype: dtype);
             ZipArchiveEntry dataEntry = zip.Entries.First(e => e.Name == "0");
 
             using Stream dataStream = dataEntry.Open();
@@ -114,7 +111,7 @@ namespace YoloSharp.Utils
         /// <param name="path">tensor path</param>
         /// <param name="tensor">the given tensor</param>
         /// <returns>Tensor in TorchSharp</returns>
-        public static Tensor LoadTensorFromPT(string path, Tensor tensor)
+        public static torch.Tensor LoadTensorFromPT(string path, torch.Tensor tensor)
         {
             return LoadTensorFromPT(path).to(tensor.dtype, tensor.device);
         }
@@ -125,9 +122,9 @@ namespace YoloSharp.Utils
             string[] headers = lines[0].Split(new char[] { '\t', ',' });
 
             Dictionary<string, List<float>> dataDict = new Dictionary<string, List<float>>();
-            foreach (string header in headers) 
+            foreach (string header in headers)
             {
-                 dataDict.Add(header, new List<float>());
+                dataDict.Add(header, new List<float>());
             }
 
             for (int i = 1; i < lines.Length; i++)
@@ -135,7 +132,7 @@ namespace YoloSharp.Utils
                 string[] data = lines[i].Split(new char[] { '\t', ',' });
                 for (int j = 0; j < data.Length; j++)
                 {
-                    dataDict[headers[j]].Add(float.Parse( data[j]) );
+                    dataDict[headers[j]].Add(float.Parse(data[j]));
                 }
             }
             return dataDict;

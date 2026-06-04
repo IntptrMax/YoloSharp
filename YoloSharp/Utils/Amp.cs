@@ -1,7 +1,4 @@
 ﻿using TorchSharp;
-using static TorchSharp.torch;
-using static TorchSharp.torch.nn;
-using static TorchSharp.torch.optim;
 
 public class MixedPrecisionTrainer : IDisposable
 {
@@ -11,8 +8,8 @@ public class MixedPrecisionTrainer : IDisposable
     private int _growthInterval;
     private int _growthCounter;
     private bool _foundInf;
-    private Device _device;
-    private ScalarType _precision;
+    private torch.Device _device;
+    private torch.ScalarType _precision;
     private bool _isMixedPrecision;
     private float _minScale;      // New: minimum scaling factor
     private float _maxScale;      // New: maximum scaling factor
@@ -22,12 +19,12 @@ public class MixedPrecisionTrainer : IDisposable
         float growthFactor = 2.0f,
         float backoffFactor = 0.5f,
         int growthInterval = 2000,
-        Device device = null,
-        ScalarType precision = ScalarType.Float32,
+        torch.Device device = null,
+       torch.ScalarType precision = torch.ScalarType.Float32,
         float minScale = 1e-4f,      // default minimum scale
         float maxScale = 16777216f)  // default maximum scale (2^24)
     {
-        if (precision != ScalarType.Float16 && precision != ScalarType.BFloat16 && precision != ScalarType.Float32)
+        if (precision != torch.ScalarType.Float16 && precision != torch.ScalarType.BFloat16 && precision != torch.ScalarType.Float32)
         {
             throw new ArgumentException("Precision must be Float16, BFloat16, or Float32", nameof(precision));
         }
@@ -38,9 +35,9 @@ public class MixedPrecisionTrainer : IDisposable
         _growthInterval = growthInterval;
         _growthCounter = 0;
         _foundInf = false;
-        _device = device ?? (torch.cuda_is_available() ? CUDA : CPU);
+        _device = device ?? (torch.cuda_is_available() ? torch.CUDA : torch.CPU);
         _precision = precision;
-        _isMixedPrecision = (precision == ScalarType.Float16 || precision == ScalarType.BFloat16);
+        _isMixedPrecision = (precision == torch.ScalarType.Float16 || precision == torch.ScalarType.BFloat16);
         _minScale = minScale;
         _maxScale = maxScale;
 
@@ -50,11 +47,11 @@ public class MixedPrecisionTrainer : IDisposable
         }
     }
 
-    public ScalarType Precision => _precision;
+    public torch.ScalarType Precision => _precision;
     public bool IsMixedPrecision => _isMixedPrecision;
 
     // Scale Loss
-    public Tensor ScaleLoss(Tensor loss)
+    public torch.Tensor ScaleLoss(torch.Tensor loss)
     {
         if (!_isMixedPrecision)
             return loss;
@@ -138,13 +135,13 @@ public class MixedPrecisionTrainer : IDisposable
     }
 
     // Skip current update
-    public void SkipStep(Optimizer optimizer)
+    public void SkipStep(torch.optim.Optimizer optimizer)
     {
         optimizer.zero_grad();
     }
 
     // Change tensor to mixed precision (if needed)
-    public Tensor ToMixedPrecision(Tensor tensor)
+    public torch.Tensor ToMixedPrecision(torch.Tensor tensor)
     {
         if (!_isMixedPrecision)
             return tensor;
@@ -157,16 +154,16 @@ public class MixedPrecisionTrainer : IDisposable
     }
 
     // Change tensor to float32 (if needed)
-    public Tensor ToFloat32(Tensor tensor)
+    public torch.Tensor ToFloat32(torch.Tensor tensor)
     {
         if (!_isMixedPrecision)
             return tensor;
 
         // If already float32, return the original tensor
-        if (tensor.dtype == ScalarType.Float32)
+        if (tensor.dtype == torch.ScalarType.Float32)
             return tensor;
 
-        return tensor.to(ScalarType.Float32, copy: true);
+        return tensor.to(torch.ScalarType.Float32, copy: true);
     }
 
     // Get Current Scale
@@ -181,22 +178,22 @@ public class MixedPrecisionTrainer : IDisposable
 public class AMPWrapper : IDisposable
 {
     private readonly MixedPrecisionTrainer _scaler;
-    private readonly torch.nn.Module<Tensor, (Dictionary<string, Tensor> inference, Dictionary<string, object> preds)?> _model;
-    private readonly Optimizer _optimizer;
+    private readonly torch.nn.Module<torch.Tensor, (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)?> _model;
+    private readonly torch.optim.Optimizer _optimizer;
     private readonly bool _isMixedPrecision;
 
-    private Dictionary<string, Tensor> _fp32Weights;
+    private Dictionary<string, torch.Tensor> _fp32Weights;
 
-    public Optimizer Optimizer => _optimizer;
+    public torch.optim.Optimizer Optimizer => _optimizer;
     public MixedPrecisionTrainer Scaler => _scaler;
-    public ScalarType Precision => _scaler.Precision;
+    public torch.ScalarType Precision => _scaler.Precision;
     public bool IsMixedPrecision => _isMixedPrecision;
 
     public AMPWrapper(
-        torch.nn.Module<Tensor, (Dictionary<string, Tensor> inference, Dictionary<string, object> preds)?> model,
-        Optimizer optimizer,
-        ScalarType precision = ScalarType.Float32,
-        Device device = null)
+        torch.nn.Module<torch.Tensor, (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)?> model,
+        torch.optim.Optimizer optimizer,
+       torch.ScalarType precision = torch.ScalarType.Float32,
+       torch.Device device = null)
     {
         _model = model;
         _optimizer = optimizer;
@@ -205,12 +202,12 @@ public class AMPWrapper : IDisposable
 
         if (_isMixedPrecision)
         {
-            using (no_grad())
+            using (torch.no_grad())
             {
-                _fp32Weights = new Dictionary<string, Tensor>();
+                _fp32Weights = new Dictionary<string, torch.Tensor>();
                 foreach (var (name, param) in _model.named_parameters())
                 {
-                    var masterParam = param.detach().clone().to(ScalarType.Float32).requires_grad_(false);
+                    var masterParam = param.detach().clone().to(torch.ScalarType.Float32).requires_grad_(false);
                     _fp32Weights[name] = masterParam;
                     using var halfParam = param.to(precision);
                     param.set_(halfParam);
@@ -219,13 +216,13 @@ public class AMPWrapper : IDisposable
         }
     }
 
-    public IEnumerable<Tensor> MasterParameters => _fp32Weights?.Values;
+    public IEnumerable<torch.Tensor> MasterParameters => _fp32Weights?.Values;
 
     private void SyncMasterToModel()
     {
         if (!_isMixedPrecision || _fp32Weights == null) return;
 
-        using (no_grad())
+        using (torch.no_grad())
         {
             foreach (var (name, param) in _model.named_parameters())
             {
@@ -244,7 +241,7 @@ public class AMPWrapper : IDisposable
             if (param.grad is null) continue;
 
             var masterParam = _fp32Weights[name];
-            using var fp32Grad = param.grad.to(ScalarType.Float32);
+            using var fp32Grad = param.grad.to(torch.ScalarType.Float32);
             if (masterParam.grad is null)
             {
                 masterParam.grad = fp32Grad;
@@ -260,18 +257,18 @@ public class AMPWrapper : IDisposable
         }
     }
 
-    public (Tensor loss, Tensor lossItems) TrainStep(
-        Tensor input,
-        Dictionary<string, Tensor> batch,
-        Module<Dictionary<string, object>, Dictionary<string, Tensor>, (Tensor loss, Tensor loss_items)> lossFunc)
+    public (torch.Tensor loss, torch.Tensor lossItems) TrainStep(
+        torch.Tensor input,
+        Dictionary<string, torch.Tensor> batch,
+        torch.nn.Module<Dictionary<string, object>, Dictionary<string, torch.Tensor>, (torch.Tensor loss, torch.Tensor loss_items)> lossFunc)
     {
         _model.train();
         SyncMasterToModel();
 
-        (Dictionary<string, Tensor> inference, Dictionary<string, object> preds) outputs;
+        (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds) outputs;
         if (_isMixedPrecision)
         {
-            using var mixedInput = input.to(_scaler.Precision);
+            torch.Tensor mixedInput = input.to(_scaler.Precision);
             var rawOutputs = _model.forward(mixedInput);
             outputs = ConvertOutputsForLoss(rawOutputs);
         }
@@ -288,7 +285,7 @@ public class AMPWrapper : IDisposable
         return (loss, lossItems);
     }
 
-    private (Dictionary<string, Tensor> inference, Dictionary<string, object> preds) ConvertOutputsForLoss((Dictionary<string, Tensor> inference, Dictionary<string, object> preds)? rawOutputs)
+    private (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds) ConvertOutputsForLoss((Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? rawOutputs)
     {
         if (!rawOutputs.HasValue)
             throw new InvalidOperationException("Model output is null.");
@@ -300,17 +297,17 @@ public class AMPWrapper : IDisposable
 
     private object ConvertObjectTensorsToFP32(object obj)
     {
-        if (obj is Tensor t)
-            return t.to(ScalarType.Float32);
+        if (obj is torch.Tensor t)
+            return t.to(torch.ScalarType.Float32);
         if (obj is Dictionary<string, object> dict)
             return ConvertDictTensorsToFP32(dict);
         return obj;
     }
 
-    private Tensor ConvertObjectTensorsToFP32(Tensor obj)
+    private torch.Tensor ConvertObjectTensorsToFP32(torch.Tensor obj)
     {
-        if (obj is Tensor t)
-            return t.to(ScalarType.Float32);
+        if (obj is torch.Tensor t)
+            return t.to(torch.ScalarType.Float32);
         return obj;
     }
 
@@ -324,9 +321,13 @@ public class AMPWrapper : IDisposable
         return newDict;
     }
 
-    private Dictionary<string, Tensor> ConvertDictTensorsToFP32(Dictionary<string, Tensor> dict)
+    private Dictionary<string, torch.Tensor> ConvertDictTensorsToFP32(Dictionary<string, torch.Tensor> dict)
     {
-        var newDict = new Dictionary<string, Tensor>();
+        if (dict is null)
+        {
+            return dict;
+        }
+        var newDict = new Dictionary<string, torch.Tensor>();
         foreach (var kvp in dict)
         {
             newDict[kvp.Key] = ConvertObjectTensorsToFP32(kvp.Value);
@@ -334,10 +335,10 @@ public class AMPWrapper : IDisposable
         return newDict;
     }
 
-    public void Step(Tensor loss)
+    public void Step(torch.Tensor loss)
     {
         if (loss.numel() != 1) loss = loss.sum();
-        if (loss.dtype != ScalarType.Float32) loss = loss.to(ScalarType.Float32);
+        if (loss.dtype != torch.ScalarType.Float32) loss = loss.to(torch.ScalarType.Float32);
 
         try
         {
@@ -383,7 +384,7 @@ public class AMPWrapper : IDisposable
     }
 
 
-    public (Dictionary<string, Tensor> inference, Dictionary<string, object> preds)? Evaluate(Tensor input)
+    public (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? Evaluate(torch.Tensor input)
     {
         _model.eval();
         if (!_isMixedPrecision)
@@ -395,12 +396,12 @@ public class AMPWrapper : IDisposable
         if (!raw.HasValue) return null;
         var (rawInference, rawPreds) = raw.Value;
 
-        var inferenceFloat = new Dictionary<string, Tensor>();
+        var inferenceFloat = new Dictionary<string, torch.Tensor>();
         foreach (var y in rawInference)
         {
-            if (y.Value is Tensor ty)
+            if (y.Value is torch.Tensor ty)
             {
-                inferenceFloat[y.Key] = ty.to(ScalarType.Float32);
+                inferenceFloat[y.Key] = ty.to(torch.ScalarType.Float32);
                 ty.Dispose();
             }
             else
@@ -413,9 +414,9 @@ public class AMPWrapper : IDisposable
         var predsFloat = new Dictionary<string, object>();
         foreach (var kvp in rawPreds)
         {
-            if (kvp.Value is Tensor pt)
+            if (kvp.Value is torch.Tensor pt)
             {
-                predsFloat[kvp.Key] = pt.to(ScalarType.Float32);
+                predsFloat[kvp.Key] = pt.to(torch.ScalarType.Float32);
                 pt.Dispose();
             }
             else
@@ -435,7 +436,7 @@ public class AMPWrapper : IDisposable
             SyncMasterToModel();
             foreach (var (_, param) in _model.named_parameters())
             {
-                using var fp32Param = param.to(ScalarType.Float32);
+                using var fp32Param = param.to(torch.ScalarType.Float32);
                 param.set_(fp32Param);
             }
 

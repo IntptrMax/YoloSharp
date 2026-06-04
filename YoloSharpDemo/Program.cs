@@ -11,7 +11,7 @@ namespace YoloSharpDemo
         {
             string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-obb.bin"; // Pretrained model path.
             string predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
-            string dataRootPath = @"..\..\..\Assets\DataSets\Dotav1";
+            string dataRootPath = @"..\..\..\Assets\DataSets\dotav1";
 
             string trainDataPath = @"train.txt";
             string valDataPath = @"val.txt";
@@ -36,7 +36,7 @@ namespace YoloSharpDemo
                 PredictThreshold = 0.3f,
                 IouThreshold = 0.5f,
                 Workers = 4,
-                Epochs = 20,
+                Epochs = 100,
                 LearningRate = 1e-4f,
                 KeyPoint_Num = 17,
                 KeyPoint_Dim = 3,
