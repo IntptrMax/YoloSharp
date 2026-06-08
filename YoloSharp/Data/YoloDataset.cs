@@ -342,18 +342,6 @@ namespace Data
                     {
                         return ((float)a.resized_shape.h / a.resized_shape.w).CompareTo((float)b.resized_shape.h / b.resized_shape.w);
                     });
-                    //int bs = config.BatchSize;
-                    //for (int i = 0; i < Count; i++)
-                    //{
-                    //    Range range = new Range(i / bs * bs, i / bs * bs + bs);
-                    //    int max_w = labels.Take(range).Max(a => a.resized_shape.w);
-                    //    int max_h = labels.Take(range).Max(a => a.resized_shape.h);
-                    //    int w = ((int)Math.Ceiling(max_w / this.stride + this.pad)) * this.stride;
-                    //    int h = ((int)Math.Ceiling(max_h / this.stride + this.pad)) * this.stride;
-                    //    var tempLabel = labels[i].Clone();
-                    //    tempLabel.rectangle_shape = (h, w);
-                    //    labels[i] = tempLabel;
-                    //}
 
                     int bs = config.BatchSize;
                     for (int i = 0; i < Count; i++)

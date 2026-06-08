@@ -177,7 +177,7 @@ namespace YoloSharp.Models
                 Console.WriteLine(GetTrainDescription());
                 Stopwatch stopwatch = Stopwatch.StartNew();
 
-                trainDataSet.CloseMosaic(epoch <= config.CloseMosaic);
+                trainDataSet.CloseMosaic(epoch > config.CloseMosaic);
 
                 float[] trainLoss_items = TrainEpoch(trainDataLoader, amp, epoch, nb, nw);
                 lr_scheduler.step();
