@@ -1,0 +1,91 @@
+name: Publish GitHub Packages
+
+on:
+  push:
+    tags:
+      - "algocade-v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-test-pack-publish:
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+      DOTNET_NOLOGO: "true"
+      GITHUB_PACKAGES_SOURCE: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+      PACKAGE_OUTPUT: artifacts/packages
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET and GitHub Packages authentication
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+          source-url: ${{ env.GITHUB_PACKAGES_SOURCE }}
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract package version from tag
+        id: version
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          $prefix = "algocade-v"
+          $tag = $env:TAG_NAME
+          $versionPattern = '^\d+\.\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$'
+
+          if (-not $tag.StartsWith($prefix, [StringComparison]::Ordinal)) {
+            throw "Tag '$tag' must start with '$prefix'."
+          }
+
+          $packageVersion = $tag.Substring($prefix.Length)
+          if ($packageVersion -notmatch $versionPattern) {
+            throw "Tag '$tag' does not contain a supported NuGet package version."
+          }
+
+          "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Restore
+        run: dotnet restore YoloSharp.sln
+
+      - name: Build
+        run: dotnet build YoloSharp.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test YoloSharp.sln --configuration Release --no-build --no-restore --maxcpucount:1
+
+      - name: Pack
+        run: dotnet pack YoloSharp/YoloSharp.csproj --configuration Release --no-build --no-restore --output "${{ env.PACKAGE_OUTPUT }}" -p:PackageVersion=${{ steps.version.outputs.package_version }}
+
+      - name: Locate package
+        id: package
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath $env:PACKAGE_OUTPUT -Filter "*.nupkg" -File)
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one NuGet package in '$env:PACKAGE_OUTPUT', found $($packages.Count)."
+          }
+
+          "package_path=$($packages[0].FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-package-${{ steps.version.outputs.package_version }}
+          path: ${{ steps.package.outputs.package_path }}
+          if-no-files-found: error
+
+      - name: Publish package
+        shell: pwsh
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet nuget push "${{ steps.package.outputs.package_path }}" `
+            --source $env:GITHUB_PACKAGES_SOURCE `
+            --api-key $env:NUGET_AUTH_TOKEN

@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-pack:
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+      DOTNET_NOLOGO: "true"
+      PACKAGE_OUTPUT: artifacts/packages
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore YoloSharp.sln
+
+      - name: Build
+        run: dotnet build YoloSharp.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test YoloSharp.sln --configuration Release --no-build --no-restore --maxcpucount:1
+
+      - name: Pack
+        run: dotnet pack YoloSharp/YoloSharp.csproj --configuration Release --no-build --no-restore --output "${{ env.PACKAGE_OUTPUT }}"
+
+      - name: Locate package
+        id: package
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath $env:PACKAGE_OUTPUT -Filter "*.nupkg" -File)
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one NuGet package in '$env:PACKAGE_OUTPUT', found $($packages.Count)."
+          }
+
+          "package_path=$($packages[0].FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-package-${{ github.sha }}
+          path: ${{ steps.package.outputs.package_path }}
+          if-no-files-found: error
