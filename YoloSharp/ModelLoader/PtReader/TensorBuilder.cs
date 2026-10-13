@@ -29,8 +29,7 @@ namespace YoloSharp.ModelLoader.PtReader
             };
         }
 
-        /// <summary>stripModelPrefix: 若 PyTorch state_dict 键形如 "model.0.conv.weight"，
-        /// 而 TorchSharp 模型顶层已经叫 "model"，传 false 即可；否则传 true 去掉前缀。</summary>
+
         public static Dictionary<string, Tensor> BuildStateDict(
             YoloPtLoader.LoadResult result,
             bool stripModelPrefix = false)
@@ -112,7 +111,6 @@ namespace YoloSharp.ModelLoader.PtReader
             return torch.tensor(data).reshape(shape);
         }
 
-        // netstandard2.0 兼容：BitConverter.Int32BitsToSingle 是 .NET Core 3.0+ 才有的
         private static float Int32BitsToSingle(int value)
         {
 #if NET6_0_OR_GREATER

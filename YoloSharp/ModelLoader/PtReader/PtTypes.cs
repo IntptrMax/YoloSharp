@@ -3,7 +3,6 @@ using System.Collections.Generic;
 
 namespace YoloSharp.ModelLoader.PtReader
 {
-    /// <summary>pickle 中的 GLOBAL/STACK_GLOBAL 引用，如 torch.HalfStorage</summary>
     public sealed class GlobalRef
     {
         public string Module { get; }
@@ -13,7 +12,6 @@ namespace YoloSharp.ModelLoader.PtReader
         public override string ToString() => FullName;
     }
 
-    /// <summary>指向 data/{Key} 文件里的存储块</summary>
     public sealed class StorageRef
     {
         public string TypeName { get; set; } = "";
@@ -36,7 +34,6 @@ namespace YoloSharp.ModelLoader.PtReader
         };
     }
 
-    /// <summary>一个 torch.Tensor 的元数据</summary>
     public sealed class TorchTensor
     {
         public StorageRef Storage { get; set; } = null!;
@@ -51,7 +48,6 @@ namespace YoloSharp.ModelLoader.PtReader
         }
     }
 
-    /// <summary>通用 Python 对象占位（Module / Sequential / DetectionModel 等）</summary>
     public sealed class PyObject
     {
         public string ClassName { get; set; } = "";

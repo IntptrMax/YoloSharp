@@ -19,7 +19,6 @@ namespace YoloSharp.ModelLoader.PtReader
         {
             using var zip = ZipFile.OpenRead(ptPath);
 
-            // 1) data.pkl（一般在 archive/data.pkl）
             var pklEntry = zip.Entries.FirstOrDefault(e =>
                 e.FullName.EndsWith("data.pkl", StringComparison.OrdinalIgnoreCase))
                 ?? throw new FileNotFoundException($"data.pkl not found in {ptPath}");
@@ -27,7 +26,6 @@ namespace YoloSharp.ModelLoader.PtReader
             string dataPrefix = pklEntry.FullName.Substring(
                 0, pklEntry.FullName.Length - "data.pkl".Length) + "data/";
 
-            // 2) 解析 pickle
             byte[] pklBytes;
             using (var s = pklEntry.Open())
             using (var ms = new MemoryStream())
@@ -36,13 +34,11 @@ namespace YoloSharp.ModelLoader.PtReader
             var root = new TorchPickleReader().Load(pklBytes);
             var topLevel = root as Dictionary<string, object?> ?? new Dictionary<string, object?>();
 
-            // 3) 从 "model" 分支收集 tensor（rootName 传 ""，得到 "model.0.conv.weight" 这种键）
             var tensors = new Dictionary<string, TorchTensor>();
             if (topLevel.TryGetValue("model", out var modelObj) && modelObj != null)
                 foreach (var kv in ModelWalker.CollectTensors(modelObj, ""))
                     tensors[kv.Key] = kv.Value;
 
-            // 4) 读取涉及到的 storage 二进制
             var rawStorages = new Dictionary<string, byte[]>();
             foreach (var key in tensors.Values.Select(t => t.Storage.Key).Distinct())
             {

@@ -34,11 +34,9 @@ namespace YoloSharp.ModelLoader.PtReader
         {
             switch (op)
             {
-                // ---- 协议框架 ----
                 case 0x80: _pos++; break;                // PROTO
                 case 0x95: _pos += 8; break;             // FRAME
 
-                // ---- 栈 ----
                 case 0x28: _marks.Add(_stack.Count); break;                // MARK
                 case 0x30: _stack.RemoveAt(_stack.Count - 1); break;       // POP
                 case 0x31:                                                 // POP_MARK
@@ -48,12 +46,10 @@ namespace YoloSharp.ModelLoader.PtReader
                     }
                 case 0x32: _stack.Add(_stack[_stack.Count - 1]); break;    // DUP
 
-                // ---- 常量 ----
                 case 0x4E: _stack.Add(null); break;                        // NONE
                 case 0x88: _stack.Add(true); break;                        // NEWTRUE
                 case 0x89: _stack.Add(false); break;                       // NEWFALSE
 
-                // ---- 整数 ----
                 case 0x49:
                     {
                         var s = ReadLine();
@@ -75,11 +71,9 @@ namespace YoloSharp.ModelLoader.PtReader
                 case 0x8A: _stack.Add(ReadLongN(_data[_pos++])); break;
                 case 0x8B: { int n = ReadI32(); _stack.Add(ReadLongN(n)); break; }
 
-                // ---- 浮点 ----
                 case 0x46: _stack.Add(double.Parse(ReadLine(), CultureInfo.InvariantCulture)); break;
                 case 0x47: _stack.Add(ReadDoubleBE()); break;
 
-                // ---- 字符串 ----
                 case 0x53: _stack.Add(ReadLine()); break;
                 case 0x54: _stack.Add(Encoding.UTF8.GetString(ReadBytes(ReadI32()))); break;
                 case 0x55: _stack.Add(Encoding.UTF8.GetString(ReadBytes(_data[_pos++]))); break;
@@ -88,14 +82,12 @@ namespace YoloSharp.ModelLoader.PtReader
                 case 0x8C: _stack.Add(ReadUtf8(_data[_pos++])); break;
                 case 0x8D: _stack.Add(ReadUtf8((int)ReadI64())); break;
 
-                // ---- 字节 ----
                 case 0x42: _stack.Add(ReadBytes(ReadI32())); break;
                 case 0x43: _stack.Add(ReadBytes(_data[_pos++])); break;
                 case 0x8E: _stack.Add(ReadBytes((int)ReadI64())); break;
                 case 0x96: _stack.Add(ReadBytes((int)ReadI64())); break;
                 case 0x97: case 0x98: break;
 
-                // ---- Memo ----
                 case 0x70: _memo[long.Parse(ReadLine(), CultureInfo.InvariantCulture)] = _stack[_stack.Count - 1]; break;
                 case 0x71: _memo[_data[_pos++]] = _stack[_stack.Count - 1]; break;
                 case 0x72: _memo[ReadI32()] = _stack[_stack.Count - 1]; break;
@@ -104,7 +96,6 @@ namespace YoloSharp.ModelLoader.PtReader
                 case 0x6A: _stack.Add(_memo[ReadI32()]); break;
                 case 0x94: _memo[_memo.Count] = _stack[_stack.Count - 1]; break;
 
-                // ---- 列表 ----
                 case 0x5D: _stack.Add(new List<object?>()); break;
                 case 0x6C: _stack.Add(new List<object?>(PopFromMark())); break;
                 case 0x61:
@@ -118,7 +109,6 @@ namespace YoloSharp.ModelLoader.PtReader
                         ((List<object?>)_stack[_stack.Count - 1]!).AddRange(items); break;
                     }
 
-                // ---- 字典 ----
                 case 0x7D: _stack.Add(new Dictionary<string, object?>()); break;
                 case 0x64:
                     {
@@ -145,14 +135,12 @@ namespace YoloSharp.ModelLoader.PtReader
                         break;
                     }
 
-                // ---- 元组 ----
                 case 0x29: _stack.Add(Array.Empty<object?>()); break;
                 case 0x74: _stack.Add(MakeTupleFromMark()); break;
                 case 0x85: _stack.Add(MakeTuple(1)); break;
                 case 0x86: _stack.Add(MakeTuple(2)); break;
                 case 0x87: _stack.Add(MakeTuple(3)); break;
 
-                // ---- 集合 ----
                 case 0x8F: _stack.Add(new HashSet<object?>()); break;
                 case 0x90:
                     {
@@ -169,7 +157,6 @@ namespace YoloSharp.ModelLoader.PtReader
                         _stack.Add(hs); break;
                     }
 
-                // ---- 类与实例 ----
                 case 0x63: // GLOBAL : c<module>\n<name>\n
                     {
                         string module = ReadLine();

@@ -5,7 +5,6 @@ namespace YoloSharp.ModelLoader.PtReader
 {
     public static class ModelWalker
     {
-        /// <summary>从顶层模型对象收集所有 tensor。prefix 传 ""，得到 "model.0.conv.weight" 这种键。</summary>
         public static Dictionary<string, TorchTensor> CollectTensors(object? root, string rootName = "")
         {
             var result = new Dictionary<string, TorchTensor>();
