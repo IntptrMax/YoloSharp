@@ -57,17 +57,17 @@ namespace Data
         /// <summary>
         /// Iou threshold
         /// </summary>
-        public float IouThreshold { get; set; } = 0.7f;
+        public float IouThreshold { get; set; } = 0.5f;
 
         /// <summary>
         /// Learning rate
         /// </summary>
-        public float LearningRate { get; set; } = 1e-4f;
+        public float LearningRate { get; set; } = 2e-4f;
 
         /// <summary>
         /// Use Cos LR
         /// </summary>
-        public bool UseCosLR { get; set; } = false;
+        public bool UseCosLR { get; set; } = true;
 
         /// <summary>
         /// Lrf
@@ -154,6 +154,26 @@ namespace Data
         /// </summary>
         public int MosaicCount { get; set; } = 4;
 
+		/// <summary>
+		/// MixUp augmentation ratio, it will be use only in Mosiac image process type, and the value should be between 0 and 1, the default value is 0.0f, which means all the images will not be used for MixUp augmentation.
+		/// </summary>
+		public float MixUp { get; set; } = 0.0f;
+
+		/// <summary>
+		/// MixUp Beta, it will be use only in Mosiac image process type, and the value should be between 0 and 1, the default value is 32.0f, which means all the images will not be used for MixUp augmentation.
+		/// </summary>
+		public float MixUpBeta { get; set; } = 32.0f;
+
+		/// <summary>
+		/// CopyPaste augmentation ratio, it will be use only in Mosiac image process type, and the value should be between 0 and 1, the default value is 0.0f, which means all the images will not be used for CopyPaste augmentation.
+		/// </summary>
+		public float CopyPaste { get; set; } = 0.0f;
+
+        /// <summary>
+        /// CopyPaste max objects.
+        /// </summary>
+        public int CopyPasteMaxNumObj { get; set; } = 3;
+
         /// <summary>
         /// Gets or sets the angle in degrees.
         /// </summary>
@@ -232,11 +252,11 @@ namespace Data
         /// </summary>
         public int WarmUpEpoches { get; set; } = 3;
 
-        public double WarmUpBiasLr { get; set; } = 0.1;
+        public double WarmUpBiasLr { get; set; } = 0.0;
 
-        public int CloseMosaic { get; set; } = 0;
+        public int CloseMosaic { get; set; } = 10;
 
-        public bool End2End { get; set; } = true;
+        public bool End2End { get; set; } = false;
 
         public Config(string? rootPath = null, string? trainDataPath = null, string? valDataPath = null, string? outputPath = null,
             int? imageSize = null, int? batchSize = null, int? numberClass = null, int? epochs = null, float? predictThreshold = null,
@@ -245,6 +265,7 @@ namespace Data
             YoloSharp.Types.ScalarType? dtype = null, ImageProcessType? imageProcessType = null,
             int? patience = null, float? delta = null, int? keyPoint_Num = null, int? keyPoint_dim = null, float? hsv_v = null,
             float? hsv_s = null, float? hsv_h = null, int? maskRation = null, float? mosaic = null, int? mosaicCount = null,
+            float? mixup = null, float? mixupBate = null, float? copyPaste = null, int? copyPasteMaxNumObj = null,
             float? degrees = null, float? translate = null, float? scale = null, float? shear = null, float? perspective = null,
             float? flipLR = null, float? flipUD = null, float? classifyRatioMax = null, float? classifyRatioMin = null,
             float? classifyScaleMax = null, float? classifyScaleMin = null, float? erasing = null, AutoAugmentType? autoAugment = null,
@@ -277,6 +298,10 @@ namespace Data
             MaskRatio = maskRation ?? MaskRatio;
             Mosaic = mosaic ?? Mosaic;
             MosaicCount = mosaicCount ?? MosaicCount;
+            MixUp = mixup ?? MixUp;
+            MixUpBeta = mixup ?? MixUpBeta;
+            CopyPaste = copyPaste ?? CopyPaste;
+            CopyPasteMaxNumObj = copyPasteMaxNumObj ?? CopyPasteMaxNumObj;
             Degrees = degrees ?? Degrees;
             Translate = translate ?? Translate;
             Scale = scale ?? Scale;
@@ -334,6 +359,10 @@ namespace Data
             stringBuilder.AppendLine($"Mask Ratio: {MaskRatio}");
             stringBuilder.AppendLine($"Mosaic Augmentation Ratio: {Mosaic}");
             stringBuilder.AppendLine($"Mosaic Count: {MosaicCount}");
+            stringBuilder.AppendLine($"MixUp: {MixUp}");
+            stringBuilder.AppendLine($"MixUp Beta: {MixUpBeta}");
+            stringBuilder.AppendLine($"CopyPaste: {CopyPaste}");
+            stringBuilder.AppendLine($"CopyPaste Max Num Obj: {CopyPasteMaxNumObj}");
             stringBuilder.AppendLine($"Close Mosaic: {CloseMosaic}");
             stringBuilder.AppendLine($"Degrees: {Degrees}");
             stringBuilder.AppendLine($"Translate: {Translate}");

@@ -21,8 +21,6 @@ namespace YoloSharp.Models
                 _ => throw new NotImplementedException("Yolo type not supported."),
             };
             loss = new Loss.v8ClassificationLoss();
-
-            // Tools.TransModelFromSafetensors(yolo, @".\yolov8n-cls.safetensors", @".\PreTrainedModels\yolov8n-cls.bin");
         }
 
         internal override List<YoloResult> ImagePredict(torch.Tensor orgImage, float predictThreshold, float iouThreshold)
@@ -118,6 +116,12 @@ namespace YoloSharp.Models
 
                 return (loss_items.@float().data<float>().ToArray(), new float[] { top1, top5 });
             }
+        }
+
+        internal override float GetFitness(float[] metrics)
+        {
+            // metrics = [top1, top5]
+            return metrics[0];
         }
 
         internal override string GetTrainDescription()

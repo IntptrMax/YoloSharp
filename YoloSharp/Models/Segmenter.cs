@@ -22,7 +22,6 @@ namespace YoloSharp.Models
                 _ => throw new NotImplementedException("Yolo type not supported."),
             };
             loss = config.End2End ? new Loss.E2ESegmentLoss(config.NumberClass, epoches: config.Epochs, device: config.Device, dtype: config.Dtype) : new Loss.v8SegmentationLoss(config.NumberClass, device: config.Device, dtype: config.Dtype);
-            //Tools.TransModelFromSafetensors(yolo, @".\yolov8n-seg.safetensors", @".\PreTrainedModels\yolov11x-seg.bin");
         }
 
         internal override List<YoloResult> ImagePredict(torch.Tensor orgImage, float predictThreshold, float iouThreshold)
@@ -118,28 +117,45 @@ namespace YoloSharp.Models
 
                         for (int i = 0; i < nms_results.Count; i++)
                         {
+                            if (nms_results[i].shape[0] == 0)
+                            {
+                                continue;
+                            }
+
                             torch.Tensor pred_bboxes = nms_results[i][torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)];
                             torch.Tensor pred_scores = nms_results[i][torch.TensorIndex.Ellipsis, 4];
                             torch.Tensor pred_classes = nms_results[i][torch.TensorIndex.Ellipsis, 5];
                             torch.Tensor coefficient = nms_results[i][torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(6)];
-                            long[] size = new long[] { proto.shape[proto.shape.Length - 1], proto.shape[proto.shape.Length - 2] };
-                            torch.Tensor masks = Ops.process_mask(proto[i], coefficient, pred_bboxes, size);
 
                             torch.Tensor batch_idx = data["batch_idx"].squeeze(-1) == i;
                             torch.Tensor turn_classes = data["cls"][batch_idx].squeeze(-1);
-                            torch.Tensor batch_bbox = data["bboxes"][batch_idx] * scale;
-                            torch.Tensor batch_mask = data["masks"];
-                            batch_mask = batch_mask[i].squeeze(0);
 
+                            long[] inputShape = new long[] { data["images"].shape[data["images"].shape.Length - 2], data["images"].shape[data["images"].shape.Length - 1] };
+
+                            torch.Tensor masks = Ops.process_mask(proto[i], coefficient, pred_bboxes, inputShape, upsample: true);
+
+                            torch.Tensor batch_mask_gt = data["masks"][i].squeeze(0);
+                            long gtH = batch_mask_gt.shape[0];
+                            long gtW = batch_mask_gt.shape[1];
+
+                            if ((int)masks.shape[masks.shape.Length - 2] != gtH || (int)masks.shape[masks.shape.Length - 1] != gtW)
+                            {
+                                masks = torch.nn.functional.interpolate(masks.unsqueeze(0).@float(), new long[] { gtH, gtW }, mode: torch.InterpolationMode.Bilinear, align_corners: false).squeeze(0).gt_(0.0);
+                            }
+
+                            // GT mask → one-hot
                             long nl = turn_classes.shape[0];
-                            torch.Tensor index = torch.arange(1, nl + 1, device: batch_mask.device).view(nl, 1, 1);
-                            batch_mask = (batch_mask == index).@float();
+                            torch.Tensor index = torch.arange(1, nl + 1, device: batch_mask_gt.device).view(nl, 1, 1);
+                            torch.Tensor batch_mask = (batch_mask_gt == index).@float();
 
+                            // Box IoU
+                            torch.Tensor batch_bbox = data["bboxes"][batch_idx] * scale;
                             batch_bbox = Ops.xywh2xyxy(batch_bbox);
                             torch.Tensor iou = Metrics.box_iou(batch_bbox, pred_bboxes);
                             torch.Tensor tp_epoch = match_predictions(pred_classes, turn_classes, iou);
 
-                            torch.Tensor miou = Metrics.mask_iou(batch_mask.flatten(1).@float(), masks.flatten(1));
+                            // Mask IoU
+                            torch.Tensor miou = Metrics.mask_iou(batch_mask.flatten(1), masks.@float().flatten(1));
                             torch.Tensor tp_m_epoch = match_predictions(pred_classes, turn_classes, miou);
 
                             tpList.Add(tp_epoch.MoveToOuterDisposeScope());
@@ -157,6 +173,7 @@ namespace YoloSharp.Models
                         loss_items = loss_items.MoveToOuterDisposeScope();
                         count += data["images"].shape[0];
                         // pbar.SetPostfix(new (string key, object value)[] { ("Val Loss", $"{loss_items.sum().ToSingle() / count:f3}"), });
+
                     }
                 }
 
@@ -194,9 +211,20 @@ namespace YoloSharp.Models
                 resultBuilder.AppendFormat("{0,10}", mAP50_95m.ToString("0.000"));
 
                 Console.WriteLine(resultBuilder.ToString());
+
                 return (loss_items.@float().data<float>().ToArray(), new float[] { P, R, mAP50, mAP50_95, mP, mR, mAP50m, mAP50_95m });
             }
         }
+
+        internal override float GetFitness(float[] metrics)
+        {
+            // metrics = [P, R, mAP50, mAP50-95, mP, mR, mAP50m, mAP50-95m]
+            float boxFit = 0.1f * metrics[2] + 0.9f * metrics[3];
+            float maskFit = 0.1f * metrics[6] + 0.9f * metrics[7];
+            return 0.5f * (boxFit + maskFit);
+        }
+
+
 
         internal override string GetTrainDescription()
         {

@@ -28,6 +28,7 @@ Whether you're building a desktop application, a cloud service, or an edge devic
 
 ## 🔥 Recent Updates
 
+🚀 Can Load .pt weight now.  
 🚀 Added **Net Standard 2.0** support.  
 🚀 Added **End-to-End (End2End)** support for both training and inference.  
 🚀 Added **warm‑up scheduling** for stable training start.  
@@ -37,6 +38,10 @@ Whether you're building a desktop application, a cloud service, or an edge devic
 🚀 **Replaced** `CosineAnnealingLR` with `LambdaLR` for more flexible learning rate scheduling.  
 🐛 **Fixed** angle loss calculation for oriented bounding boxes (OBB).
 🐛 **Fixed** HSV transform implementation.
+
+**2026/10/13**  
+🚀 Can Load .pt weight now.  
+🐛 Fix the bug of calculating metrics.
 
 **2026/06/01**  
 🚀 Added Net Standard 2.0 support.  

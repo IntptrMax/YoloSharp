@@ -2,6 +2,7 @@
 using System.Text;
 using TorchSharp;
 using YoloSharp.ModelLoader;
+using YoloSharp.Models;
 
 namespace YoloSharp.Utils
 {
@@ -13,7 +14,7 @@ namespace YoloSharp.Utils
         /// <param name="model">Model in TorchSharp</param>
         /// <param name="safetensorName">safetensors file</param>
         /// <param name="outName">file to write on disk</param>
-        public static void TransModelFromSafetensors(torch.nn.Module<torch.Tensor, torch.Tensor[]> model, string safetensorName, string outName)
+        public static void TransModelFromSafetensors(Yolo.Yolov8 model, string safetensorName, string outName)
         {
             Dictionary<string, torch.Tensor> dict = new Dictionary<string, torch.Tensor>();
             SafetensorsLoader safetensorLoader = new SafetensorsLoader();
@@ -30,8 +31,6 @@ namespace YoloSharp.Utils
 
             var (loadMissing, unexp) = model.load_state_dict(dict, false);
             model.save(outName);
-
-
         }
 
         /// <summary>

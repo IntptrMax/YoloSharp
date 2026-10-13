@@ -22,7 +22,6 @@ namespace YoloSharp.Models
                 _ => throw new NotImplementedException("Yolo type not supported."),
             };
             loss = config.End2End ? new Loss.E2EOBBLoss(config.NumberClass, epoches: config.Epochs, device: config.Device, dtype: config.Dtype) : new Loss.v8OBBLoss(config.NumberClass, device: config.Device, dtype: config.Dtype);
-            //Tools.TransModelFromSafetensors(yolo, @".\yolov8n-obb.safetensors", @".\PreTrainedModels\yolov8n-obb.bin");
         }
 
         internal override List<YoloResult> ImagePredict(torch.Tensor orgImage, float predictThreshold, float iouThreshold)
@@ -154,6 +153,11 @@ namespace YoloSharp.Models
             }
         }
 
+        internal override float GetFitness(float[] metrics)
+        {
+            // metrics = [P, R, mAP50, mAP50-95]（OBB 只有 box）
+            return 0.1f * metrics[2] + 0.9f * metrics[3];
+        }
         internal override string GetTrainDescription()
         {
             string[] strs = new string[] { "Epoch", "box_loss", "cls_loss", "dfl_loss", "ag_loss", "Instances", "Size" };

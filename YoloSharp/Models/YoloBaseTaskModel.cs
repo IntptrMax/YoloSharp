@@ -3,7 +3,6 @@ using ScottPlot;
 using System.Data;
 using System.Diagnostics;
 using System.Text;
-using System.Text.RegularExpressions;
 using TorchSharp;
 using TorchSharp.Modules;
 using Utils;
@@ -15,9 +14,12 @@ namespace YoloSharp.Models
 {
     internal abstract class YoloBaseTaskModel
     {
+        private bool _needHeadInit = true;
+
         protected Config config = new Config();
         protected Yolo.Yolov8 yolo;
         protected torch.nn.Module<Dictionary<string, object>, Dictionary<string, torch.Tensor>, (torch.Tensor loss, torch.Tensor loss_detach)> loss;
+        protected ModelEMA ema;
 
         internal YoloBaseTaskModel()
         {
@@ -27,96 +29,98 @@ namespace YoloSharp.Models
         internal virtual void LoadModel(string path, bool skipNcNotEqualLayers = false)
         {
             Console.WriteLine("Loading model...");
-            Dictionary<string, torch.Tensor> state_dict = Lib.LoadModel(path, skipNcNotEqualLayers);
-            var yolo_state_dict = yolo.state_dict();
-            if (state_dict.Count != yolo.state_dict().Count)
+
+            Dictionary<string, torch.Tensor> sourceStateDict;
+
+            if (path.EndsWith(".pt", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine("Mismatched tensors count while loading. Model will run with random weight.");
+                var ptLoader = new YoloSharp.ModelLoader.PtReader.YoloPtLoader();
+                var loadResult = ptLoader.LoadFromFile(path);
+                sourceStateDict = YoloSharp.ModelLoader.PtReader.TensorBuilder.BuildStateDict(loadResult);
             }
             else
             {
-                torch.ScalarType modelType = state_dict.Values.First().dtype;
-                yolo.to(modelType);
-
-                List<string> skipList = new List<string>();
-                if (skipNcNotEqualLayers)
-                {
-                    torch.nn.Module mod = yolo.children().First().named_children().Last().module;
-                    int modelCount = yolo.children().First().named_children().Count();
-
-                    switch (mod)
-                    {
-                        case Head.Classify:
-                            {
-                                string layerPattern = @"model\." + (modelCount - 1) + @"\.linear";
-                                string key = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern + @".+bias")).Last();
-                                long nc = state_dict[key].shape[0];
-
-                                if (nc != config.NumberClass)
-                                {
-                                    skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern)).ToList();
-                                }
-                                break;
-                            }
-                        case Head.Pose:
-                            {
-                                string ncLayerPattern = @"model\." + (modelCount - 1) + @"\.cv3";
-                                string ncKey = state_dict.Keys.Where(x => Regex.IsMatch(x, ncLayerPattern + @".+bias")).Last();
-                                long nc = state_dict[ncKey].shape[0];
-
-                                string kptLayerPattern = @"model\." + (modelCount - 1) + @"\.cv4";
-                                string kptKey = state_dict.Keys.Where(x => Regex.IsMatch(x, kptLayerPattern + @".+bias")).Last();
-                                long kpt = state_dict[kptKey].shape[0];
-
-                                if (nc != config.NumberClass)
-                                {
-                                    skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, ncLayerPattern)).ToList();
-                                }
-                                if (kpt != config.KeyPoint_Num * config.KeyPoint_Dim)
-                                {
-                                    skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, kptLayerPattern)).ToList();
-                                }
-                                break;
-                            }
-                        case Head.Detect head:
-                            {
-                                string layerPattern = @"model\." + (modelCount - 1) + @"\.cv3";
-                                string key = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern + @".+bias")).Last();
-                                long nc = state_dict[key].shape[0];
-                                if (nc != config.NumberClass)
-                                {
-                                    skipList = state_dict.Keys.Where(x => Regex.IsMatch(x, layerPattern)).ToList();
-
-                                }
-                                break;
-                            }
-                        default:
-                            {
-                                break;
-                            }
-                    }
-                }
-
-                var (miss, err) = yolo.load_state_dict(state_dict, skip: skipList, strict: false);
-
-                if (config.End2End)
-                {
-                    One2one_Init();
-                }
-                if (skipList.Count > 0)
-                {
-                    Console.WriteLine("Warning! Skipping number classes or pose reference layers. This may cause incorrect predictions when not trained again.");
-                    Bias_Init();
-                }
-                yolo.to(config.Dtype);
-                Console.WriteLine("Model loaded.");
+                sourceStateDict = Lib.LoadModel(path, skipNcNotEqualLayers);
             }
+
+            var modelShapes = new Dictionary<string, long[]>();
+            foreach (var kv in yolo.state_dict())
+            {
+                modelShapes[kv.Key] = kv.Value.shape;
+            }
+
+            var matchedDict = new Dictionary<string, torch.Tensor>();
+            int skippedMissing = 0;
+            int skippedShape = 0;
+            var skippedShapeSamples = new List<string>();
+
+            foreach (var kv in sourceStateDict)
+            {
+                string name = kv.Key;
+                torch.Tensor srcTensor = kv.Value;
+
+                if (!modelShapes.TryGetValue(name, out var expectedShape))
+                {
+                    skippedMissing++;
+                    continue;
+                }
+
+                if (!srcTensor.shape.SequenceEqual(expectedShape))
+                {
+                    skippedShape++;
+                    if (skippedShapeSamples.Count < 10)
+                    {
+                        skippedShapeSamples.Add($"{name}: src [{string.Join(",", srcTensor.shape)}] " + $"vs model [{string.Join(",", expectedShape)}]");
+                    }
+                    continue;
+                }
+
+                matchedDict[name] = srcTensor;
+            }
+
+            Console.WriteLine($"Transferred {matchedDict.Count}/{sourceStateDict.Count} items");
+            if (skippedShape > 0)
+            {
+                Console.WriteLine($"  Shape mismatch: {skippedShape} (will be re-initialized)");
+                foreach (var s in skippedShapeSamples)
+                {
+                    //Console.WriteLine($"    {s}");
+                }
+            }
+            if (skippedMissing > 0)
+            {
+                Console.WriteLine($"  Not in model: {skippedMissing}");
+            }
+            if (matchedDict.Count > 0)
+            {
+                yolo.load_state_dict(matchedDict, strict: false);
+            }
+            yolo.to(config.Dtype);
+
+            _needHeadInit = matchedDict.Count == 0 || skippedShape > 0 || skippedMissing > 0;
+
+            if (_needHeadInit)
+            {
+                Console.WriteLine("  Head bias will be re-initialized before training.");
+            }
+
+            Console.WriteLine("Model loaded.");
         }
 
         internal virtual void Train()
         {
-            float best_fitness = float.MinValue;
-            Console.WriteLine("Start Training:");
+            if (config.End2End)
+            {
+                One2one_Init();
+            }
+            if (_needHeadInit)
+            {
+                Console.WriteLine("Initializing head bias...");
+                Bias_Init();
+            }
+
+            float best_fitness = float.NegativeInfinity;
+
             Console.WriteLine(config.ToString());
             WriteConfig();
 
@@ -127,6 +131,7 @@ namespace YoloSharp.Models
             }
 
             YoloDataLoader trainDataLoader = new YoloDataLoader(trainDataSet, config.BatchSize, num_worker: config.Workers, shuffle: true, device: config.Device);
+
             config.ValDataPath = string.IsNullOrEmpty(config.ValDataPath) ? config.TrainDataPath : config.ValDataPath;
 
             BaseDataset valDataSet = this.config.TaskType == TaskType.Classification ? new ClassificationDataset(this.config, true) : new YoloDataset(this.config, true);
@@ -137,25 +142,54 @@ namespace YoloSharp.Models
 
             YoloDataLoader valDataLoader = new YoloDataLoader(valDataSet, config.BatchSize, num_worker: config.Workers, shuffle: false, device: config.Device);
 
-            //Optimizer optimizer = new SGD(yolo.parameters(), lr: config.LearningRate, momentum: 0.937f, weight_decay: 5e-4);
+            foreach (var (name, param) in yolo.named_parameters())
+            {
+                if (name.Contains(".dfl."))
+                {
+                    Console.WriteLine($"Freezing layer '{name}'");
+                    param.requires_grad = false;
+                }
+            }
 
-            double lr_fit = Math.Round(0.002 * 5 / (4 + config.NumberClass), 6);  // lr0 fit equation to 6 decimal places
+            double lr_fit = config.LearningRate;
 
-            AdamW.ParamGroup biasGroup = new AdamW.ParamGroup();
-            biasGroup.Parameters = yolo.named_parameters().Where(a => a.name.Contains("bias")).Select(a => a.parameter);
+            float weightDecay = 0.0005f;
 
-            AdamW.ParamGroup weightGroup = new AdamW.ParamGroup();
-            weightGroup.Parameters = yolo.named_parameters().Where(a => a.name.Contains("weight")).Select(a => a.parameter);
+            var allParams = yolo.named_parameters().Where(p => p.parameter.requires_grad).ToList();
 
-            AdamW.ParamGroup bnGroup = new AdamW.ParamGroup();
-            bnGroup.Parameters = yolo.named_parameters().Where(a => a.name.Contains("bn")).Select(a => a.parameter);
+            var bnWeightNames = allParams.Where(p => (p.name.Contains("bn.") || p.name.Contains("Norm") || p.name.Contains("norm")) && p.name.Contains("weight")).ToList();
+            var biasNames = allParams.Where(p => p.name.Contains("bias")).ToList();
 
-            torch.optim.Optimizer optimizer = new AdamW(new AdamW.ParamGroup[] { biasGroup, weightGroup, bnGroup }, lr: lr_fit, weight_decay: 5e-4f);
+            var bnBiasNames = new HashSet<string>(bnWeightNames.Select(p => p.name));
+            var biasNamesSet = new HashSet<string>(biasNames.Select(p => p.name));
+
+            var weightNames = allParams.Where(p => !bnBiasNames.Contains(p.name) && !biasNamesSet.Contains(p.name)).ToList();
+
+            var weightGroup = new AdamW.ParamGroup
+            {
+                Parameters = weightNames.Select(p => p.parameter),
+                Options = new AdamW.Options() { weight_decay = weightDecay, LearningRate = lr_fit }
+            };
+            var bnWeightGroup = new AdamW.ParamGroup
+            {
+                Parameters = bnWeightNames.Select(p => p.parameter),
+                Options = new AdamW.Options() { weight_decay = 0.0, LearningRate = lr_fit },
+            };
+            var biasGroup = new AdamW.ParamGroup
+            {
+                Parameters = biasNames.Select(p => p.parameter),
+                Options = new AdamW.Options() { weight_decay = 0.0, LearningRate = lr_fit },
+            };
+
+            torch.optim.Optimizer optimizer = new AdamW(new AdamW.ParamGroup[] { weightGroup, bnWeightGroup, biasGroup });
+
+            long nb_estimate = trainDataLoader.Count;
+            float tau = Math.Max(100f, nb_estimate * 10f);
+            ema = new ModelEMA(yolo, decay: 0.999f, tau: tau);
 
             Func<int, double> lrLambda = config.UseCosLR ?
                 OneCycle(1.0, config.Lrf, config.Epochs) :
                 LrLambda(1.0, config.Lrf, config.Epochs);
-
 
             torch.optim.lr_scheduler.LRScheduler lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lrLambda);
             Console.WriteLine();
@@ -165,7 +199,10 @@ namespace YoloSharp.Models
             string weightsPath = Path.Combine(config.OutputPath, "weights");
 
             long nb = trainDataLoader.Count;
-            long nw = Math.Max(config.WarmUpEpoches * nb, 100);
+            // long nw = Math.Max(config.WarmUpEpoches * nb, 100);
+            long nw = config.WarmUpEpoches > 0 ? Math.Max((long)Math.Round((double)config.WarmUpEpoches * nb), nb) : -1;
+
+            long valBatches = valDataLoader.Count;
 
             for (int epoch = 1; epoch <= config.Epochs; epoch++)
             {
@@ -177,42 +214,45 @@ namespace YoloSharp.Models
                 Console.WriteLine(GetTrainDescription());
                 Stopwatch stopwatch = Stopwatch.StartNew();
 
-                trainDataSet.CloseMosaic(epoch > config.CloseMosaic);
+                bool closeMosaic = config.CloseMosaic > 0 && epoch > config.Epochs - config.CloseMosaic;
+                trainDataSet.CloseMosaic(closeMosaic);
 
                 float[] trainLoss_items = TrainEpoch(trainDataLoader, amp, epoch, nb, nw);
                 lr_scheduler.step();
-                (float[] valLoss_items, float[] metrics) = Val(valDataLoader, amp, epoch);
 
-                float fitness = -valLoss_items.Sum();
+                var trainingBackup = SaveModelState(yolo);
+                ema.ApplyTo(yolo);
+                (float[] valLoss_items, float[] metrics) = Val(valDataLoader, amp, epoch);
+                RestoreModelState(yolo, trainingBackup);
+
+                float fitness = GetFitness(metrics);
 
                 if (fitness > best_fitness)
                 {
                     best_fitness = fitness;
-                    Console.WriteLine("Get a better result, will be save to best.bin");
-                    //yolo.save(Path.Combine(weightsPath, "best.bin"));
-
-                    SaveWeight(Path.Combine(weightsPath, "best.bin"));
+                    SaveWeight(Path.Combine(weightsPath, "best.bin"), ema.GetStateDict(yolo));
                 }
 
                 bool shouldStop = stopper.ShouldStop(fitness, epoch);
 
                 if (shouldStop)
                 {
-                    //Console.WriteLine($"Early stop at epoch {epoch + 1} with val loss {valLoss_items.Sum() / valDataSet.Count}");
                     break;
                 }
 
-                //yolo.save(Path.Combine(weightsPath, "last.bin"));
                 SaveWeight(Path.Combine(weightsPath, "last.bin"));
                 Console.WriteLine();
                 stopwatch.Stop();
-                WriteLog(epoch, stopwatch.ElapsedMilliseconds / 1000f, trainLoss_items, valLoss_items, metrics);
+
+                WriteLog(epoch, stopwatch.ElapsedMilliseconds / 1000f,
+                         trainLoss_items, valLoss_items, metrics, nb, valBatches);
             }
             DrawCurve();
 
             Console.WriteLine("Train Done.");
 
-            void WriteLog(int epoch, float time, float[] trainLoss_Items, float[] valLoss_Items, float[] metrics)
+            void WriteLog(int epoch, float time, float[] trainLoss_Items, float[] valLoss_Items,
+                          float[] metrics, long trainBatches, long valBatches)
             {
                 if (!Directory.Exists(config.OutputPath))
                 {
@@ -224,21 +264,21 @@ namespace YoloSharp.Models
                 {
                     stringBuilder.AppendLine(GetSeperatLogHeaders());
                 }
-                //stringBuilder.AppendLine($"{epoch}, {time}, {trainLoss}, {valLoss}");
+
                 stringBuilder.Append($"{epoch}, {time}, ");
                 foreach (float item in trainLoss_Items)
                 {
-                    stringBuilder.Append($"{item / trainDataSet.Count}, ");
+                    stringBuilder.Append($"{item / trainBatches}, ");
                 }
                 foreach (float item in valLoss_Items)
                 {
-                    stringBuilder.Append($"{item / valDataSet.Count}, ");
+                    stringBuilder.Append($"{item / valBatches}, ");
                 }
                 foreach (float item in metrics)
                 {
                     stringBuilder.Append($"{item}, ");
                 }
-                stringBuilder.AppendLine($"{trainLoss_Items.Sum() / trainDataSet.Count}, {valLoss_Items.Sum() / valDataSet.Count}");
+                stringBuilder.AppendLine($"{trainLoss_Items.Sum() / trainBatches}, {valLoss_Items.Sum() / valBatches}");
                 File.AppendAllText(fileName, stringBuilder.ToString());
             }
 
@@ -253,7 +293,7 @@ namespace YoloSharp.Models
                 stringBuilder.AppendLine("Training Settings:");
                 stringBuilder.AppendLine($"Date Time: {DateTime.Now}");
                 stringBuilder.AppendLine(config.ToString());
-                File.WriteAllText(fileName, stringBuilder.ToString());
+                File.AppendAllText(fileName, stringBuilder.ToString());
             }
 
             void DrawCurve()
@@ -304,7 +344,7 @@ namespace YoloSharp.Models
                     using (torch.NewDisposeScope())
                     {
                         // Warm Up
-                        long ni = i + nb * epoch;
+                        long ni = i + nb * (epoch - 1);
                         if (ni <= nw)
                         {
                             double[] xi = new double[] { 0, nw };
@@ -325,6 +365,11 @@ namespace YoloSharp.Models
                         yolo.train();
 
                         (torch.Tensor ls, torch.Tensor loss_detach) = amp.TrainStep(data["images"].to(config.Dtype), data, loss);
+
+                        if (ema != null)
+                        {
+                            ema.Update(yolo);
+                        }
 
                         if (loss_items.NumberOfElements < 1)
                         {
@@ -363,6 +408,9 @@ namespace YoloSharp.Models
         internal abstract List<YoloResult> ImagePredict(torch.Tensor orgImage, float predictThreshold, float iouThreshold);
 
         internal abstract (float[] loss, float[] metrics) Val(YoloDataLoader valDataLoader, AMPWrapper amp, int epoch);
+
+        internal abstract float GetFitness(float[] metrics);
+
 
         internal abstract string GetSeperatLogHeaders();
 
@@ -467,11 +515,11 @@ namespace YoloSharp.Models
             }
         }
 
-        internal void SaveWeight(string path)
+        internal void SaveWeight(string path, Dictionary<string, torch.Tensor> stateDict = null)
         {
-            List<string> skipList = new List<string>();
+            var source = stateDict ?? yolo.state_dict();
             Dictionary<string, torch.Tensor> sd = new Dictionary<string, torch.Tensor>();
-            foreach (var li in yolo.state_dict())
+            foreach (var li in source)
             {
                 if (!li.Key.Contains("one2one"))
                 {
@@ -486,6 +534,34 @@ namespace YoloSharp.Models
             {
                 writer.Write(item2.Key);
                 item2.Value.Save(writer);
+            }
+        }
+
+        private Dictionary<string, torch.Tensor> SaveModelState(torch.nn.Module model)
+        {
+            var backup = new Dictionary<string, torch.Tensor>();
+            using (torch.no_grad())
+            {
+                foreach (var kv in model.state_dict())
+                {
+                    backup[kv.Key] = kv.Value.clone();
+                }
+            }
+            return backup;
+        }
+
+        private void RestoreModelState(torch.nn.Module model, Dictionary<string, torch.Tensor> backup)
+        {
+            using (torch.no_grad())
+            {
+                var current = model.state_dict();
+                foreach (var kv in backup)
+                {
+                    if (current.TryGetValue(kv.Key, out var p))
+                    {
+                        p.copy_(kv.Value);
+                    }
+                }
             }
         }
 

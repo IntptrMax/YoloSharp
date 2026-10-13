@@ -21,7 +21,6 @@ namespace YoloSharp.Models
                 _ => throw new NotImplementedException(),
             };
             loss = config.End2End ? new Loss.E2EDetectLoss(this.config.NumberClass, device: this.config.Device, dtype: this.config.Dtype) : new Utils.Loss.v8DetectionLoss(this.config.NumberClass, device: this.config.Device, dtype: this.config.Dtype);
-            //Tools.TransModelFromSafetensors(yolo, @".\yolov11n.safetensors", @".\yolov11n.bin");
         }
 
         internal override List<YoloResult> ImagePredict(torch.Tensor orgImage, float predictThreshold, float iouThreshold)
@@ -153,6 +152,12 @@ namespace YoloSharp.Models
 
                 return (loss_items.@float().data<float>().ToArray(), new float[] { P, R, mAP50, mAP50_95 });
             }
+        }
+
+        internal override float GetFitness(float[] metrics)
+        {
+            // metrics = [P, R, mAP50, mAP50-95]
+            return 0.1f * metrics[2] + 0.9f * metrics[3];
         }
 
         internal override string GetTrainDescription()

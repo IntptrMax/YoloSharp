@@ -32,7 +32,6 @@ namespace YoloSharp.Models
             };
             loss = config.End2End ? new Loss.E2EPoseLoss(config.NumberClass, config.KeyPoint_Num, config.KeyPoint_Dim, device: config.Device, dtype: config.Dtype) : new Loss.v8PoseLoss(config.NumberClass, config.KeyPoint_Num, config.KeyPoint_Dim, device: config.Device, dtype: config.Dtype);
 
-            //Tools.TransModelFromSafetensors(yolo, @".\yolov8n-pose.safetensors", @".\PreTrainedModels\yolov8n-pose.bin");
         }
 
 
@@ -41,7 +40,6 @@ namespace YoloSharp.Models
             using (torch.no_grad())
             {
                 yolo.eval();
-                // Change RGB → BGR
                 orgImage = orgImage.to(config.Dtype, config.Device).unsqueeze(0);
 
                 int w = (int)orgImage.shape[3];
@@ -55,42 +53,55 @@ namespace YoloSharp.Models
                 torch.Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros, 114) / 255.0f;
                 Dictionary<string, torch.Tensor> inference = yolo.forward(input)?.inference;
                 List<torch.Tensor> nms_result = Ops.non_max_suppression(inference["boxes"], nc: config.NumberClass, conf_thres: predictThreshold, iou_thres: iouThreshold, end2end: config.End2End).output;
+
                 List<YoloResult> results = new List<YoloResult>();
-                if (nms_result.Count > 0)
+                if (nms_result.Count > 0 && nms_result[0] is not null)
                 {
-                    if (nms_result[0] is not null)
+                    int dim = config.KeyPoint_Dim;   
+
+                    for (int i = 0; i < nms_result[0].shape[0]; i++)
                     {
-                        for (int i = 0; i < nms_result[0].shape[0]; i++)
+                        int x = nms_result[0][i][0].ToInt32();
+                        int y = nms_result[0][i][1].ToInt32();
+                        int rw = nms_result[0][i][2].ToInt32() - x;
+                        int rh = nms_result[0][i][3].ToInt32() - y;
+
+                        YoloResult result = new YoloResult
                         {
-                            int x = nms_result[0][i][0].ToInt32();
-                            int y = nms_result[0][i][1].ToInt32();
-                            int rw = nms_result[0][i][2].ToInt32() - x;
-                            int rh = nms_result[0][i][3].ToInt32() - y;
+                            CenterX = x + rw / 2,
+                            CenterY = y + rh / 2,
+                            Width = rw,
+                            Height = rh,
+                            Score = nms_result[0][i][4].ToSingle(),
+                            ClassID = nms_result[0][i][5].ToInt32(),
+                        };
 
-                            YoloResult result = new YoloResult();
+                        long keyPointsCount = (nms_result[0].shape[1] - 6) / dim;
+                        KeyPoint[] keyPoints = new Types.KeyPoint[keyPointsCount];
 
-                            result.CenterX = x + rw / 2;
-                            result.CenterY = y + rh / 2;
-                            result.Width = rw;
-                            result.Height = rh;
+                        for (int j = 0; j < keyPointsCount; j++)
+                        {
+                            int baseIdx = 6 + j * dim;
 
-                            result.Score = nms_result[0][i][4].ToSingle();
-                            result.ClassID = nms_result[0][i][5].ToInt32();
-                            long keyPointsCount = (nms_result[0].shape[1] - 6) / config.KeyPoint_Dim;
-                            KeyPoint[] keyPoints = new Types.KeyPoint[keyPointsCount];
-                            for (int j = 0; j < keyPointsCount; j++)
+                            float kptX = nms_result[0][i][baseIdx].ToSingle();
+                            float kptY = nms_result[0][i][baseIdx + 1].ToSingle();
+
+                            float visibility = 2.0f;
+                            if (dim == 3)
                             {
-                                keyPoints[j] = new KeyPoint()
-                                {
-                                    X = nms_result[0][i][6 + j * config.KeyPoint_Dim].ToSingle(),
-                                    Y = nms_result[0][i][6 + j * config.KeyPoint_Dim + 1].ToSingle(),
-                                    VisibilityScore = config.KeyPoint_Dim == 3 ? nms_result[0][i][6 + j * 3 + 2].ToSingle() : 2.0f
-                                };
+                                visibility = nms_result[0][i][baseIdx + 2].ToSingle();
                             }
-                            result.KeyPoints = keyPoints;
 
-                            results.Add(result);
+                            keyPoints[j] = new KeyPoint()
+                            {
+                                X = kptX,
+                                Y = kptY,
+                                VisibilityScore = visibility,
+                            };
                         }
+                        result.KeyPoints = keyPoints;
+
+                        results.Add(result);
                     }
                 }
                 return results;
@@ -138,10 +149,16 @@ namespace YoloSharp.Models
                             torch.Tensor batch_idx = data["batch_idx"].squeeze(-1) == i;
                             torch.Tensor turn_classes = data["cls"][batch_idx].squeeze(-1);
                             torch.Tensor batch_bbox = data["bboxes"][batch_idx] * scale;
+                            //torch.Tensor batch_kpt = data["keypoints"][batch_idx];
+                            //if (batch_kpt.shape[batch_kpt.shape.Length - 1] == 2)
+                            //{
+                            //    torch.Tensor seen = torch.ones(new long[] { batch_kpt.shape[0], batch_kpt.shape[1], 1 }, device: batch_kpt.device);
+                            //    batch_kpt = torch.cat(new torch.Tensor[] { batch_kpt, seen }, -1);
+                            //}
                             torch.Tensor batch_kpt = data["keypoints"][batch_idx];
                             if (batch_kpt.shape[batch_kpt.shape.Length - 1] == 2)
                             {
-                                torch.Tensor seen = torch.ones(new long[] { batch_kpt.shape[0], batch_kpt.shape[1], 1 }, device: batch_kpt.device);
+                                using var seen = torch.ones(new long[] { batch_kpt.shape[0], batch_kpt.shape[1], 1 }, device: batch_kpt.device);
                                 batch_kpt = torch.cat(new torch.Tensor[] { batch_kpt, seen }, -1);
                             }
 
@@ -211,6 +228,14 @@ namespace YoloSharp.Models
 
                 return (loss_items.@float().data<float>().ToArray(), new float[] { P, R, mAP50, mAP50_95, P_p, R_p, mAP50_p, mAP50_95_p });
             }
+        }
+
+        internal override float GetFitness(float[] metrics)
+        {
+            // metrics = [P, R, mAP50, mAP50-95, P_p, R_p, mAP50_p, mAP50-95_p]
+            float boxFit = 0.1f * metrics[2] + 0.9f * metrics[3];
+            float poseFit = 0.1f * metrics[6] + 0.9f * metrics[7];
+            return 0.5f * (boxFit + poseFit);
         }
 
         internal override string GetTrainDescription()

@@ -14,6 +14,11 @@ namespace Data
         private readonly int imgsz;
         private readonly float p_mosaic;
         private readonly int mosaic_count;
+        private readonly float p_mixup;
+        private readonly float mixup_beta;
+        private readonly float p_copypaste;
+        private readonly int copypaste_max_num_obj;
+
         private readonly float degress;
         private readonly float translate;
         private readonly float scale;
@@ -37,6 +42,10 @@ namespace Data
             this.imgsz = config.ImageSize;
             this.p_mosaic = config.Mosaic;
             this.mosaic_count = config.MosaicCount;
+            this.p_mixup = config.MixUp;
+            this.mixup_beta = config.MixUpBeta;
+            this.p_copypaste = config.CopyPaste;
+            this.copypaste_max_num_obj = config.CopyPasteMaxNumObj;
             this.degress = config.Degrees;
             this.translate = config.Translate;
             this.scale = config.Scale;
@@ -73,6 +82,18 @@ namespace Data
                     compose.Add(letterBox);
                 }
 
+                if (this.p_copypaste > 0)
+                {
+                    Augment.CopyPaste copyPaste = new Augment.CopyPaste(this, null, max_num_obj: this.copypaste_max_num_obj, p: this.p_copypaste);
+                    compose.Add(copyPaste);
+                }
+
+                if (this.p_mixup > 0)
+                {
+                    Augment.MixUp mixUp = new Augment.MixUp(this, null, imgsz: this.imgsz, p: this.p_mixup, beta: this.mixup_beta);
+                    compose.Add(mixUp);
+                }
+
                 if (this.p_flipLR > 0)
                 {
                     Augment.FlipLR flipLR = new Augment.FlipLR(this.p_flipLR);
@@ -107,9 +128,9 @@ namespace Data
             label.bbox_format = torchvision.ops.BoxFormats.cxcywh;
             torch.Tensor ourters = null;
             torch.Tensor cornerbox = null;
+
             if (label.obb_corners is not null)
             {
-                //label.obb_corners = YoloSharp.Utils.Ops.sort_obb_corners_batch(label.obb_corners);
                 long n = label.obb_corners.shape[0];
                 cornerbox = torch.zeros(new long[] { n, 5 });
                 ourters = torch.zeros(new long[] { n, 8 });
@@ -118,15 +139,11 @@ namespace Data
                     float[] xywhr = YoloSharp.Utils.Ops.xyxyxyxy2xywhr(label.obb_corners[i].data<float>().ToArray());
                     cornerbox[i] = xywhr;
                 }
-                cornerbox[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)] = cornerbox[torch.TensorIndex.Ellipsis, torch.TensorIndex.Slice(0, 4)] / this.imgsz;
+
+                label.bboxes = cornerbox;
             }
 
             label.Normalize();
-
-            if (cornerbox is not null)
-            {
-                label.bboxes = cornerbox;
-            }
 
             label.cls = label.cls?.view(-1, 1);
             label.img = label.img?.view(1, label.img.shape[0], label.img.shape[1], label.img.shape[2]);
