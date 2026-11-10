@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Threading;
 using TorchSharp;
 
 namespace Data
@@ -429,10 +430,24 @@ namespace Data
 
 		internal static class ThreadLocalRandom
 		{
-			private static readonly ThreadLocal<Random> _rng =
-				new ThreadLocal<Random>(() => new Random(Guid.NewGuid().GetHashCode()));
+			// [Fix 2026-11-09] Seeded RNG factory (ultralytics init_seeds semantics): was per-thread
+			// Guid-seeded (irreproducible). ReSeed(0) at Train() start makes the random SOURCE fixed;
+			// per-worker thread instances draw sequential seeds from the factory.
+			// 种子化随机工厂：原每线程Guid种子不可复现；Train()开头ReSeed(0)固定随机源。
+			private static ThreadLocal<Random> _rng =
+				new ThreadLocal<Random>(() => new Random(Interlocked.Increment(ref _seedBase)));
+			private static int _seedBase = 1;
 			public static Random Instance => _rng.Value;
+			/// <summary>Re-seed the factory (called at Train start)</summary>
+			internal static void ReSeed(int seed)
+			{
+				_seedBase = seed;
+				_rng = new ThreadLocal<Random>(() => new Random(Interlocked.Increment(ref _seedBase)));
+			}
 		}
+
+		/// <summary>[Add 2026-11-09] Public re-seed entry for Train()（桥接到ThreadLocalRandom工厂）</summary>
+		public static void ReSeedAll(int seed) => ThreadLocalRandom.ReSeed(seed);
 
 
 		internal class CopyPaste : BaseMixTransform

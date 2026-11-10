@@ -62,12 +62,12 @@ namespace Data
         /// <summary>
         /// Learning rate
         /// </summary>
-        public float LearningRate { get; set; } = 2e-4f;
+        public float LearningRate { get; set; } = 0.01f;   // [Fix 2026-11-05] SGD default aligned with ultralytics exp68 (was 2e-4 for AdamW)
 
         /// <summary>
         /// Use Cos LR
         /// </summary>
-        public bool UseCosLR { get; set; } = true;
+        public bool UseCosLR { get; set; } = false;   // [Fix 2026-11-05] ultralytics uses linear decay (cos optional)
 
         /// <summary>
         /// Lrf
@@ -112,7 +112,13 @@ namespace Data
         /// <summary>
         /// Early stop patience
         /// </summary>
-        public int Patience { get; set; } = 50;
+        public int Patience { get; set; } = 0;   // [Fix 2026-11-01] 0=disable early stopping (train all epochs) / 0=禁用早停训练满轮数
+
+        /// <summary>
+        /// [Txm新增] 外部停止请求回调：epoch循环每轮开头检查，true=用户请求停止（保留best.bin退出）。
+        /// null=不可外部停止（原上游行为）。
+        /// </summary>
+        public Func<bool> StopRequested { get; set; } = null;
 
         /// <summary>
         /// Gets or sets the number of key points used in the operation.
@@ -157,7 +163,7 @@ namespace Data
 		/// <summary>
 		/// MixUp augmentation ratio, it will be use only in Mosiac image process type, and the value should be between 0 and 1, the default value is 0.0f, which means all the images will not be used for MixUp augmentation.
 		/// </summary>
-		public float MixUp { get; set; } = 0.0f;
+		public float MixUp { get; set; } = 0.15f;   // [Fix 2026-11-05] ultralytics mixup=0.15
 
 		/// <summary>
 		/// MixUp Beta, it will be use only in Mosiac image process type, and the value should be between 0 and 1, the default value is 32.0f, which means all the images will not be used for MixUp augmentation.
@@ -167,7 +173,7 @@ namespace Data
 		/// <summary>
 		/// CopyPaste augmentation ratio, it will be use only in Mosiac image process type, and the value should be between 0 and 1, the default value is 0.0f, which means all the images will not be used for CopyPaste augmentation.
 		/// </summary>
-		public float CopyPaste { get; set; } = 0.0f;
+		public float CopyPaste { get; set; } = 0.3f;   // [Fix 2026-11-06] ultralytics copy_paste=0.3
 
         /// <summary>
         /// CopyPaste max objects.
@@ -187,7 +193,7 @@ namespace Data
         /// <summary>
         /// Gets or sets the scale factor applied to the object.
         /// </summary>
-        public float Scale { get; set; } = 0.5f;
+        public float Scale { get; set; } = 0.9f;   // [Fix 2026-11-05] ultralytics scale=0.9
 
         /// <summary>
         /// Gets or sets the shear factor applied to the transformation.
@@ -252,7 +258,7 @@ namespace Data
         /// </summary>
         public int WarmUpEpoches { get; set; } = 3;
 
-        public double WarmUpBiasLr { get; set; } = 0.0;
+        public double WarmUpBiasLr { get; set; } = 0.1;   // [Fix 2026-11-05] ultralytics warmup_bias_lr=0.1
 
         public int CloseMosaic { get; set; } = 10;
 

@@ -8,6 +8,134 @@ namespace YoloSharpDemo
     internal class Program
     {
         /// <summary>无效任务×架构组合→弹窗说明原因（Windows），返回true=无效已提示</summary>
+        static void RunOnnxExportTest(string yoloTypeName, string taskName, int imgsz, string[] args = null)
+        {
+            Console.WriteLine($"=== OnnxExport对拍: {yoloTypeName}+{taskName} imgsz={imgsz} ===");
+            var yoloType = (YoloType)Enum.Parse(typeof(YoloType), yoloTypeName, true);
+            var task = (TaskType)Enum.Parse(typeof(TaskType), taskName, true);
+            int nc = task == TaskType.Classification ? 1 : 15;
+
+            var config = new Config
+            {
+                DeviceType = YoloSharp.Types.DeviceType.CPU,   // 对拍用CPU排除GPU数值差异
+                ScalarType = ScalarType.Float32,
+                YoloType = yoloType,
+                YoloSize = yoloType == YoloType.Yolov9 ? YoloSize.s : YoloSize.n,
+                TaskType = task,
+                ImageSize = imgsz,
+                NumberClass = nc,
+            };
+            if (WarnInvalidCombo(yoloType, task)) return;
+
+            // 建网络并取内部yolo模块
+            var yoloTask = new YoloTask(config);
+            var yolo = YoloSharp.OnnxExport.OnnxExporter.GetYoloModule(yoloTask);
+            if (args.Length > 5 && args[4] == "--pt" && System.IO.File.Exists(args[5]))
+            {
+                yoloTask.LoadModel(args[5], skipNcNotEqualLayers: true);   // load real weights for COCO parity / 加载真权重对拍
+                Console.WriteLine($"[PtLoad] {args[5]}");
+            }
+            else if (args.Length > 5 && args[4] == "--bin" && System.IO.File.Exists(args[5]))
+            {
+                yoloTask.LoadModel(args[5], skipNcNotEqualLayers: true);   // load bin weights / 加载bin权重
+                Console.WriteLine($"[BinLoad] {args[5]}");
+            }
+            yolo.eval();
+
+            // TorchSharp基准输出（boxes分支 = 推理输出）
+            var input = TorchSharp.torch.zeros(1, 3, imgsz, imgsz);
+            TorchSharp.torch.Tensor refBoxes, refScores, refMasks = null, refProto = null, refCls = null;
+            using (TorchSharp.torch.no_grad())
+            {
+                input = TorchSharp.torch.randn(1, 3, imgsz, imgsz);
+                var fw = yolo.forward(input);
+                var preds = (System.Collections.Generic.Dictionary<string, object>)fw?.Item2;
+                var one2many = preds.ContainsKey("one2many") ? (System.Collections.Generic.Dictionary<string, object>)preds["one2many"] : preds;
+                refBoxes = one2many.ContainsKey("boxes") ? ((TorchSharp.torch.Tensor)one2many["boxes"]).detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32) : (TorchSharp.torch.Tensor)null;
+                refScores = one2many.ContainsKey("scores") ? ((TorchSharp.torch.Tensor)one2many["scores"]).detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32) : (TorchSharp.torch.Tensor)null;
+                refMasks = one2many.ContainsKey("mask_coefficient") ? ((TorchSharp.torch.Tensor)one2many["mask_coefficient"]).detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32) : (TorchSharp.torch.Tensor)null;
+                refProto = one2many.ContainsKey("proto") ? ((TorchSharp.torch.Tensor)one2many["proto"]).detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32) : (TorchSharp.torch.Tensor)null;
+                if (preds.TryGetValue("cls", out var clsV)) refCls = clsV as TorchSharp.torch.Tensor;
+            }
+            Console.WriteLine($"TorchSharp头输出: boxes={(refBoxes is object ? string.Join("x", refBoxes.shape) : "-")} scores={(refScores is object ? string.Join("x", refScores.shape) : "-")}");
+
+            // 导出
+            string onnxPath = $"export_{yoloTypeName}_{taskName}_{imgsz}.onnx";
+            YoloSharp.OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, imgsz, imgsz }, onnxPath);
+            Console.WriteLine($"导出OK: {onnxPath} ({new System.IO.FileInfo(onnxPath).Length / 1024}KB)");
+
+            // ONNX Runtime跑（比对box分支——导出图为boxes/scores两输出）
+            using (var session = new Microsoft.ML.OnnxRuntime.InferenceSession(onnxPath))
+            {
+                var floatArr = input.detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32).data<float>().ToArray();
+                // TorchSharp NCHW→ONNX同名输入
+                var tensor = new Microsoft.ML.OnnxRuntime.Tensors.DenseTensor<float>(floatArr, new[] { 1, 3, imgsz, imgsz });
+                var inputName = session.InputMetadata.First().Key;
+                using var results = session.Run(new[] { Microsoft.ML.OnnxRuntime.NamedOnnxValue.CreateFromTensor(inputName, tensor) });
+
+                // 对拍两输出：boxes(输出0) + scores(输出1) —— 头原始输出（DFL解码前）
+                var outs = results.Select(r => r.AsTensor<float>().ToArray()).ToArray();
+                var rb = refBoxes is object ? refBoxes.data<float>().ToArray() : new float[0];
+                var rs = refScores is object ? refScores.data<float>().ToArray() : new float[0];
+                double maxDiff = 0; long nBig = 0;
+                var ob = outs[0]; var os_ = outs.Length > 1 ? outs[1] : new float[0];
+                for (int i = 0; i < Math.Min(rb.Length, ob.Length); i++)
+                {
+                    var d = Math.Abs((double)rb[i] - ob[i]);
+                    if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
+                }
+                for (int i = 0; i < Math.Min(rs.Length, os_.Length); i++)
+                {
+                    var d = Math.Abs((double)rs[i] - os_[i]);
+                    if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
+                }
+                // Classification: 输出0=cls
+                if (refCls is object)
+                {
+                    var rc = refCls.data<float>().ToArray();
+                    var oc = outs[0];
+                    for (int i = 0; i < Math.Min(rc.Length, oc.Length); i++)
+                    {
+                        var d = Math.Abs((double)rc[i] - oc[i]);
+                        if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
+                    }
+                }
+                // seg: 输出2=masks 3=proto
+                if (refMasks is object && outs.Length > 2)
+                {
+                    var rm = refMasks.data<float>().ToArray();
+                    var om = outs[2];
+                    double mMax = 0;
+                    for (int i = 0; i < Math.Min(rm.Length, om.Length); i++)
+                    {
+                        var d = Math.Abs((double)rm[i] - om[i]);
+                        if (d > mMax) mMax = d;
+                        if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
+                    }
+                    Console.WriteLine($"  masks路: ref={rm.Length} onnx={om.Length} MaxDiff={mMax:E2}");
+                }
+                if (refProto is object && outs.Length > 3)
+                {
+                    var rp = refProto.data<float>().ToArray();
+                    var op = outs[3];
+                    double pMax = 0;
+                    for (int i = 0; i < Math.Min(rp.Length, op.Length); i++)
+                    {
+                        var d = Math.Abs((double)rp[i] - op[i]);
+                        if (d > pMax) pMax = d;
+                        if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
+                    }
+                    Console.WriteLine($"  proto路: ref={rp.Length} onnx={op.Length} MaxDiff={pMax:E2}");
+                }
+                bool isCls = refCls is object;
+                bool ok = maxDiff < 1e-2 && rs.Length == os_.Length
+                    && (isCls ? (outs.Length > 0 && refCls.numel() == outs[0].Length)
+                              : (rb.Length == ob.Length));
+                Console.WriteLine($"对拍: boxes ref={rb.Length}/onnx={ob.Length}, scores ref={rs.Length}/onnx={os_.Length}, masks{(refMasks is object ? $"={refMasks.numel()}" : "")} proto{(refProto is object ? $"={refProto.numel()}" : "")}, MaxDiff={maxDiff:E2} 超1e-2={nBig}");
+                Console.WriteLine(ok ? "=== onnxexport PASS ===" : "=== onnxexport FAIL ===");
+            }
+        }
+
         static bool WarnInvalidCombo(YoloType yolo, TaskType task)
         {
             string? why = (yolo, task) switch
@@ -36,6 +164,16 @@ namespace YoloSharpDemo
 
         static void Main(string[] args)
         {
+            // ONNX export parity mode: onnxexport <yoloType> <task> [imgsz] [--pt|--bin <path>] — build network → export onnx → point-wise parity vs TorchSharp forward
+            // ONNX导出对拍模式——构建网络→导出onnx→与TorchSharp前向逐点对拍
+            if (args.Length >= 1 && args[0] == "onnxexport")
+            {
+                RunOnnxExportTest(args.Length > 1 ? args[1] : "Yolov8",
+                                  args.Length > 2 ? args[2] : "Detection",
+                                  args.Length > 3 ? int.Parse(args[3]) : 640, args);
+                return;
+            }
+
             // 统一入口（v8/v9/v11/v12同一流程，仅Config不同）：
             //   YoloSharpDemo [yoloType] [task] [predictImgsz] [predictConf] [epochs]
             //   yoloType:     Yolov5u/Yolov8/Yolov9/Yolov11/Yolov12（默认Yolov8）

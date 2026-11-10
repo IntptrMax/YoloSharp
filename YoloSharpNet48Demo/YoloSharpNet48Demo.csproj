@@ -29,6 +29,8 @@
     <!-- 统一SkiaSharp版本：YoloSharp经ScottPlot引用3.119，显式钉住避免2.88/3.119混载 -->
     <PackageReference Include="SkiaSharp" Version="3.119.0" />
     <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="3.119.0" />
+    <!-- [Add 2026-11-10] ONNX导出对拍模式依赖（与YoloSharpDemo的onnxexport入口同功能） -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.31.0" />
   </ItemGroup>
 
 </Project>
