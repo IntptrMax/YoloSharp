@@ -156,7 +156,7 @@ namespace YoloSharp.Models
 
         internal override float GetFitness(float[] metrics)
         {
-            // metrics = [P, R, mAP50, mAP50-95]（OBB 只有 box）
+            // metrics = [P, R, mAP50, mAP50-95] (OBB has box only) / OBB只有box
             return 0.1f * metrics[2] + 0.9f * metrics[3];
         }
         internal override string GetTrainDescription()

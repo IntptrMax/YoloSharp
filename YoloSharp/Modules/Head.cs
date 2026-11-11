@@ -20,7 +20,7 @@ namespace YoloSharp.Modules
 		/// c2/c3 all based on ch[0], plain convs (no groups=4). Aux branch layers 22-28 DO feed
 		/// the head. Previous attempts aligned to DDetect/DualDDetect — wrong target (that's the
 		/// converted.pt inference-only checkpoint, not the training yaml).
-		/// 对齐yolov9-s.yaml实际训练头：v8式Detect六组全参与，ch[0]基准，普通卷积。
+		/// Matches the actual yolov9-s.yaml training head: v8-style Detect with all six groups, ch[0] base, plain convs. / 对齐yolov9-s.yaml实际训练头
 		/// </summary>
 		internal class DetectV9 : Detect
 		{
@@ -61,7 +61,7 @@ namespace YoloSharp.Modules
 			public override (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds) forward(torch.Tensor[] x)
 			{
 				// All 6 groups participate (training AND eval) — identical to v8 Detect with nl=6.
-				// / 全6组参与（训练与推理）——与nl=6的v8 Detect同构。
+				// / All 6 groups participate (training and inference) — isomorphic to the nl=6 v8 Detect. / 全6组参与
 				return base.forward(x);
 			}
 		}
@@ -234,7 +234,7 @@ namespace YoloSharp.Modules
 					// log(5/nc/640²) never landed → epoch-1 cls loss exploded (1661). Compute in
 					// Float32 (full vector when count==null, else the first `count` slots) and copy
 					// back so the value survives any dtype.
-					// BF16安全写法：fill_在BF16上静默失效——用Float32构建目标向量再copy_回去。
+					// BF16-safe pattern: fill_ silently no-ops on BF16 — build the target vector in Float32 then copy_ back. / BF16安全写法
 					int n = (int)lastConv.bias.shape[0];
 					int k = count is null ? n : Math.Min(count.Value, n);
 					var biasF32 = lastConv.bias.to(torch.ScalarType.Float32);

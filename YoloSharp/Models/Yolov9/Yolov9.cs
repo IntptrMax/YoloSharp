@@ -19,28 +19,28 @@ namespace YoloSharp.Models
     /// </summary>
     internal class Yolov9 : Yolo.Yolov8
     {
-        // v9拓扑的层缓存：4,6,8,9,12,15,18,21,22,25,28（concat源+Detect输入），含aux支路
+        // v9 topology layer cache: 4,6,8,9,12,15,18,21,22,25,28 (concat sources + Detect inputs), incl. aux branch / v9拓扑的层缓存（concat源+Detect输入），含aux支路
         protected override int[] outputIndexs => new int[] { 4, 6, 8, 9, 12, 15, 18, 21, 22, 25, 28 };
-        // concat顺序(层): 11(cat6) 14(cat4) 17(cat12) 20(cat9) 24(cat6) 27(cat4)
-        // → outputs索引: 6→1, 4→0, 12→4, 9→3, 6→1, 4→0
+        // concat order (layers): 11(cat6) 14(cat4) 17(cat12) 20(cat9) 24(cat6) 27(cat4)
+        // -> outputs index: 6->1, 4->0, 12->4, 9->3, 6->1, 4->0
         protected override int[] concatIndex => new int[] { 1, 0, 4, 3, 1, 0 };
 
         internal Yolov9(int nc = 80, int reg_max = 16, int? kpt_num = null, int? kpt_dim = null, YoloSize yoloSize = YoloSize.n, bool end2end = false, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nc, reg_max: reg_max, kpt_dim: kpt_dim, kpt_num: kpt_num, yoloSize: yoloSize, end2end: end2end, device: device, dtype: dtype)
         {
         }
 
-        /// <summary>v9 forward：aux支路(22)从层8分叉（yaml [8,1,SPPELAN]）；Detect(29)输入=[28,25,22,15,18,21]</summary>
+        /// <summary>v9 forward: aux branch (22) forks from layer 8 (yaml [8,1,SPPELAN]); Detect(29) inputs=[28,25,22,15,18,21] / v9 forward：aux支路(22)从层8分叉；Detect(29)输入=[28,25,22,15,18,21]</summary>
         public override (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? forward(torch.Tensor x)
         {
             (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? result = null;
             var outputs = new List<torch.Tensor>();
             int catCount = 0;
-            // outputs收集顺序（outputIndexs）: 4,6,8,9,12,15,18,21,22,25,28 → 下标0..10
-            // Detect输入: [28(10), 25(9), 22(8), 15(5), 18(6), 21(7)]
+            // outputs collection order (outputIndexs): 4,6,8,9,12,15,18,21,22,25,28 -> indices 0..10
+            // Detect inputs: [28(10), 25(9), 22(8), 15(5), 18(6), 21(7)]
             int[] detectSrc = { 10, 9, 8, 5, 6, 7 };
             for (int i = 0; i < model.Count; i++)
             {
-                // aux支路分叉：层22(SPPELAN)输入=层8输出(outputs下标2)，不是顺序流x
+                // aux branch fork: layer 22 (SPPELAN) input = layer 8 output (outputs index 2), not the sequential x / aux支路分叉：层22输入=层8输出，不是顺序流x
                 if (i == 22)
                 {
                     x = outputs[2];   // layer 8
@@ -68,10 +68,10 @@ namespace YoloSharp.Models
 
         internal override ModuleList<torch.nn.Module> BuildModel()
         {
-            // yolov9-s.yaml: depth/width multiple=1.0（v9官方t/c/s/e档；C#先落s基准，
-            // 与实测1774张量1:1吻合；其余档位待社区按官方yaml补通道表）
-            // RepNCSPELAN4(yaml [out,hidden,branch,n])通道精确表：
-            //   层4=[128,128,64,1] 6=[192,192,96,1] 8/21=[256,256,128,1] 12/18/25=[192,192,96,1] 15/28=[128,128,64,1]
+            // yolov9-s.yaml: depth/width multiple=1.0 (official v9 t/c/s/e tiers; C# ships the s baseline
+            // first, 1:1 verified against real 1774-tensor weights; other tiers await community channel tables) / s基准已实测1:1吻合
+            // RepNCSPELAN4 (yaml [out,hidden,branch,n]) exact channel table:
+            //   L4=[128,128,64,1] 6=[192,192,96,1] 8/21=[256,256,128,1] 12/18/25=[192,192,96,1] 15/28=[128,128,64,1]
             int c2 = 128, c3 = 192, c4 = 256;
 
             ModuleList<torch.nn.Module> mod = new ModuleList<torch.nn.Module>(
@@ -103,7 +103,7 @@ namespace YoloSharp.Models
                 new Convs.Concat(),                                                                // 20 cat(9)
                 new Gelan.RepNCSPELAN4(c4 + c2, 256, 256, 128, 3, device: device, dtype: dtype),       // 21 (P5/32-large)
 
-                // ── head: aux branch（推理忽略，仅承载权重） ──
+                // -- head: aux branch (ignored at inference, carries weights only) / head: aux分支（推理忽略，仅承载权重）--
                 new Gelan.SPPELAN(c4, 256, 128, device: device, dtype: dtype),                    // 22 (from 8)
                 torch.nn.Upsample(scale_factor: new double[] { 2, 2 }, mode: torch.UpsampleMode.Nearest),  // 23
                 new Convs.Concat(),                                                                // 24 cat(6)
@@ -112,7 +112,7 @@ namespace YoloSharp.Models
                 new Convs.Concat(),                                                                // 27 cat(4)
                 new Gelan.RepNCSPELAN4(c3 + c2, 128, 128, 64, 3, device: device, dtype: dtype),         // 28
 
-                // ── Detect(29): v9头6分支 [aux(28,25,22), main(15,18,21)]，推理用后3 ──
+                // -- Detect(29): v9 head 6 branches [aux(28,25,22), main(15,18,21)], inference uses the last 3 / 推理用后3 --
                 new Head.DetectV9(nc, new int[] { 128, 192, 256, 128, 192, 256 }, reg_max: 16, device: device, dtype: dtype)
             );
             return mod;
@@ -120,11 +120,11 @@ namespace YoloSharp.Models
     }
 
         /// <summary>
-        /// YOLOv9-Segment (gelan-c-seg.yaml, 23层无aux分支) — contributed back to the open-source YoloSharp project.
-        /// 与detect版差异：降采样用ADown(非AConv)；层2为RepNCSPELAN4(非ELAN1)；头=标准Segment(3分支cv2/cv3/cv4+proto)。
-        /// 通道表已对照真实权重(大连崇达circle分割, 1000张量)校准：
+        /// YOLOv9-Segment (gelan-c-seg.yaml, 23 layers, no aux branch) — contributed back to the open-source YoloSharp project.
+        /// Differences vs detect: downsample uses ADown (not AConv); layer 2 is RepNCSPELAN4 (not ELAN1); head = standard Segment (3-branch cv2/cv3/cv4 + proto). / 与detect版差异：降采样用ADown；层2为RepNCSPELAN4；头=标准Segment。
+        /// Channel table calibrated against real weights (Dalian Chongda circle segmentation, 1000 tensors): / 通道表已对照真实权重校准：
         ///   backbone 64/128/256/512/512；RepNCSPELAN4: L2=[256,128,64] L4=[512,256,128] L6/8=[512,512,256]
-        ///   L12/18/21=[512,512,256] L15=[256,256,128]；Segment头c2=64 c3=256(nc基准) c4=64 nm=32 proto npr=256
+        ///   L12/18/21=[512,512,256] L15=[256,256,128]; Segment head c2=64 c3=256(nc base) c4=64 nm=32 proto npr=256
         /// </summary>
         internal class Yolov9Segment : Yolov9
         {
@@ -135,7 +135,7 @@ namespace YoloSharp.Models
 
             internal override ModuleList<torch.nn.Module> BuildModel()
         {
-            // gelan-c-seg.yaml 通道（对照崇达权重1000张量逐层校准；yaml [out,hidden,branch,n]全n=1）
+            // gelan-c-seg.yaml channels (calibrated layer-by-layer against Chongda 1000-tensor weights; yaml [out,hidden,branch,n] all n=1) / 通道对照权重逐层校准
             ModuleList<torch.nn.Module> mod = new ModuleList<torch.nn.Module>(
                 // ── backbone ──
                 new Convs.Conv(3, 64, 3, 2, device: device, dtype: dtype),                          // 0-P1/2
@@ -164,20 +164,20 @@ namespace YoloSharp.Models
                 new Convs.Concat(),                                                                    // 20 cat(9): 512+512
                 new Gelan.RepNCSPELAN4(1024, 512, 512, 256, 1, device: device, dtype: dtype),         // 21 (P5/32)
 
-                // ── Segment头(层22): 3分支[15,18,21] ch=[256,512,512]，实测cv2=64/cv3=256/cv4=64/nm=32/proto npr=256 ──
+                // -- Segment head (layer 22): 3 branches [15,18,21] ch=[256,512,512], measured cv2=64/cv3=256/cv4=64/nm=32/proto npr=256 --
                 new Head.Segment(nc: nc, nm: 32, npr: 256, reg_max: reg_max, ch: new int[] { 256, 512, 512 }, legacy: true, end2end: end2end, device: device, dtype: dtype)
             );
             return mod;
         }
 
-            /// <summary>seg版forward：23层顺序流（无aux分叉）；Segment在层22，输入=[15,18,21]（outputs末3个）</summary>
+            /// <summary>seg forward: 23-layer sequential flow (no aux fork); Segment at layer 22, inputs=[15,18,21] (last 3 of outputs) / seg版forward：23层顺序流；Segment在层22</summary>
             public override (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? forward(torch.Tensor x)
             {
                 (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? result = null;
                 var outputs = new List<torch.Tensor>();
                 int catCount = 0;
-                // 缓存层（concat源+Segment输入）: 4,6,9,12,15,18,21 → 下标0..6
-                // concat源: 11(cat6=1) 14(cat4=0) 17(cat12=3) 20(cat9=2)
+                // cached layers (concat sources + Segment inputs): 4,6,9,12,15,18,21 -> indices 0..6
+                // concat sources: 11(cat6=1) 14(cat4=0) 17(cat12=3) 20(cat9=2)
                 int[] catSrc = { 1, 0, 3, 2 };
                 for (int i = 0; i < model.Count; i++)
                 {

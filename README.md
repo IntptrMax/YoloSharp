@@ -7,13 +7,14 @@ No Python required — from training to inference, everything stays inside .NET.
 
 - **100% C# implementation** – No Python environment, no extra dependencies.
 - **Full pipeline support** – Train, validate, and predict with your own custom models.
-- **Multiple YOLO versions** – Supports YOLOv5, YOLOv5u, YOLOv8, YOLOv11, and YOLOv12.
+- **Multiple YOLO versions** – Supports YOLOv5, YOLOv5u, YOLOv8, **YOLOv9 (GELAN, Detection + Segmentation)**, YOLOv11, and YOLOv12.
 - **All task types** – Object detection, segmentation, oriented bounding boxes (OBB), pose estimation (keypoints), and classification.
 - **Model sizes** – n/s/m/l/x variants available for every architecture.
 - **Advanced preprocessing** – Built-in LetterBox and Mosaic4 data augmentation.
+- **ONNX export** – Export trained models (all tasks) to deployable ONNX with dynamic batch; verified against ONNX Runtime / OpenVINO / TensorRT.
 - **GPU‑accelerated NMS** – Non‑maximum suppression runs directly on GPU.
 - **Pretrained models** – Load models from Ultralytics YOLO (v5/v8/v11) and converted YOLOv12 checkpoints.
-- **Cross‑platform** – Works with .NET 6 and later.
+- **Cross‑platform** – Works with .NET 6 and later, plus netstandard2.0 / .NET Framework 4.8.
 
 ## 🤔 Why YoloSharp?
 
@@ -27,6 +28,13 @@ No Python required — from training to inference, everything stays inside .NET.
 Whether you're building a desktop application, a cloud service, or an edge device solution, YoloSharp keeps your stack consistent and maintainable.
 
 ## 🔥 Recent Updates
+
+**2026/11/11**
+🚀 **YOLOv9 (GELAN)** support: Detection (yolov9-s, 1:1 vs official weights, 1774 tensors) and Segmentation (gelan-c-seg), contributed back to open source.
+🚀 **ONNX export engine**: Detection/Segmentation/Pose/OBB heads, v5/v8/v9/v11/v12 backbones; dynamic-batch input; EMA weights; BN fusion; opset 13.
+🚀 **Deploy pipeline**: exported ONNX verified on ONNX Runtime, OpenVINO (dynamic batch) and TensorRT (static & dynamic profiles).
+
+**2026/10** — training aligned with ultralytics: EMA (decay 0.9999, tau 2000), warmup trio (bias-lr/momentum/accumulate), gradient clip 10.0, deterministic seeds, recall gate for best-model selection, batch-level stop, per-epoch results.png redraw.
 
 🚀 Can Load .pt weight now.  
 🚀 Added **Net Standard 2.0** support.  
@@ -164,6 +172,12 @@ List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage);
 | YOLOv8n‑seg | ![bus](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/bus.jpg) |
 | YOLOv8n‑obb | ![trucks](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/trucks.jpg) |
 | YOLOv8n‑pose | ![tennis](https://raw.githubusercontent.com/IntptrMax/YoloSharp/refs/heads/master/Assets/tennis.jpg) |
+
+---
+
+## 🌐 Language / 其他语言
+
+[简体中文](README.zh-CN.md)
 
 ---
 

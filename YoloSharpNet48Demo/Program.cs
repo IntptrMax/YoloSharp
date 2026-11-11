@@ -29,7 +29,7 @@ namespace YoloSharpNet48Demo
         /// </summary>
         static void RunOnnxExportTest(string yoloTypeName, string taskName, int imgsz, string[] args)
         {
-            Console.WriteLine("=== OnnxExport对拍: " + yoloTypeName + "+" + taskName + " imgsz=" + imgsz + " ===");
+            Console.WriteLine("=== OnnxExport parity: / 对拍: " + yoloTypeName + "+" + taskName + " imgsz=" + imgsz + " ===");
             var yoloType = (YoloType)Enum.Parse(typeof(YoloType), yoloTypeName, true);
             var task = (TaskType)Enum.Parse(typeof(TaskType), taskName, true);
             int nc = task == TaskType.Classification ? 1 : 15;
@@ -75,11 +75,11 @@ namespace YoloSharpNet48Demo
                 object clsV;
                 if (preds.TryGetValue("cls", out clsV)) refCls = clsV as TorchSharp.torch.Tensor;
             }
-            Console.WriteLine("TorchSharp头输出: boxes=" + (refBoxes is object ? string.Join("x", refBoxes.shape) : "-") + " scores=" + (refScores is object ? string.Join("x", refScores.shape) : "-"));
+            Console.WriteLine("TorchSharp head outputs: boxes= / 头输出: boxes=" + (refBoxes is object ? string.Join("x", refBoxes.shape) : "-") + " scores=" + (refScores is object ? string.Join("x", refScores.shape) : "-"));
 
             string onnxPath = "export_" + yoloTypeName + "_" + taskName + "_" + imgsz + ".onnx";
             YoloSharp.OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, imgsz, imgsz }, onnxPath);
-            Console.WriteLine("导出OK: " + onnxPath + " (" + new FileInfo(onnxPath).Length / 1024 + "KB)");
+            Console.WriteLine("Export OK: / 导出OK: " + onnxPath + " (" + new FileInfo(onnxPath).Length / 1024 + "KB)");
 
             using (var session = new Microsoft.ML.OnnxRuntime.InferenceSession(onnxPath))
             {
@@ -124,7 +124,7 @@ namespace YoloSharpNet48Demo
                             if (d > mMax) mMax = d;
                             if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
                         }
-                        Console.WriteLine("  masks路: ref=" + rm.Length + " onnx=" + om.Length + " MaxDiff=" + mMax.ToString("E2"));
+                        Console.WriteLine("  masks path: ref= / masks路: ref=" + rm.Length + " onnx=" + om.Length + " MaxDiff=" + mMax.ToString("E2"));
                     }
                     if (refProto is object && outs.Length > 3)
                     {
@@ -137,15 +137,15 @@ namespace YoloSharpNet48Demo
                             if (d > pMax) pMax = d;
                             if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
                         }
-                        Console.WriteLine("  proto路: ref=" + rp.Length + " onnx=" + op.Length + " MaxDiff=" + pMax.ToString("E2"));
+                        Console.WriteLine("  proto path: ref= / proto路: ref=" + rp.Length + " onnx=" + op.Length + " MaxDiff=" + pMax.ToString("E2"));
                     }
                     bool isCls = refCls is object;
                     bool ok = maxDiff < 1e-2 && rs.Length == os_.Length
                         && (isCls ? (outs.Length > 0 && refCls.numel() == outs[0].Length)
                                   : (rb.Length == ob.Length));
-                    Console.WriteLine("对拍: boxes ref=" + rb.Length + "/onnx=" + ob.Length + ", scores ref=" + rs.Length + "/onnx=" + os_.Length
+                    Console.WriteLine("Parity: boxes ref= / 对拍: boxes ref=" + rb.Length + "/onnx=" + ob.Length + ", scores ref=" + rs.Length + "/onnx=" + os_.Length
                         + (refMasks is object ? ", masks=" + refMasks.numel() : "") + (refProto is object ? ", proto=" + refProto.numel() : "")
-                        + ", MaxDiff=" + maxDiff.ToString("E2") + " 超1e-2=" + nBig);
+                        + ", MaxDiff=" + maxDiff.ToString("E2") + " over-1e-2= / 超1e-2=" + nBig);
                     Console.WriteLine(ok ? "=== onnxexport PASS ===" : "=== onnxexport FAIL ===");
                 }
             }
@@ -184,17 +184,17 @@ namespace YoloSharpNet48Demo
             string trainDataPath = "train.txt";
             string valDataPath = "val.txt";
 
-            Console.WriteLine("=== YoloSharp .NET Framework 4.8 验证 ===");
+            Console.WriteLine("=== YoloSharp .NET Framework 4.8 verification / 验证 ===");
             Console.WriteLine("CLR: " + Environment.Version);
-            Console.WriteLine("组合: " + yoloType + "+" + taskType + " epochs=" + epochs);
+            Console.WriteLine("Combo: / 组合: " + yoloType + "+" + taskType + " epochs=" + epochs);
 
             Mat predictImage = Cv2.ImRead(predictImagePath);
             if (predictImage.Empty())
             {
-                Console.WriteLine("FAIL: 测试图像读取失败 " + predictImagePath);
+                Console.WriteLine("FAIL: test image read failed / 测试图像读取失败 " + predictImagePath);
                 return;
             }
-            Console.WriteLine("OpenCvSharp OK, 图像尺寸: " + predictImage.Width + "x" + predictImage.Height);
+            Console.WriteLine("OpenCvSharp OK, image size: / 图像尺寸: " + predictImage.Width + "x" + predictImage.Height);
 
             // Create a Yolo config（与YoloSharpDemo同规则：nc跟数据集dotav1=15类；Classification按1类）
             int nc = taskType == TaskType.Classification ? 1 : 15;
@@ -240,7 +240,7 @@ namespace YoloSharpNet48Demo
             sw.Stop();
 
             Console.WriteLine();
-            Console.WriteLine("推理结果: " + predictResult.Count + " 个目标, 耗时 " + sw.ElapsedMilliseconds + " ms");
+            Console.WriteLine("Inference result: / 推理结果: " + predictResult.Count + " targets, took / 个目标, 耗时 " + sw.ElapsedMilliseconds + " ms");
 
             // 输出结果（不画图，聚焦链路验证；画图部分与net6.0版相同逻辑可自行补）
             foreach (YoloResult result in predictResult)
@@ -251,7 +251,7 @@ namespace YoloSharpNet48Demo
             }
 
             Console.WriteLine();
-            Console.WriteLine("=== PASS: net48 + TorchSharp(netstandard2.0) + YoloSharp 训练+推理链路可用 ===");
+            Console.WriteLine("=== PASS: net48 + TorchSharp(netstandard2.0) + YoloSharp train+inference pipeline OK / 训练+推理链路可用 ===");
         }
 
         /// <summary>非法 架构×任务 组合拦截（与YoloSharpDemo同款）</summary>
@@ -266,7 +266,7 @@ namespace YoloSharpNet48Demo
 
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("========================================");
-            Console.WriteLine("ERROR 不支持的组合: " + yolo + " + " + task);
+            Console.WriteLine("ERROR 不支持的Combo: / 组合: " + yolo + " + " + task);
             Console.WriteLine(why);
             Console.WriteLine("========================================");
             Console.ResetColor();

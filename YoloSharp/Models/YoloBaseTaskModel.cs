@@ -22,7 +22,7 @@ namespace YoloSharp.Models
         protected ModelEMA ema;
         // [Add 2026-11-09] Warmup triplet state (shared Train→TrainEpoch): bias group reference
         // (correct-group identification for warmup_bias_lr) + full accumulate window (interp target).
-        // warmup三件套状态：bias组引用(修正预热落点)+累积窗口目标(渐进插值终点)。
+        // Warmup trio state: bias-group reference (fixes warmup target) + accumulation window target (gradual interpolation end). / warmup三件套状态
         private TorchSharp.Modules.SGD.ParamGroup _biasGroupRef;
         private int _accumulateFull;
 
@@ -62,9 +62,10 @@ namespace YoloSharp.Models
             // into the aux groups — aux then produced competing high-score boxes with different
             // widths, splitting the middle object into "wide+narrow" duplicate detections
             // (observed 0.64/0.76 mid-object scores). No remap = python-identical behavior.
-            // 彻底移除头层号remap：python对层名不匹配的头一条都不迁（头全随机）——aux组自然
-            // 沉默（best.pt实测aux输出恒0）。此前remap把converted头权塞进aux组导致双头竞争
-            // 出框、中间目标被拆成宽+窄双框。删remap=与python行为一致。
+            // Head layer-number remap removed entirely: python migrates nothing when head names mismatch
+            // (fully random head) — the aux group stays silent naturally (best.pt: aux output always 0). The old
+            // remap stuffed converted head weights into aux, causing dual-head competition and wide+narrow double
+            // boxes on mid targets. Removing it matches python. / 彻底移除头层号remap
 
             var matchedDict = new Dictionary<string, torch.Tensor>();
             int skippedMissing = 0;
@@ -78,11 +79,11 @@ namespace YoloSharp.Models
 
                 if (!modelShapes.TryGetValue(name, out var expectedShape))
                 {
-                    // [Fix 2026-10-24] 非参数缓冲不计入"头不匹配"（needHeadInit）：
-                    // stride/class_weights/angle（OBB头的角度维度标记）在C#骨架上无对应buffer，
-                    // 但它们不是可训练权重——旧逻辑把它们算作missing，导致加载预训练后
-                    // Bias_Init()重置整个Detect头（实测：v8n-obb.pt 397/400迁移，3个missing
-                    // 全是非权重缓冲，却触发头重置→epoch1 mAP50从Python的0.94跌到0.41）
+                    // [Fix 2026-10-24] Non-parameter buffers don't count as "head mismatch" (needHeadInit):
+                    // stride/class_weights/angle (OBB angle-dim markers) have no matching buffer on the C# skeleton,
+                    // but they are not trainable weights — the old logic counted them missing, so pretrained loading
+                    // reset the whole Detect head via Bias_Init() (measured: v8n-obb.pt 397/400 transferred, all 3
+                    // missing were non-weight buffers, yet head reset fired -> epoch1 mAP50 0.94->0.41). / 非参数缓冲不计入头不匹配
                     if (!name.EndsWith("class_weights") && !name.EndsWith("stride") && !name.EndsWith("angle"))
                     {
                         skippedMissing++;
@@ -122,8 +123,8 @@ namespace YoloSharp.Models
                 // .pt sources load as CPU tensors while the model sits on CUDA — weights never
                 // landed (scores.max=0.016 on a correctly-transferred checkpoint). Move every
                 // matched tensor to the model's device before loading.
-                // 跨设备copy静默失效：pt源是CPU张量而模型在CUDA——权重从未真正落位。
-                // 加载前统一迁到模型设备。
+                // Cross-device copy silently no-ops: .pt source is CPU while the model is on CUDA —
+                // weights never actually land. Migrate to the model device before loading. / 跨设备copy静默失效
                 var firstParam = yolo.parameters().Cast<torch.Tensor>().FirstOrDefault();
                 if (firstParam is torch.Tensor fp)
                 {
@@ -141,8 +142,9 @@ namespace YoloSharp.Models
                 // 80→1 cls tails) keep the good bias prior log(5/nc/640²)≈-12 → sigmoid≈0 →
                 // epoch-1 cls loss stays ~5. The previous "skip bias_init on partial transfer"
                 // left random biases (±0.5) → mass false positives → epoch-1 cls loss 1661.
-                // 先bias_init再load：未匹配层(cls末层)留住好偏置先验；迁移层随后被覆盖。
-                // 此前"部分迁移跳过bias_init"导致随机偏置→首轮cls loss爆1661。
+                // bias_init before load: unmatched layers (cls tail) keep their good bias prior; transferred
+                // layers are overwritten afterwards. The old "partial transfer skips bias_init" caused random
+                // biases -> first-epoch cls loss exploded to 1661. / 先bias_init再load
                 this.Bias_Init();
                 _needHeadInit = false;   // already initialized here — Train() must not repeat / 此处已初始化，Train不再重复
                 yolo.load_state_dict(matchedDict, strict: false);
@@ -151,15 +153,16 @@ namespace YoloSharp.Models
             // old code only called to(Dtype) without to(Device) — under CUDA config the model stayed on CPU while
             // ImagePredict sent input to CUDA → "cpu and cuda:0" mismatch (silent 0 detections).
             // The training path Train() has to(device) internally, so this never surfaced before.
-            // 加载后统一迁移dtype+device——旧代码只to(Dtype)不to(Device)，CUDA下模型留CPU导致设备不匹配。
+            // After loading, migrate dtype+device uniformly — the old code only did to(Dtype) without to(Device),
+        // leaving the model on CPU under CUDA and causing device mismatch. / 加载后统一迁移dtype+device
             yolo.to(config.Device);
             yolo.to(config.Dtype);
 
             // [Fix 2026-11-04] bias_init now runs inside LoadModel BEFORE load_state_dict
             // (ultralytics order) — no post-load conditional init. Train()'s init only serves
             // the from-scratch path (no LoadModel call).
-            // bias_init已移到LoadModel内load之前(ultralytics时序)——此处不再条件重置。
-            // Train()里的初始化只服务从头训路径。
+            // bias_init moved into LoadModel before load (ultralytics ordering) — no conditional reset here.
+            // The init in Train() only serves the from-scratch path. / bias_init已移到LoadModel内
 
             Console.WriteLine("Model loaded.");
         }
@@ -171,20 +174,20 @@ namespace YoloSharp.Models
             // had NO seeding — every run was a random seed (two trainings of identical config
             // gave different results, and the ~0.008 score gap vs python was partly this noise).
             // Fix torch CPU/CUDA seeds + .NET Random for dataloader shuffling/augmentation.
-            // 对齐python确定性种子：python侧seed=0+deterministic——平台此前无种子，每次
-            // 随机。固定torch双端种子+.NET Random（dataloader洗牌/增强共用）。
+            // Align with python deterministic seed: python uses seed=0 + deterministic — previously unseeded
+            // and random each run. Pin torch seeds on both ends + .NET Random (dataloader shuffle/augmentation). / 对齐python确定性种子
             try
             {
                 torch.manual_seed(0);
                 if (torch.cuda.is_available()) torch.cuda.manual_seed_all(0);
-                global::Data.Augment.ReSeedAll(0);   // 增强随机源（ThreadLocalRandom工厂重置为种子链）
+                global::Data.Augment.ReSeedAll(0);   // augmentation random source (ThreadLocalRandom factory reset to seeded chain) / 增强随机源
                 Console.WriteLine("  Seed: 0 (deterministic, aligned with ultralytics)");
             }
             catch { }
 
-            // Fix: from-scratch training path（未走LoadModel）模型保持Float32，而数据按config.Dtype进入——
-            // CUDA上触发 "Input type (CUDABFloat16Type) and weight type (CUDAFloatType) should be the same"。
-            // LoadModel路径在 yolo.to(config.Dtype) 已转换；此处对从头训路径补齐同一转换。
+            // Fix: from-scratch path (no LoadModel) keeps Float32 while data arrives per config.Dtype —
+            // CUDA raises "Input type (CUDABFloat16Type) and weight type (CUDAFloatType) should be the same".
+            // LoadModel converts via yolo.to(config.Dtype); apply the same for from-scratch here. / 从头训补齐dtype转换
             yolo.to(config.Dtype);
 
             if (config.End2End)
@@ -208,7 +211,7 @@ namespace YoloSharp.Models
                 throw new FileNotFoundException("No data found in the path: " + config.RootPath);
             }
 
-            YoloDataLoader trainDataLoader = new YoloDataLoader(trainDataSet, config.BatchSize, num_worker: config.Workers, shuffle: true, seed: 0, device: config.Device);   // [Fix 2026-11-09] 固定洗牌种子(可复现,对齐python seed=0)
+            YoloDataLoader trainDataLoader = new YoloDataLoader(trainDataSet, config.BatchSize, num_worker: config.Workers, shuffle: true, seed: 0, device: config.Device);   // [Fix 2026-11-09] Pinned shuffle seed (reproducible, aligned with python seed=0) / 固定洗牌种子
 
             config.ValDataPath = string.IsNullOrEmpty(config.ValDataPath) ? config.TrainDataPath : config.ValDataPath;
 
@@ -222,7 +225,7 @@ namespace YoloSharp.Models
 
             // [Fix 2026-11-05] Removed dfl freeze — ultralytics trains DFL weights too (no
             // "freezing .dfl." logic in official train.py). Freezing was a silent divergence.
-            // 移除dfl冻结——官方训练DFL参与更新；冻结是与python的隐性差异。
+            // DFL freeze removed — official training updates DFL; freezing was a hidden divergence from python. / 移除dfl冻结
             foreach (var (name, param) in yolo.named_parameters())
             {
                 param.requires_grad = true;
@@ -231,9 +234,9 @@ namespace YoloSharp.Models
             // [Add 2026-11-05] VRAM guidance: on 8GB laptops, v9-s @ bs16 spills activations to
             // shared memory (WDDM paging) — batches jump ~4.8× (1.1s→5.3s) and epochs take 220s
             // vs python's 90s. bs8 fits in VRAM and runs FASTER end-to-end (54s/epoch < 90s).
-            // 8GB卡显存提示：v9-s在bs16下激活溢出换页（批时长4.8倍）——提示改bs8。
+            // 8GB VRAM note: v9-s at bs16 spills activations into paging (4.8x batch time) — suggest bs8. / 8GB卡显存提示
             // Detected lazily: first-epoch batch timing is checked inside TrainEpoch after 8 batches.
-            // 首轮前8批后按实际批时长自监测提示（见TrainEpoch内），此处无操作。
+            // Self-monitoring after the first 8 batches by real batch time (see TrainEpoch); nothing here.
 
             double lr_fit = config.LearningRate;
 
@@ -268,22 +271,22 @@ namespace YoloSharp.Models
             // [Fix 2026-11-05] SGD(momentum=0.937, nesterov) aligned with ultralytics exp68 — the
             // old AdamW(2e-4)+CosLR recipe under-trained vs python (confidence mean 0.836 vs 0.906
             // across the full test set). SGD 0.01 + linear decay + warmup_bias 0.1 matches python.
-            // 优化器对齐python：SGD(0.01, momentum 0.937, nesterov)+线性衰减。
+            // Optimizer aligned with python: SGD(0.01, momentum 0.937, nesterov) + linear decay. / 优化器对齐python
             torch.optim.Optimizer optimizer = new TorchSharp.Modules.SGD(
                 new TorchSharp.Modules.SGD.ParamGroup[] { weightGroup, bnWeightGroup, biasGroup },
                 lr: lr_fit, momentum: 0.937, dampening: 0.0, weight_decay: 0.0, nesterov: true, maximize: false);
             // [Add 2026-11-09] Warmup triplet (python trainer.py L527-541): keep the bias group's
             // REFERENCE so warmup_bias_lr lands on the right group — the old code guessed by
             // position (paraId==0 = weight group!) so bias warmup never actually applied.
-            // 记录bias组引用——warmup_bias_lr要落到bias组（旧代码按位置猜paraId==0是weight组，
-            // bias预热从未真正生效）。
+            // Record the bias-group reference — warmup_bias_lr must land on the bias group (the old code
+            // guessed paraId==0 was the weight group; bias warmup never actually worked). / 记录bias组引用
             var biasGroupRef = biasGroup;
-            _biasGroupRef = biasGroup;   // [Add 2026-11-09] 提升到实例字段供TrainEpoch的warmup用
+            _biasGroupRef = biasGroup;   // [Add 2026-11-09] promoted to instance field for TrainEpoch warmup / 提升到实例字段
 
-            // nb_estimate已无需用于EMA tau（对齐官方固定2000）
-            // [Fix 2026-10-24] EMA对齐ultralytics官方：decay=0.9999, tau=2000固定。
-            // 旧值(0.999, nb*10)使EMA有效平均窗口≈10epoch——前20轮val指标严重滞后(与Python差异大的根因)
-            // [Fix 2026-10-24] EMA对齐ultralytics官方：decay=0.9999, tau=2000固定。
+            // nb_estimate no longer used for EMA tau (aligned with official fixed 2000) / nb_estimate不再用于EMA tau
+            // [Fix 2026-10-24] EMA aligned with ultralytics official: decay=0.9999, tau=2000 fixed.
+            // Old values (0.999, nb*10) gave an EMA effective window of ~10 epochs — val metrics lagged badly
+            // for the first 20 epochs (the root cause of the large divergence from python). / EMA对齐ultralytics官方
             ema = new ModelEMA(yolo, decay: 0.9999f, tau: 2000f);
 
             Func<int, double> lrLambda = config.UseCosLR ?
@@ -296,11 +299,13 @@ namespace YoloSharp.Models
             // [Fix 2026-11-05] grad clip 10.0 — python v9 train.py line 311 clips gradients
             // (max_norm=10); the platform never passed it (default 0=off). With SGD lr=0.01 the
             // occasional exploding batch crashed whole epochs (observed mAP50 collapse to 0.000
-            // at ep18/ep27). 梯度裁剪对齐python(10.0)——此前从未启用，SGD大lr下偶发爆炸塌轮。
+            // at ep18/ep27). Gradient clipping aligned with python (10.0) — previously never enabled; SGD at large lr
+            // occasionally exploded and collapsed epochs. / 梯度裁剪对齐python
             // [Add 2026-11-05] Gradient accumulation to nbs=64 (python L138): accumulate =
-            // round(64/batch). bs8→8批合一步（有效batch 64），消除SGD小batch梯度噪声导致的mAP锯齿。
+            // round(64/batch). bs8 -> 8 batches per step (effective batch 64), removing mAP jaggedness from
+            // SGD small-batch gradient noise. / bs8八批合一步
             int accumulateSteps = Math.Max(1, (int)Math.Round(64.0 / Math.Max(1, config.BatchSize)));
-            _accumulateFull = accumulateSteps;   // [Add 2026-11-09] 提升到实例字段供TrainEpoch的warmup用
+            _accumulateFull = accumulateSteps;   // [Add 2026-11-09] promoted to instance field for TrainEpoch warmup / 提升到实例字段
             AMPWrapper amp = new AMPWrapper(yolo, optimizer, precision: config.Dtype, gradClipNorm: 10.0f, accumulate: accumulateSteps);
             EarlyStopping stopper = new EarlyStopping(config.Patience);
             string weightsPath = Path.Combine(config.OutputPath, "weights");
@@ -314,11 +319,11 @@ namespace YoloSharp.Models
             for (int epoch = 1; epoch <= config.Epochs; epoch++)
             {
                 // [Fix 2026-11-02] Stop check at epoch boundary: honor Config.StopRequested so the
-                // editor's "停止训练" actually stops (the callback existed but was never polled —
+                // editor's "stop training" (停止训练) actually stops (the callback existed but was never polled —
                 // observed a run ignoring stop from epoch 91 to 118+). Break BEFORE starting a new
                 // epoch: last.bin/best.bin from completed epochs are preserved as-is.
-                // epoch边界检查停止：之前回调存在但从未被轮询——停止被无视。
-                // 在开启新epoch前break，已完成轮的last.bin/best.bin原样保留。
+                // Epoch-boundary stop check: the callback existed but was never polled — stops were ignored.
+                // Break before a new epoch; the completed epoch's last.bin/best.bin are preserved. / epoch边界检查停止
                 try
                 {
                     if (config.StopRequested != null && config.StopRequested())
@@ -360,8 +365,8 @@ namespace YoloSharp.Models
                 // best.bin + freeze the early-stop patience counter (observed: best stuck at epoch 39
                 // with R=0.037 while epoch 77 reached R=0.78/mAP50=0.68). A candidate must recall at
                 // least 10% of ground truth before it may compete for best / reset patience.
-                // 召回守门：病态轮(P高R极低)在小验证集上mAP50-95偶发虚高会劫持best与早停计数，
-                // 要求R>=0.1才有资格竞争best/重置patience。
+                // Recall gate: pathological epochs (high P, very low R) can inflate mAP50-95 on small val sets
+                // and hijack best/early-stop counting; require R>=0.1 to compete for best / patience reset. / 召回守门
                 bool recallHealthy = metrics.Length > 1 && metrics[1] >= 0.1f;
                 float effectiveFitness = recallHealthy ? fitness : float.NegativeInfinity;
 
@@ -374,8 +379,9 @@ namespace YoloSharp.Models
                     // raw training weights by RestoreModelState — so best.onnx carried training weights
                     // while best.bin carried EMA weights, and deployment scores dropped (observed 0.77
                     // vs 0.9+ for the same checkpoints). Apply EMA, export, then restore again.
-                    // 部署onnx必须导EMA权重（与Val算分一致的权重）：先应用EMA→导出→再恢复训练权重，
-                    // 否则best.onnx=训练权重而best.bin=EMA权重，部署分数偏低。
+                    // Deployment ONNX must export EMA weights (what Val scores with): apply EMA -> export ->
+                    // restore training weights, else best.onnx = training weights vs best.bin = EMA, and
+                    // deployment scores run low. / 部署onnx必须导EMA权重
                     ema.ApplyTo(yolo);
                     ExportOnnx(Path.Combine(weightsPath, "best.onnx"));   // deployment format produced in sync (directly loadable by OV/TRT) / 部署格式同步产出（OV/TRT可直接加载）
                     RestoreModelState(yolo, trainingBackup);
@@ -397,8 +403,9 @@ namespace YoloSharp.Models
                 // caching-allocator fragmentation, making epochs progressively slower (observed
                 // 147s → 273s by epoch 5). Force collection + empty cache each epoch to keep
                 // per-epoch time flat.
-                // 每轮末清理：Val的NMS/指标张量靠GC终结器释放原生内存，逐轮累积导致越训越慢
-                //（实测147s→273s）。强制回收使每轮耗时保持平稳（TorchSharp 0.105无empty_cache API）。
+                // End-of-epoch cleanup: Val's NMS/metric tensors rely on GC finalizers for native memory;
+                // per-epoch accumulation slows training (measured 147s->273s). Forced collection keeps epoch time
+                // flat (TorchSharp 0.105 has no empty_cache API). / 每轮末清理
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
                 GC.Collect();
@@ -410,8 +417,8 @@ namespace YoloSharp.Models
                 // code drew only once after training finished — users watching progress mid-train
                 // kept seeing the stale/missing chart and concluded fixes "did nothing". Cheap
                 // (a few ms) since the CSV is tiny.
-                // 每轮重绘results.png（对齐python）：旧代码只在训练结束后画一次，
-                // 训练中查看永远是旧图/无图——像"修复无效"。
+                // Redraw results.png every epoch (aligned with python): old code drew once at the end —
+                // during training you saw a stale/missing plot, looking like "fixes have no effect". / 每轮重绘results.png
                 try { DrawCurve(); } catch { }
             }
             DrawCurve();
@@ -492,7 +499,7 @@ namespace YoloSharp.Models
                     // generator emits fractional positions that render as repeated "1 1 1 1…"
                     // labels (observed 8×"1" at epoch 2). Build integer tick positions manually —
                     // ScottPlot 5.1.57 has no IntegerTicks switch.
-                    // x轴手动整数刻度：早期少量epoch时自动刻度显示成重复的"1"。
+                    // Manual integer ticks on the x-axis: with few early epochs the auto ticks showed repeated "1"s. / x轴手动整数刻度
                     try
                     {
                         int epMax = (int)Math.Ceiling(x.Count > 0 ? x.Max() : 1);
@@ -525,21 +532,22 @@ namespace YoloSharp.Models
                 // [Add 2026-11-05] batch-timing watchdog: bs16 on ≤8GB VRAM spills to shared memory
                 // (observed 5.3s/batch vs 1.1s at bs8). Warn once from real measurements instead of
                 // probing device memory (API unavailable in TorchSharp 0.105).
-                // 批时长看门狗：bs16在8GB卡显存换页(5.3s/批vs bs8的1.1s)——实测提示。
+                // Batch-time watchdog: bs16 pages VRAM on 8GB cards (5.3s/batch vs 1.1s at bs8) — measured hint. / 批时长看门狗
                 var batchWatch = System.Diagnostics.Stopwatch.StartNew();
                 double batchMsSum = 0; int batchMsN = 0; bool warnedSpill = false;
                 foreach (Dictionary<string, torch.Tensor> data in pbar)
                 {
-                    // [Fix 2026-11-02] Batch-level stop check: abort mid-epoch so "停止训练" takes
+                    // [Fix 2026-11-02] Batch-level stop check: abort mid-epoch so "stop training" (停止训练) takes
                     // effect within one batch (~seconds) instead of after the whole epoch. Partial
                     // epoch progress is discarded; last.bin/best.bin from completed epochs remain.
-                    // batch级停止检查：点停后一个batch内（秒级）生效，不再等整个epoch跑完。
+                    // Batch-level stop check: takes effect within one batch (seconds) after clicking stop, instead of
+            // waiting for the whole epoch. / batch级停止检查
                     try
                     {
                         if (config.StopRequested != null && config.StopRequested())
                         {
                             Console.WriteLine("[Txm] Training stopped by user request mid-epoch (epoch " + epoch + ", batch " + i + ").");
-                            return new float[0];   // 空数组=中途停止信号：主循环跳过Val/保存直接break
+                            return new float[0];   // empty array = mid-epoch stop signal: main loop skips Val/save and breaks / 空数组=中途停止信号
                         }
                     }
                     catch { }
@@ -555,8 +563,9 @@ namespace YoloSharp.Models
                         //  ③ accumulate window interp: 1 → accumulateSteps progressively — early epochs
                         //     update more often (effective batch grows into 64), matching python's
                         //     `accumulate = max(1, interp(ni, xi, [1, nbs/bs]).round())`.
-                        // 三件套对齐python：①bias组按引用识别(位置猜是weight组,预热从未生效)
-                        // ②momentum 0.8→0.937预热(旧版恒0.937放大早期噪声尖峰) ③累积窗口1→n渐进。
+                        // Trio aligned with python: (1) bias group by reference (position guess picked weight;
+                        // warmup never worked) (2) momentum 0.8->0.937 warmup (constant 0.937 amplified early
+                        // noise) (3) accumulation window 1->n gradual. / 三件套对齐python
                         long ni = i + nb * (epoch - 1);
                         if (ni <= nw)
                         {
@@ -589,8 +598,8 @@ namespace YoloSharp.Models
                         {
                             warnedSpill = true;
                             Console.WriteLine();
-                            Console.WriteLine("[Txm] 提示: 平均每批 " + (batchMsSum / batchMsN / 1000.0).ToString("0.0") + "s（>3s）——大概率显存溢出换页。");
-                            Console.WriteLine("[Txm] 建议将 Batch Size 降为 8 再训（实测 v9-s: bs8=54s/轮 vs bs16=220s/轮）。");
+                            Console.WriteLine("[Txm] Note: avg batch " + (batchMsSum / batchMsN / 1000.0).ToString("0.0") + "s (>3s) — likely VRAM spilling / 提示:平均每批超大——大概率显存溢出。");
+                            Console.WriteLine("[Txm] Suggest Batch Size 8 (measured v9-s: bs8=54s/epoch vs bs16=220s/epoch). / 建议Batch Size降为8再训");
                         }
 
                         if (ema != null)
@@ -742,14 +751,27 @@ namespace YoloSharp.Models
             }
         }
 
-        /// <summary>导出ONNX部署格式（失败不阻断训练——只告警）</summary>
+        /// <summary>Export ONNX deployment format (failure does not block training — warning only) / 导出ONNX部署格式</summary>
         /// <summary>Export current weights to ONNX beside best.bin (deployment format; failure does not block training) / 导出当前权重为ONNX（失败不阻断训练）</summary>
         internal void ExportOnnx(string path)
         {
             try
             {
                 yolo.eval();
-                OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, config.ImageSize, config.ImageSize }, path);
+                // [Fix 2026-11-10] Dynamic-batch export (input batch dim=-1) — TRT profiles 1~128, OV
+                // consumes N frames without reshape; single-frame semantics unchanged. / 动态batch导出
+                OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, config.ImageSize, config.ImageSize }, path, dynamicBatch: true);   // [Fix 2026-11-11 20:00] Batch route re-enabled (user decision 19:55, max=128). Dynamic input (-1) breaks Sdcb.OV input.Shape reads (partial_shape.cpp:266) — OV dynamic batch is handled at runtime via OnnxPredictCore.LoadOpenVino reshape instead. / batch路线重启max=128
+                // [Add 2026-11-10 19:45] TRT batch variant (static batch=8) — TensorRtSharp getInput-family
+                // P/Invokes segfault (dims cannot change on the TRT network side), so a static-batch graph is
+                // the only viable TRT batch path. Emits <name>_deploy_b8.onnx: convert to engine, PredictBatch
+                // pads to 8 frames per execute. / TRT批量版静态batch=8
+                try
+                {
+                    string b8 = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path),
+                        System.IO.Path.GetFileNameWithoutExtension(path) + "_deploy_b8.onnx");
+                    OnnxExport.OnnxExporter.Export(yolo, new long[] { 8, 3, config.ImageSize, config.ImageSize }, b8, dynamicBatch: false);
+                }
+                catch { /* b8 failure does not affect the main onnx / b8版失败不影响主onnx */ }
                 Console.WriteLine($"ONNX exported: {path}");
             }
             catch (Exception ex)

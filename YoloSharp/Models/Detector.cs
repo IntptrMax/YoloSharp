@@ -22,8 +22,8 @@ namespace YoloSharp.Models
                 // discarded the UI's size choice: a "s" training built an n skeleton (first conv 16ch
                 // vs pretrained 32ch), 504/741 keys mismatched, A2C2f cores stayed random → garbage
                 // bottom-edge boxes + scores stuck at ~0.81.
-                // 传递YoloSize——默认参数(n)把UI选的s档丢了：s训练建成n骨架，504键错配，
-                // A2C2f全随机→图像下方16个假框+分数0.81。
+                // Pass YoloSize through — the default (n) dropped the UI-selected s tier: s training built an
+                // n skeleton, 504-key mismatch, A2C2f all-random -> 16 fake boxes at image bottom @0.81 scores. / 传递YoloSize
                 YoloType.Yolov12 => new Yolo.Yolov12(this.config.NumberClass, end2end: config.End2End, yoloSize: this.config.YoloSize, device: this.config.Device, dtype: this.config.Dtype),
                 _ => throw new NotImplementedException(),
             };
@@ -32,7 +32,7 @@ namespace YoloSharp.Models
             // experiment targeted DualDDetect (wrong reference; that's converted.pt's inference
             // checkpoint, not the training yaml). Stride must cover all 6 feature maps
             // (aux P3-P5 + main P3-P5).
-            // v9训练yaml用v8式Detect单头六组+单TAL损失；stride覆盖6层特征图。
+            // v9 training yaml uses a v8-style single Detect head with six groups + single TAL loss; strides cover 6 feature maps. / v9训练yaml用v8式Detect单头六组
             int[] lossStride = config.YoloType == YoloType.Yolov9 ? new int[] { 8, 16, 32, 8, 16, 32 } : null;
             loss = config.End2End
                 ? new Loss.E2EDetectLoss(this.config.NumberClass, device: this.config.Device, dtype: this.config.Dtype)
@@ -48,12 +48,13 @@ namespace YoloSharp.Models
                 // RectangleImage pad_l=(w-new_w)/2, pad_u=(h-new_h)/2). The 10-27 version padded to bottom-right
                 // (0,padW,0,padH): for extreme aspect-ratio images (groove bar 1190x256) the content band sits
                 // ~250px off vertically vs training distribution → confidence collapse → 0 detections.
-                // 推理预处理与训练/val对齐（等比缩放letterbox）。
-                // [Fix 2026-10-29] 填充必须居中才与训练/val管线一致（Augment.LetterboxImage/RectangleImage
-                // 的pad_l=(w-new_w)/2、pad_u=(h-new_h)/2）。10-27版按右下角填充(0,padW,0,padH)：
-                // 宽高比悬殊图（沟槽棒1190x256）内容带与训练分布垂直错位约250px→置信度崩塌→0目标。
+                // Inference preprocessing aligned with training/val (aspect-preserving letterbox). / 推理预处理与训练对齐
+                // [Fix 2026-10-29] Padding must be centered to match the training/val pipeline (Augment.LetterboxImage/
+                // RectangleImage use pad_l=(w-new_w)/2, pad_u=(h-new_h)/2). The 10-27 version padded bottom-right
+                // (0,padW,0,padH): extreme-aspect images (groove bar 1190x256) shifted content ~250px off the
+                // training distribution -> confidence collapse -> 0 detections. / 填充必须居中才与训练管线一致
                 orgImage = orgImage.to(config.Dtype, config.Device);
-                // 兼容CHW(3维)与NCHW(4维)入参：read_image产物是CHW——统一按最后两维取H/W
+                // Accepts both CHW (3-dim) and NCHW (4-dim) inputs: read_image yields CHW — take H/W from the last two dims uniformly / 兼容CHW与NCHW入参
                 int dimC = (int)orgImage.dim();
                 int orgH = (int)orgImage.shape[dimC - 2];
                 int orgW = (int)orgImage.shape[dimC - 1];
@@ -88,14 +89,14 @@ namespace YoloSharp.Models
                     float score = nms_results[i][4].ToSingle();
                     int sort = nms_results[i][5].ToInt32();
 
-                    // [Fix] 坐标反映射：网络输入(居中letterbox)→原图坐标系——先减去居中偏移(padL/padU)再除以ratio还原尺度
+                    // [Fix] Coordinate back-mapping: network input (centered letterbox) -> original image coords — subtract centered offsets (padL/padU) first, then divide by ratio / 坐标反映射
                     // [Fix] Coordinate back-mapping: network input (centered letterbox) → original image coords —
                     // subtract the centered offset (padL/padU) first, then divide by ratio to restore scale.
                     // [Fix 2026-11-08] Pad-region filter (python scale_boxes semantics): the gray border
                     // fires phantom high scores (unseen in training); drop boxes whose center falls
                     // outside the valid content area instead of emitting them below/beside the image.
-                    // pad区框过滤：灰边高分框回映射后落在原图区域外——按框中心丢弃。
-                    float cX = x + rw / 2f, cY = y + rh / 2f;   // 输入域中心
+                    // Pad-region box filter: gray-border high-score boxes fall outside the original image after mapping — drop by box center. / pad区框过滤
+                    float cX = x + rw / 2f, cY = y + rh / 2f;   // input-domain center / 输入域中心
                     if (cX < padL || cY < padU || cX > padL + rsW || cY > padU + rsH) continue;
                     results.Add(new YoloResult()
                     {
@@ -140,7 +141,7 @@ namespace YoloSharp.Models
                         // [Fix 2026-11-05] Val conf 0.001 (python val.py): early epochs score low and
                         // the old 0.1 threshold filtered everything → mAP50 stayed 0.000 for the
                         // first ~9 epochs (looked stalled). python's 0.001 sees them from epoch 1.
-                        // Val阈值对齐python(0.001)：早期低分全被0.1滤掉→前9轮mAP恒0。
+                        // Val threshold aligned with python (0.001): early low scores were all filtered by 0.1 -> mAP stuck at 0 for the first 9 epochs. / Val阈值对齐python
                         List<torch.Tensor> nms_results = Ops.non_max_suppression(inference["boxes"], nc: config.NumberClass, conf_thres: 0.001f, iou_thres: 0.7f, end2end: config.End2End).output;
                         float w = data["images"].shape[data["images"].shape.Length - 1];
                         float h = data["images"].shape[data["images"].shape.Length - 2];

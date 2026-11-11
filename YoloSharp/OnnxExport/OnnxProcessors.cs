@@ -1,7 +1,7 @@
 ﻿// Module processors: each YoloSharp module type → ONNX op sequence.
-// 模块处理器：每个YoloSharp模块类型→ONNX算子序列
+// Module processors: each YoloSharp module type -> an ONNX operator sequence / 模块处理器
 // Reads module fields via reflection (conv/bn/cv1/m...), read-only; BN fused into Conv weights (inference-equivalent).
-// 反射读模块字段（conv/bn/cv1/m...），只读不改；BN融合进Conv权重（推理等价）
+// Reads module fields (conv/bn/cv1/m...) via reflection, read-only; BN fused into Conv weights (inference-equivalent) / 反射只读+BN融合
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,7 +17,7 @@ namespace YoloSharp.OnnxExport
 {
     internal static class Processors
     {
-        // ── basic building blocks / 基础件 ──
+        // -- basic building blocks / 基础件 --
 
         /// <summary>Conv module (conv+bn+act) → fused Conv node. act supports only SiLU/Identity (v8/v9/v11/v12 defaults) / act仅支持SiLU/Identity（全家默认）</summary>
         public static string Conv(ExportContext c, Convs.Conv mod, string input, string hint)
@@ -29,7 +29,7 @@ namespace YoloSharp.OnnxExport
                 pads: new long[] { (long)mod.conv.padding[0], (long)mod.conv.padding[1], (long)mod.conv.padding[0], (long)mod.conv.padding[1] },
                 dilations: new long[] { (long)mod.conv.dilation[0], (long)mod.conv.dilation[1] },
                 group: (long)mod.conv.groups, hint: hint);
-            // act dispatch: SiLU expanded / ReLU→Relu node / Identity passthrough / act分派
+            // act dispatch: SiLU expanded / ReLU->Relu node / Identity passthrough / act分派
             var act = mod.get_field("act");
             var an = act?.GetType().Name;
             if (an == "SiLU") return Ops.SiLU(c, outN);
@@ -39,7 +39,7 @@ namespace YoloSharp.OnnxExport
                 c.Node("Relu", rN, outN);
                 return rN;
             }
-            return outN;   // Identity / other linear / Identity（其他线性）
+            return outN;   // Identity / other linear / Identity其他线性
         }
 
         /// <summary>Conv+BN weight fusion (inference-equivalent): w' = w*γ/√(var+ε); b' = (b-μ)*γ/√(var+ε)+β / Conv+BN权重融合（推理等价）</summary>
@@ -53,7 +53,7 @@ namespace YoloSharp.OnnxExport
             var var_ = bn.running_var.detach().to_type(ScalarType.Float32);
             float eps = (float)bn.eps;
             var denom = (var_ + eps).sqrt();
-            var scale = (g / denom).reshape(-1, 1, 1, 1);   // scale by w's out-channel (dim 0) / 按w的out通道(dim0)缩放
+            var scale = (g / denom).reshape(-1, 1, 1, 1);   // scale by w's out-channel (dim 0) / 按w输出通道缩放通道(dim0)缩放
             var wF = w * scale;
             var b0 = conv.bias is null ? torch.zeros_like(mu) : conv.bias.detach().to_type(ScalarType.Float32);
             var bF = (b0 - mu) * g / denom + beta;
@@ -75,12 +75,12 @@ namespace YoloSharp.OnnxExport
         public static string C2f(ExportContext c, Block.C2f mod, string input)
         {
             // Source semantics: y=chunk2(cv1)→loop y.Add(bottleneck(y.Last))→cat(y)→cv2
-            // 源码语义：y=chunk2(cv1)→循环y.Add(bottleneck(y.Last))→cat(y)→cv2
-            // Segment count = 2+n, each channel = c (hidden channel field c, not out/2) / 段数=2+n，通道=各段c
+            // Source semantics: y=chunk2(cv1) -> loop y.Add(bottleneck(y.Last)) -> cat(y) -> cv2 / 源码语义
+            // Segment count = 2+n, each channel = c (hidden channel field c, not out/2) / 段数2+n通道各段c
             var cv1 = (Convs.Conv)mod.get_field("cv1");
             var cv2 = (Convs.Conv)mod.get_field("cv2");
             var m = EnumModules(mod.get_field("m")).Cast<Block.Bottleneck>();
-            int hidden = (int)cv1.conv.out_channels / 2;   // = c (half of 2*c output) / =c（2*c的输出对半）
+            int hidden = (int)cv1.conv.out_channels / 2;   // = c (half of 2*c output) / 即c
             var cv1Out = Conv(c, cv1, input, "c2f1");
             var sp = Ops.Split(c, cv1Out, new long[] { hidden, hidden });
             var y = new List<string> { sp[0], sp[1] };
@@ -92,13 +92,13 @@ namespace YoloSharp.OnnxExport
         /// <summary>SPPF: cv1(Identity act)→MaxPool×n serial→cat(x,p1..pn)→cv2</summary>
         public static string SPPF(ExportContext c, Block.SPPF mod, string input)
         {
-            // cv1 act=Identity: handled separately (no SiLU) / cv1 act=Identity：单独处理（不SiLU）
+            // cv1 act=Identity: handled separately (no SiLU) / cv1的Identity单独处理
             var cv1 = (Convs.Conv)mod.get_field("cv1");
             var (w1, b1) = FuseConvBn(cv1.conv, cv1.bn);
             var cv1Out = Ops.Conv(c, input, c.Temp("sppf1_w"), w1, b1,
                 new long[] { 1, 1 }, new long[] { 1, 1 }, new long[] { 0, 0, 0, 0 }, new long[] { 1, 1 }, 1, "sppf1");
             // SPPF: a single MaxPool2d(k) used n times serially — n = cv2.in_channels/cv1.out_channels - 1
-            // SPPF：单个MaxPool2d(k)串行用n次——n = cv2.in/cv1.out - 1
+            // SPPF: one MaxPool2d(k) applied serially n times — n = cv2.in/cv1.out - 1 / SPPF串行池化
             var poolField = typeof(Block.SPPF).GetField("m",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             var pool = (MaxPool2d)poolField.GetValue(mod);
@@ -121,29 +121,33 @@ namespace YoloSharp.OnnxExport
 
         /// <summary>Detect head: box_head/cls_head per-level Conv(1x1)→view(bs,C,-1)→cat(3 levels)
         /// Emits two graph outputs: boxes(bs,4*reg_max,8400) scores(bs,nc,8400) — NMS left to runtime
-        /// 输出两个graph输出：boxes/scores——NMS留运行时</summary>
+        /// Emits two graph outputs: boxes/scores — NMS left to runtime / 输出boxes与scores</summary>
         public static void Detect(ExportContext c, Head.Detect mod, string[] feats, Dictionary<string, string> outputs, int headIndexBase = 0)
         {
             var allBox = ((TorchSharp.Modules.ModuleList<TorchSharp.Modules.Sequential>)mod.get_field("cv2")).ToArray();
             var allCls = ((TorchSharp.Modules.ModuleList<TorchSharp.Modules.Sequential>)mod.get_field("cv3")).ToArray();
             // v9 (DetectV9): cv2/cv3 have 6 groups, inference uses indices 3..5 (main group) — headIndexBase=3
-            // v9(DetectV9)：cv2/cv3共6组，推理用索引3..5（main组）——headIndexBase=3
+            // v9 (DetectV9): cv2/cv3 have 6 groups; inference uses indices 3..5 (main group) — headIndexBase=3 / v9六组取main组
             var boxHeads = allBox.Skip(headIndexBase).ToArray();
             var clsHeads = allCls.Skip(headIndexBase).ToArray();
             int nl = feats.Length;
-            long bs = 1;
+            // [Fix 2026-11-11 19:58] Reshape bs dim uses -1 (dynamic) — batch propagates from the input:
+            // with static input TRT/OV infer the real batch (equivalent to the old hardcode); with dynamic
+            // input the [N,C,A] frame-contiguous layout is preserved (the old bs=1 hardcode folded dynamic
+            // batch into the anchor dim, mis-slicing frames — trt4test measured 38/19 fluctuation) / bs维用-1动态
+            long bs = -1;
             var boxViews = new List<string>();
             var clsViews = new List<string>();
             for (int i = 0; i < nl; i++)
             {
-                // box branch head unit = Sequential(Conv,Conv,Conv2d) — emitted via SequentialDown / box分支头单元经SequentialDown发射
+                // box branch head unit = Sequential(Conv,Conv,Conv2d) — emitted via SequentialDown / box分支头单元单元经SequentialDown发射
                 var bOut = HeadConv(c, boxHeads[i], feats[i], $"bx{i}");
                 var cOut = HeadConv(c, clsHeads[i], feats[i], $"cs{i}");
-                // view(bs, C, -1): NCHW→(bs,C,H*W) — via Reshape / 用Reshape
+                // view(bs, C, -1): NCHW -> (bs,C,H*W) — via Reshape / NCHW转三维
                 long bC = (long)GetHeadOutChannels(boxHeads[i]);
                 long cC = (long)GetHeadOutChannels(clsHeads[i]);
-                boxViews.Add(Ops.Reshape(c, bOut, new long[] { bs, bC, -1 }));
-                clsViews.Add(Ops.Reshape(c, cOut, new long[] { bs, cC, -1 }));
+                boxViews.Add(Ops.Reshape(c, bOut, new long[] { bs, bC, HWOf(c, bOut) }));
+                clsViews.Add(Ops.Reshape(c, cOut, new long[] { bs, cC, HWOf(c, cOut) }));
             }
             outputs["boxes"] = Ops.Concat(c, boxViews.ToArray(), 2);
             // [Fix 2026-11-02] Apply sigmoid to exported scores (aligns with libtorch inference
@@ -151,16 +155,24 @@ namespace YoloSharp.OnnxExport
             // exported before, so every runtime consumer (OnnxPredictCore/TxmLabeling/OV/TRT) read
             // logits as probabilities and deployment scores were systematically deflated
             // (observed 0.78 vs 0.9+ on the same weights).
-            // 导出scores加sigmoid（对齐libtorch推理链的scores.sigmoid()）：此前导出的是cls原始
-            // logits，运行时侧全按概率解读导致部署分数系统性偏低。
+            // Export scores with sigmoid (aligns with the libtorch chain's scores.sigmoid()): the previous
+            // export emitted raw cls logits, which runtimes read as probabilities, deflating deployment scores. / scores加sigmoid对齐推理链
             outputs["scores"] = Ops.Sigmoid(c, Ops.Concat(c, clsViews.ToArray(), 2));
+        }
+
+        /// <summary>Feature-map H*W (from NCHW shape propagation dims [2]*[3]; falls back to -1 when unknown) — the Detect-head Reshape anchor dim / 特征图H*W</summary>
+        static long HWOf(ExportContext c, string tensor)
+        {
+            var sh = c.ShapeOf(tensor);
+            if (sh != null && sh.Length == 4 && sh[2] > 0 && sh[3] > 0) return sh[2] * sh[3];
+            return -1;   // fall back to -1 when shape unknown / 未知时退-1
         }
 
         /// <summary>Sequential in head (Conv or plain Conv2d) → single Conv node (with optional BN fusion) / head里的Sequential→单Conv节点（含可选BN融合）</summary>
         static string HeadConv(ExportContext c, torch.nn.Module mod, string input, string hint)
         {
             // Detect head unit = Sequential(Conv,Conv,Conv2d) — emit per child: Conv with fusion, last layer plain Conv2d
-            // Detect头单元=Sequential(Conv,Conv,Conv2d)——逐子级Emit：Conv走融合、末层纯Conv2d
+            // Detect head unit = Sequential(Conv,Conv,Conv2d) — emit per child: Conv with fusion, last plain Conv2d / Detect头单元逐子级Emit
             return Processors.SequentialDown(c, mod, input);
         }
 
@@ -185,13 +197,13 @@ namespace YoloSharp.OnnxExport
 
         static long GetHeadOutChannels(torch.nn.Module seq)
         {
-            // out_channels of the last child (plain Conv2d) / 末子级（纯Conv2d）的out_channels
+            // out_channels of the last child (plain Conv2d) / 末子级的out_channels
             foreach (var (name, child) in seq.named_children().Reverse())
                 if (child is Conv2d cv) return (long)cv.out_channels;
             throw new NotSupportedException("head unit last child is not Conv2d / head单元末级非Conv2d");
         }
 
-        // ── other backbone modules / 其余骨干模块 ──
+        // -- other backbone modules / 其余骨干模块 --
 
         /// <summary>C2: cv1→chunk2→Bottleneck×n on a→cat(a,y)→cv2</summary>
         public static string C2(ExportContext c, Block.C2 mod, string input)
@@ -226,7 +238,7 @@ namespace YoloSharp.OnnxExport
         public static string Upsample(ExportContext c, TorchSharp.Modules.Upsample mod, string input)
         {
             // v8-family Upsample is fixed scale_factor=2x2 nearest (hardcoded in Yolo.cs) — export as 2x2
-            // v8系网络Upsample固定scale_factor=2x2 nearest（Yolo.cs构建处写死）——按2x2导出
+            // v8-family Upsample is fixed scale_factor=2x2 nearest (hardcoded where Yolo.cs builds it) — exported as 2x2 / 按2x2导出
             return Ops.Resize(c, input, 2.0, 2.0, "nearest");
         }
 
@@ -261,7 +273,7 @@ namespace YoloSharp.OnnxExport
         {
             Detect(c, mod, feats, outputs);
             var cv4 = ((TorchSharp.Modules.ModuleList<TorchSharp.Modules.Sequential>)mod.get_field("cv4")).ToArray();
-            int ne = 1;   // ne = angle channel count / ne=角度通道
+            int ne = 1;   // ne = angle channel count / 角度通道数
             var neF = typeof(Head.Obb).GetField("ne", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             if (neF != null) ne = (int)Convert.ChangeType(neF.GetValue(mod), typeof(int));
             long bs = 1;
@@ -289,11 +301,11 @@ namespace YoloSharp.OnnxExport
         {
             Detect(c, mod, feats, outputs);   // boxes/scores
 
-            // cv4 mask coefficients (same structure as cv2/cv3: Conv,Conv,Conv1x1) / cv4 mask系数（结构与cv2/cv3同）
+            // cv4 mask coefficients (same structure as cv2/cv3: Conv,Conv,Conv1x1) / cv4 mask系数结构同cv2cv3同）
             var cv4 = ((TorchSharp.Modules.ModuleList<TorchSharp.Modules.Sequential>)mod.get_field("cv4")).ToArray();
             int nl = feats.Length;
             long bs = 1;
-            int nm = 32;   // nm default 32 (mask channels) / nm默认32（mask通道）
+            int nm = 32;   // nm default 32 (mask channels) / mask通道默认32
             var nmF = typeof(Head.Segment).GetField("nm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             if (nmF != null) nm = (int)Convert.ChangeType(nmF.GetValue(mod), typeof(int));
             var maskViews = new List<string>();
@@ -305,7 +317,7 @@ namespace YoloSharp.OnnxExport
             }
             outputs["masks"] = Ops.Concat(c, maskViews.ToArray(), 2);
 
-            // proto: applied on feats[0] (P3 level), output (mask count, H/4, W/4) / proto作用于feats[0]（P3层）
+            // proto: applied on feats[0] (P3 level), output (mask count, H/4, W/4) / proto作用于P3层3层）
             var proto = mod.get_field("proto");
             outputs["proto"] = SequentialDown(c, proto, feats[0]);
         }
@@ -419,7 +431,7 @@ namespace YoloSharp.OnnxExport
             if (sh == null) throw new NotSupportedException("Attention input shape unknown — upstream layer missing shape propagation / 前置层缺shape传播");
             long B = sh[0], C = sh[1], H = sh[2], W = sh[3], N = H * W;
 
-            var qkv = Conv(c, qkvConv, input, "qkv");           // actually (B, h*(2kd+hd), H, W) / 实为(B, h*(2kd+hd), H, W)
+            var qkv = Conv(c, qkvConv, input, "qkv");           // actually (B, h*(2kd+hd), H, W) / 实为该shape, h*(2kd+hd), H, W)
             var flat = Ops.Reshape(c, qkv, new long[] { B, num_heads, 2 * key_dim + head_dim, N });
             var parts = Ops.Split(c, flat, new long[] { key_dim, key_dim, head_dim }, axis: 2);
             var q = parts[0]; var k = parts[1]; var v = parts[2];
@@ -468,9 +480,9 @@ namespace YoloSharp.OnnxExport
             }
             var cat = Ops.Concat(c, y.ToArray(), 1);
             var o2 = Conv(c, cv2, cat, "a22");
-            // gamma: channel scale (Parameter) — read value and emit Mul / gamma：通道缩放——读值生成Mul
+            // gamma: channel scale (Parameter) — read value and emit Mul / gamma通道缩放读值生成Mul
             var gammaF = typeof(Block.A2C2f).GetField("gamma", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            var gamma = gammaF?.GetValue(mod) as torch.Tensor;   // Parameter inherits Tensor / Parameter继承Tensor
+            var gamma = gammaF?.GetValue(mod) as torch.Tensor;   // Parameter inherits Tensor / Parameter继承Tensorr继承Tensor
             if (!ReferenceEquals(gamma, null))
             {
                 var gName = c.AddInitializer(c.Temp("gm"), gamma);

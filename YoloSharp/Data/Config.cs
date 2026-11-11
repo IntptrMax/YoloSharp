@@ -115,8 +115,10 @@ namespace Data
         public int Patience { get; set; } = 0;   // [Fix 2026-11-01] 0=disable early stopping (train all epochs) / 0=禁用早停训练满轮数
 
         /// <summary>
-        /// [Txm新增] 外部停止请求回调：epoch循环每轮开头检查，true=用户请求停止（保留best.bin退出）。
-        /// null=不可外部停止（原上游行为）。
+        /// [Txm addition] External stop-request callback: checked at the start of each epoch loop;
+        /// true = user requested stop (keep best.bin and exit). null = cannot be stopped externally
+        /// (original upstream behavior). / [Txm新增] 外部停止请求回调：epoch循环每轮开头检查，
+        /// true=用户请求停止（保留best.bin退出）。null=不可外部停止（原上游行为）。
         /// </summary>
         public Func<bool> StopRequested { get; set; } = null;
 

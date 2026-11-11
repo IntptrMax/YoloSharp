@@ -1,7 +1,7 @@
 ﻿// Export main driver: Yolov8-family network (ModuleList+Concat+Detect interpreter structure) → ONNX
-// 导出主驱动：Yolov8系网络（ModuleList+Concat+Detect解释器结构）→ONNX
+// Main export driver: Yolov8-family network (ModuleList+Concat+Detect interpreter structure) -> ONNX / 导出主驱动
 // Walks the model list item by item (isomorphic to Yolo.forward); Concat replays skip connections via outputIndexs/concatIndex
-// 遍历model列表逐项下钻（与Yolo.forward同构），Concat用outputIndexs/concatIndex重放拼接关系
+// Iterates the model list drilling down per item (isomorphic to Yolo.forward); Concat replays concat relations via outputIndexs/concatIndex / 遍历model列表逐项下钻
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,7 +17,7 @@ namespace YoloSharp.OnnxExport
 {
     /// <summary>
     /// YOLO → ONNX exporter (NMS post-process left to runtime — same boundary as ultralytics export).
-    /// YOLO→ONNX导出器（NMS后处理留运行时——与ultralytics导出同边界）
+    /// YOLO -> ONNX exporter (NMS post-processing left to runtime — same boundary as ultralytics export) / NMS后处理留运行时
     /// Usage / 用法: OnnxExporter.Export(yoloModule, (1,3,H,W), "out.onnx")
     /// </summary>
     public static class OnnxExporter
@@ -25,13 +25,28 @@ namespace YoloSharp.OnnxExport
         /// <summary>Export entry. yolo = Yolo.Yolov8 instance (with model list); dummyShape=(1,3,H,W), multiple of 32 / 导出入口；dummyShape需32倍数</summary>
         public static void Export(torch.nn.Module yolo, long[] dummyShape, string outputPath)
         {
+            Export(yolo, dummyShape, outputPath, dynamicBatch: false);
+        }
+
+        /// <summary>
+        /// [Add 2026-11-10] dynamicBatch=true: input batch dim declared as -1 (symbolic) — TRT parses a dynamic
+        /// input and the converter can configure an optimization profile (1~max dynamic batch in one execute);
+        /// OV natively supports N frames too. Output shapes keep static inferred values (batch=1 domain); OV
+        /// per-frame slicing is unaffected, and TRT dynamic engine outputs are set at runtime by
+        /// context.setInputShape(N). / 输入batch维声明为-1
+        /// </summary>
+        public static void Export(torch.nn.Module yolo, long[] dummyShape, string outputPath, bool dynamicBatch)
+        {
             var c = new ExportContext();
             string input = "images";
-            c.Model.AddInput(new OnnxValueInfo { Name = input, Dims = dummyShape });
+            // [Add 2026-11-10] Dynamic batch: graph input declares batch=-1 (shape propagation still follows dummyShape — declaration only) / 图输入声明batch=-1
+            var declDims = new long[dummyShape.Length];
+            for (int i = 0; i < dummyShape.Length; i++) declDims[i] = dynamicBatch && i == 0 ? -1 : dummyShape[i];
+            c.Model.AddInput(new OnnxValueInfo { Name = input, Dims = declDims });
             c.SetShape(input, dummyShape);   // shape propagation starting point / shape传播起点
 
             // Walk isomorphic to Yolo.forward (model/outputIndexs/concatIndex are protected — via reflection)
-            // 与Yolo.forward同构的遍历（model/outputIndexs/concatIndex为protected——反射取）
+            // Isomorphic iteration to Yolo.forward (model/outputIndexs/concatIndex are protected — fetched via reflection) / 与Yolo.forward同构的遍历
             var model = (TorchSharp.Modules.ModuleList<torch.nn.Module>)GetField(yolo, "model");
             var outputIndexs = (int[])GetField(yolo, "outputIndexs");
             var concatIndex = (int[])GetField(yolo, "concatIndex");
@@ -42,7 +57,7 @@ namespace YoloSharp.OnnxExport
             var finalOutputs = new Dictionary<string, string>();
 
             // Yolov9 specialized forward replay (isomorphic to Yolov9.cs): aux branch layer-22 rewires to layer-8 output + DetectV9 six branches
-            // Yolov9特化forward重放（Yolov9.cs源码同构）：aux支路层22重接层8输出+DetectV9六分支
+            // Yolov9-specialized forward replay (isomorphic to Yolov9.cs source): aux branch layer-22 rewires to layer-8 output + DetectV9 six branches / Yolov9特化forward重放
             bool isV9 = yolo.GetType().DeclaringType?.Name == "Yolov9" || yolo.GetType().Name == "Yolov9";
             int[] v9DetectSrc = { 10, 9, 8, 5, 6, 7 };
             bool hasAuxFork = isV9;
@@ -66,7 +81,7 @@ namespace YoloSharp.OnnxExport
                     // P3-P5, stride 8/16/32 ×2). Export all six branches at headIndexBase 0 so the
                     // deployed graph matches training (A=16800). The old main-3-only export broke
                     // the two edge objects (aux-group-only coverage) after training succeeded.
-                    // 训练yaml是六组头全参与——六分支全导出（A=16800），与训练一致。
+                    // The training yaml has all six head groups participating — all six branches exported (A=16800), consistent with training. / 六分支全导出与训练一致
                     var src = v9DetectSrc.Select(idx => outputs[idx]).ToArray();
                     Processors.Detect(c, (Head.Detect)mod, src, finalOutputs, headIndexBase: 0);
                 }
@@ -83,11 +98,16 @@ namespace YoloSharp.OnnxExport
             }
 
             // Semantic output names: add Identity nodes to rename (avoid internal names like cat_302 — deployment backends bind tensors by name)
-            // 语义输出名：加Identity节点重命名（避免cat_302等内部名——部署后端按名绑定张量）
+            // Semantic output names: Identity nodes rename them (avoids internal names like cat_302 — deployment backends bind tensors by name) / 语义输出名加Identity重命名
             foreach (var kv in finalOutputs)
             {
                 string outName = "output_" + kv.Key;   // output_boxes/output_scores/output_masks/output_proto/output_kpts/output_angle/output_cls
                 c.Node("Identity", outName, kv.Value);
+                // [Fix 2026-11-11 -> Revert same day] Output Dims experiments: adding Dims declarations
+                // (-1 dynamic) triggers Sdcb.OV shape-inference crashes (partial_shape.cpp:266), while the
+                // original empty declaration (Dims=null) lets every backend infer on its own and works across
+                // OV dynamic / TRT b8. Lesson: output declarations are an OV minefield — empty = maximally
+                // compatible. Reverted to null. / 输出Dims保持空声明(全后端兼容)
                 c.Model.AddOutput(new OnnxValueInfo { Name = outName });
             }
             c.Model.Save(outputPath, "yolosharp");
@@ -121,7 +141,7 @@ namespace YoloSharp.OnnxExport
                 case Convs.RepConv rc: return Processors.RepConv(c, rc, input);
                 default:
                     // Unrecognized module: try drilling down as a plain Sequential chain (covers v11 C3k2 internals, v12 attention combos, etc.)
-                    // 未识别模块：尝试作为纯Sequential链下钻（覆盖v11的C3k2内部、v12注意力等组合场景）
+                    // Unrecognized module: try drilling down as a plain Sequential chain (covers v11 C3k2 internals, v12 attention combos etc.) / 未识别模块作Sequential下钻
                     return Processors.SequentialDown(c, mod, input);
             }
         }
@@ -166,7 +186,7 @@ namespace YoloSharp.OnnxExport
         internal static Yolo.Yolov8 GetYoloModule(object yoloTask)
         {
             // YoloTask.yolo (YoloBaseTaskModel derived instance) → .yolo (the network itself)
-            // YoloTask.yolo（YoloBaseTaskModel派生实例）→.yolo（网络本体）
+            // YoloTask.yolo (YoloBaseTaskModel-derived instance) -> .yolo (the network body) / 取网络本体
             var taskModel = GetField(yoloTask, "yolo");
             return (Yolo.Yolov8)GetField(taskModel, "yolo");
         }

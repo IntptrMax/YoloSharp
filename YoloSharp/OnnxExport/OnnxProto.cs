@@ -1,5 +1,5 @@
 ﻿// ONNX protobuf minimal writer (pure C#, zero dependency) — hand-written serialization subset per onnx.proto3
-// 纯C#零依赖的ONNX protobuf最小写入器——按onnx.proto3手写序列化子集
+// Minimal pure-C# zero-dependency ONNX protobuf writer — hand-written serialization subset per onnx.proto3 / 纯C#零依赖的ONNX protobuf最小写入器
 // Covers / 覆盖: ModelProto(ir_version/opset_import), GraphProto, NodeProto, TensorProto(initializer), ValueInfoProto
 // Design principle / 设计原则: write-only, only fields needed by the exporter; over-design forbidden / 只写不读、只覆盖导出所需字段，过度设计禁止
 using System;
@@ -25,7 +25,7 @@ namespace YoloSharp.OnnxExport
         public byte[] ToArray() => _buf.ToArray();
         public int Length => _buf.Count;
 
-        // ── basic wire primitives / 基础wire原语 ──
+        // -- basic wire primitives / 基础wire原语 --
         public void WriteVarint(ulong v)
         {
             while (v >= 0x80) { _buf.Add((byte)(v | 0x80)); v >>= 7; }

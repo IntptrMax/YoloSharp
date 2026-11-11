@@ -37,10 +37,10 @@ namespace YoloSharp.Models
 
         /// <summary>
         /// Fail-fast validation of the task x architecture support matrix.
-        /// YOLOv9 (GELAN) 官方支持矩阵（WongKinYiu/yolov9 + ultralytics docs）：
-        ///   Detection ✔（本C#实现已贡献）
-        ///   Segmentation/Classification：官方存在，本C#实现尚未贡献（报错注明，欢迎社区补充）
-        ///   Pose/OBB：官方就不存在这两个变体
+        /// YOLOv9 (GELAN) official support matrix (WongKinYiu/yolov9 + ultralytics docs):
+        ///   Detection: yes (this C# implementation contributed)
+        ///   Segmentation/Classification: exist officially, not yet contributed in C# (throws with note; community PRs welcome)
+        ///   Pose/OBB: no such variants officially / v9官方支持矩阵
         /// </summary>
         static void ValidateTaskYoloCombo(TaskType task, YoloType yolo)
         {
@@ -49,9 +49,9 @@ namespace YoloSharp.Models
             switch (task)
             {
                 case TaskType.Detection:
-                    return;   // 已实现
+                    return;   // implemented / 已实现
                 case TaskType.Segmentation:
-                    return;   // 已实现（Yolov9Segment, gelan-c-seg）
+                    return;   // implemented / 已实现（Yolov9Segment, gelan-c-seg）
                 case TaskType.Classification:
                     throw new NotSupportedException(
                         $"{yolo} + {task}: official YOLOv9 ships this variant, but the C# port has not implemented it yet. " +

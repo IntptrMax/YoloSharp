@@ -1,14 +1,14 @@
 ﻿// ONNX export engine: exports the YoloSharp network (ModuleList+Concat+Detect) as an ONNX graph
-// 把YoloSharp网络（ModuleList+Concat+Detect）导出为ONNX计算图
+// Exports the YoloSharp network (ModuleList+Concat+Detect) as an ONNX graph / 把网络导出为ONNX计算图
 // Architecture principles (zero coupling) / 架构原则（零耦合）:
 //   1. Only depends on YoloSharp public module types (Conv/C2f/SPPF/...), reads params via reflection, never modifies them
-//      只依赖YoloSharp公开模块类型，反射读参数，不改它们任何代码
+//      depends only on public YoloSharp module types; reads parameters via reflection, never modifies them / 只依赖公开类型反射只读
 //   2. BN fused into Conv weights (inference-equivalent), SiLU = Sigmoid*Mul expanded
-//      BN融合进Conv权重（推理语义等价），SiLU=Sigmoid*Mul展开
+//      BN fused into Conv weights (inference-equivalent); SiLU expanded as Sigmoid*Mul / BN融合SiLU展开
 //   3. Detect head exports raw box/score branches (NMS post-process left to runtime C# — same boundary as ultralytics export)
-//      Detect头导出box/score原始分支（NMS后处理留给运行时C#——与ultralytics导出同边界）
+//      Detect head exports raw box/score branches (NMS left to runtime C# — same boundary as ultralytics) / NMS留运行时
 //   4. Single-file operator-level API (EmitConv/EmitSiLU...); module processors are thin compositions
-//      单文件算子级API（EmitConv/EmitSiLU...），模块处理器只是薄组合
+//      single-file operator-level API (EmitConv/EmitSiLU...); module processors are thin compositions / 算子级API薄组合
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -30,7 +30,7 @@ namespace YoloSharp.OnnxExport
         public string Temp(string hint = "t") => $"{hint}_{_tmp++}";
 
         // Static shape propagation (NCHW, -1=unknown) — needed by shape-dependent ops such as Attention
-        // 静态shape传播（NCHW，-1=未知）——Attention等需要shape的算子用
+        // Static shape propagation (NCHW, -1=unknown) — for operators that need shapes (Attention etc.) / 静态shape传播
         public readonly System.Collections.Generic.Dictionary<string, long[]> Shapes = new System.Collections.Generic.Dictionary<string, long[]>();
         public void SetShape(string name, long[] shape) => Shapes[name] = shape;
         public long[] ShapeOf(string name) => Shapes.TryGetValue(name, out var sh) ? sh : null;
@@ -80,14 +80,14 @@ namespace YoloSharp.OnnxExport
                 var bI = c.AddInitializer(wName + "_b", bt);
                 n.Inputs.Add(bI);
             }
-            // shape propagation: out = (inH+2p-k)/s+1 / shape传播
+            // shape propagation: out = (inH+2p-k)/s+1 / 形状传播
             var inSh = c.ShapeOf(input);
             if (inSh != null && weight.shape.Length == 4)
             {
                 long kh = weight.shape[2], kw = weight.shape[3];
                 long sh = strides[0], sw = strides[1];
                 long ph0 = pads[0], ph1 = pads[2], pw0 = pads[1], pw1 = pads[3];
-                long outC = weight.shape[0] * group;   // when groups>1 output=Cout / groups>1时输出=Cout
+                long outC = weight.shape[0] * group;   // when groups>1 output=Cout / 分组时输出=Cout
                 long outH = (inSh[2] + ph0 + ph1 - kh) / sh + 1;
                 long outW = (inSh[3] + pw0 + pw1 - kw) / sw + 1;
                 c.SetShape(outN, new long[] { inSh[0], weight.shape[0], outH, outW });
@@ -148,8 +148,43 @@ namespace YoloSharp.OnnxExport
         }
 
         /// <summary>Split/chunk: split by given sizes (axis=1). opset13+: split is an input initializer, not an attr / opset13+：split是输入initializer不是attr</summary>
-        public static string[] Split(ExportContext c, string input, long[] splitSizes, long axis = 1)
+        /// <remarks>[Add 2026-11-11] useGather switch: the TRT dynamic-batch route once rewrote Split as Gather to
+        /// bypass an nvonnxparser wild-index bug (ISliceLayer gather index 1630337677504) — but measurements
+        /// showed: (1) TRT dynamic build was actually hitting the max-profile tactic blow-up (computeCosts),
+        /// not that parser bug; (2) the Gather variant broke OV dynamic batch (partial_shape.cpp:266 crash —
+        /// the Split variant works); (3) TRT b8 padding mis-sliced Gather-variant outputs. Default reverted to
+        /// native Split (OV + b8 both green again); the Gather variant stays behind the switch for future use.
+        /// / useGather开关：默认Split，Gather版留待后用</remarks>
+        public static string[] Split(ExportContext c, string input, long[] splitSizes, long axis = 1, bool useGather = false)
         {
+            if (useGather)
+            {
+                var outsG = Enumerable.Range(0, splitSizes.Length).Select(i => c.Temp("sp")).ToArray();
+                var inShG = c.ShapeOf(input);
+                long start = 0;
+                for (int i = 0; i < splitSizes.Length; i++)
+                {
+                    long size = splitSizes[i];
+                    var idx = new long[size];
+                    for (long k = 0; k < size; k++) idx[k] = start + k;
+                    var idxInit = new OnnxTensor
+                    {
+                        Name = c.Temp("spidx"), Dims = new long[] { size },
+                        DataType = OnnxDataType.Int64, Int64Data = idx,
+                    };
+                    c.Model.AddInitializer(idxInit);
+                    c.Node("Gather", outsG[i], input, idxInit.Name).AttrInts.Add(("axis", axis));
+                    if (inShG != null)
+                    {
+                        var sh = (long[])inShG.Clone(); sh[axis] = size;
+                        c.SetShape(outsG[i], sh);
+                    }
+                    start += size;
+                }
+                return outsG;
+            }
+
+            // Native Split implementation (default — OV / TRT static b8 both verified green) / 原生Split实现
             var outs = Enumerable.Range(0, splitSizes.Length).Select(i => c.Temp("sp")).ToArray();
             var splitInit = new OnnxTensor
             {

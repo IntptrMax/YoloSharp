@@ -10,7 +10,7 @@ namespace YoloSharpDemo
         /// <summary>无效任务×架构组合→弹窗说明原因（Windows），返回true=无效已提示</summary>
         static void RunOnnxExportTest(string yoloTypeName, string taskName, int imgsz, string[] args = null)
         {
-            Console.WriteLine($"=== OnnxExport对拍: {yoloTypeName}+{taskName} imgsz={imgsz} ===");
+            Console.WriteLine($"=== OnnxExport parity: / 对拍: {yoloTypeName}+{taskName} imgsz={imgsz} ===");
             var yoloType = (YoloType)Enum.Parse(typeof(YoloType), yoloTypeName, true);
             var task = (TaskType)Enum.Parse(typeof(TaskType), taskName, true);
             int nc = task == TaskType.Classification ? 1 : 15;
@@ -57,12 +57,12 @@ namespace YoloSharpDemo
                 refProto = one2many.ContainsKey("proto") ? ((TorchSharp.torch.Tensor)one2many["proto"]).detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32) : (TorchSharp.torch.Tensor)null;
                 if (preds.TryGetValue("cls", out var clsV)) refCls = clsV as TorchSharp.torch.Tensor;
             }
-            Console.WriteLine($"TorchSharp头输出: boxes={(refBoxes is object ? string.Join("x", refBoxes.shape) : "-")} scores={(refScores is object ? string.Join("x", refScores.shape) : "-")}");
+            Console.WriteLine($"TorchSharp head outputs: boxes= / 头输出: boxes={(refBoxes is object ? string.Join("x", refBoxes.shape) : "-")} scores={(refScores is object ? string.Join("x", refScores.shape) : "-")}");
 
             // 导出
             string onnxPath = $"export_{yoloTypeName}_{taskName}_{imgsz}.onnx";
             YoloSharp.OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, imgsz, imgsz }, onnxPath);
-            Console.WriteLine($"导出OK: {onnxPath} ({new System.IO.FileInfo(onnxPath).Length / 1024}KB)");
+            Console.WriteLine($"Export OK: / 导出OK: {onnxPath} ({new System.IO.FileInfo(onnxPath).Length / 1024}KB)");
 
             // ONNX Runtime跑（比对box分支——导出图为boxes/scores两输出）
             using (var session = new Microsoft.ML.OnnxRuntime.InferenceSession(onnxPath))
@@ -112,7 +112,7 @@ namespace YoloSharpDemo
                         if (d > mMax) mMax = d;
                         if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
                     }
-                    Console.WriteLine($"  masks路: ref={rm.Length} onnx={om.Length} MaxDiff={mMax:E2}");
+                    Console.WriteLine($"  masks path: ref= / masks路: ref={rm.Length} onnx={om.Length} MaxDiff={mMax:E2}");
                 }
                 if (refProto is object && outs.Length > 3)
                 {
@@ -125,13 +125,13 @@ namespace YoloSharpDemo
                         if (d > pMax) pMax = d;
                         if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
                     }
-                    Console.WriteLine($"  proto路: ref={rp.Length} onnx={op.Length} MaxDiff={pMax:E2}");
+                    Console.WriteLine($"  proto path: ref= / proto路: ref={rp.Length} onnx={op.Length} MaxDiff={pMax:E2}");
                 }
                 bool isCls = refCls is object;
                 bool ok = maxDiff < 1e-2 && rs.Length == os_.Length
                     && (isCls ? (outs.Length > 0 && refCls.numel() == outs[0].Length)
                               : (rb.Length == ob.Length));
-                Console.WriteLine($"对拍: boxes ref={rb.Length}/onnx={ob.Length}, scores ref={rs.Length}/onnx={os_.Length}, masks{(refMasks is object ? $"={refMasks.numel()}" : "")} proto{(refProto is object ? $"={refProto.numel()}" : "")}, MaxDiff={maxDiff:E2} 超1e-2={nBig}");
+                Console.WriteLine($"Parity: boxes ref= / 对拍: boxes ref={rb.Length}/onnx={ob.Length}, scores ref={rs.Length}/onnx={os_.Length}, masks{(refMasks is object ? $"={refMasks.numel()}" : "")} proto{(refProto is object ? $"={refProto.numel()}" : "")}, MaxDiff={maxDiff:E2} over-1e-2= / 超1e-2={nBig}");
                 Console.WriteLine(ok ? "=== onnxexport PASS ===" : "=== onnxexport FAIL ===");
             }
         }
@@ -141,13 +141,13 @@ namespace YoloSharpDemo
             string? why = (yolo, task) switch
             {
                 (YoloType.Yolov9, TaskType.Obb) =>
-                    "官方 YOLOv9 (GELAN) 从未发布 OBB（旋转框）变体。\n" +
+                    "Official YOLOv9 (GELAN) never shipped an OBB (rotated box) variant. / 官方从未发布OBB变体。\n" +
                     "→ 请改用 Yolov8 / Yolov11 训练 OBB，或把 TaskType 改为 Detection。",
                 (YoloType.Yolov9, TaskType.Pose) =>
-                    "官方 YOLOv9 (GELAN) 从未发布 Pose（姿态估计）变体。\n" +
+                    "Official YOLOv9 (GELAN) never shipped a Pose variant. / 官方从未发布Pose变体。\n" +
                     "→ 请改用 Yolov8 / Yolov11 训练 Pose，或把 TaskType 改为 Detection。",
                 (YoloType.Yolov9, TaskType.Classification) =>
-                    "官方 YOLOv9 存在分类变体（yolov9-cls），但本 C# 移植版尚未实现。\n" +
+                    "YOLOv9 has a classification variant (yolov9-cls), not yet ported to C#. / 分类变体尚未实现。\n" +
                     "→ 请暂用 Yolov8 / Yolov11 训练分类；v9-cls 头欢迎社区补充。",
                 _ => null,
             };
@@ -155,7 +155,7 @@ namespace YoloSharpDemo
 
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("========================================");
-            Console.WriteLine($"ERROR 不支持的组合: {yolo} + {task}");
+            Console.WriteLine($"ERROR 不支持的Combo: / 组合: {yolo} + {task}");
             Console.WriteLine(why);
             Console.WriteLine("========================================");
             Console.ResetColor();
