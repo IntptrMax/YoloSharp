@@ -164,6 +164,7 @@ namespace YoloSharp.OnnxExport
         public string Name;
         public long[] Dims;          // includes batch dim; dynamic dim uses -1 / 含batch维；动态维用-1
         public OnnxDataType DataType = OnnxDataType.Float;
+        public int? Rank;            // [Add 2026-11-12] used with Dims=null to emit a fully-dynamic ranked shape / Dims=null时的动态秩
 
         public void WriteTo(ProtoWriter parent, int field)
         {
@@ -171,9 +172,22 @@ namespace YoloSharp.OnnxExport
             v.WriteStringField(1, Name);
             if (Dims == null)
             {
-                // Dynamic output: type.tensor_type(elem=Float) fully dynamic dims (no dim written) / 动态输出：全动态dims（不写dim）
+                // [Fix 2026-11-12] Dims=null must emit a fully-dynamic RANKED shape, not skip shape:
+                // omitting the shape field declares an unknown-rank tensor that Netron/ONNX Runtime
+                // read as a rank-0 scalar ("float") — reported upstream as wrong output dims.
+                // torch.onnx.export convention: dynamic dims via dim_param (string) entries. / 空Dims输出全动态有秩shape
                 var tt0 = new ProtoWriter();
                 tt0.WriteInt64Field(1, (long)OnnxDataType.Float);   // elem_type = field 1
+                var shape0 = new ProtoWriter();
+                string[] names = { "batch", "dim1", "dim2", "dim3", "dim4", "dim5" };
+                int rank = Rank ?? 4;
+                for (int i = 0; i < rank; i++)
+                {
+                    var dim = new ProtoWriter();
+                    dim.WriteStringField(2, names[Math.Min(i, names.Length - 1)]);   // Dim.dim_param = field 2 (string, symbolic)
+                    shape0.WriteMessageField(1, dim);
+                }
+                tt0.WriteMessageField(2, shape0);                   // tensor_type.shape = field 2
                 var type0 = new ProtoWriter();
                 type0.WriteMessageField(1, tt0);
                 v.WriteMessageField(2, type0);

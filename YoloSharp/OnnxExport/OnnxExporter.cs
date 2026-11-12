@@ -103,12 +103,13 @@ namespace YoloSharp.OnnxExport
             {
                 string outName = "output_" + kv.Key;   // output_boxes/output_scores/output_masks/output_proto/output_kpts/output_angle/output_cls
                 c.Node("Identity", outName, kv.Value);
-                // [Fix 2026-11-11 -> Revert same day] Output Dims experiments: adding Dims declarations
-                // (-1 dynamic) triggers Sdcb.OV shape-inference crashes (partial_shape.cpp:266), while the
-                // original empty declaration (Dims=null) lets every backend infer on its own and works across
-                // OV dynamic / TRT b8. Lesson: output declarations are an OV minefield — empty = maximally
-                // compatible. Reverted to null. / 输出Dims保持空声明(全后端兼容)
-                c.Model.AddOutput(new OnnxValueInfo { Name = outName });
+                // [Fix 2026-11-12] Output Dims=null + Rank=<per-output>: emit a fully-dynamic ranked
+                // shape (dim_param entries) instead of omitting the shape field — omission declares
+                // unknown rank, which Netron/ORT read as rank-0 scalar "float" (upstream-reported bug).
+                // dim_param (symbolic) entries keep OV happy (unlike numeric -1 dims, which crashed
+                // Sdcb partial_shape inference on 11-11). / 输出写全动态有秩shape(符号维)
+                int orank = kv.Key.Contains("masks") ? 4 : (kv.Key.Contains("proto") ? 3 : 3);
+                c.Model.AddOutput(new OnnxValueInfo { Name = outName, Rank = orank });
             }
             c.Model.Save(outputPath, "yolosharp");
         }

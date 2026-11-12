@@ -185,6 +185,7 @@ namespace YoloSharp.Models
             }
             catch { }
 
+
             // Fix: from-scratch path (no LoadModel) keeps Float32 while data arrives per config.Dtype —
             // CUDA raises "Input type (CUDABFloat16Type) and weight type (CUDAFloatType) should be the same".
             // LoadModel converts via yolo.to(config.Dtype); apply the same for from-scratch here. / 从头训补齐dtype转换
@@ -758,9 +759,22 @@ namespace YoloSharp.Models
             try
             {
                 yolo.eval();
-                // [Fix 2026-11-10] Dynamic-batch export (input batch dim=-1) — TRT profiles 1~128, OV
-                // consumes N frames without reshape; single-frame semantics unchanged. / 动态batch导出
-                OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, config.ImageSize, config.ImageSize }, path, dynamicBatch: true);   // [Fix 2026-11-11 20:00] Batch route re-enabled (user decision 19:55, max=128). Dynamic input (-1) breaks Sdcb.OV input.Shape reads (partial_shape.cpp:266) — OV dynamic batch is handled at runtime via OnnxPredictCore.LoadOpenVino reshape instead. / batch路线重启max=128
+                // [Fix 2026-11-12] Main onnx keeps STATIC input [1] — Sdcb.OV crashes reading
+                // input.Shape on dynamic(-1) input declarations (partial_shape.cpp:266). OV dynamic
+                // batch is handled at runtime via OnnxPredictCore.LoadOpenVino reshape (11-10 verified
+                // combo: static-input graph + runtime reshape). The TRT dynamic path gets its own
+                // dynamic-input variant file below. / 主onnx静态输入,OV运行时reshape,TRT用动态变体文件
+                OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, config.ImageSize, config.ImageSize }, path, dynamicBatch: false);
+                // [Add 2026-11-12] TRT dynamic-engine variant (input batch=-1) — source for convert4
+                // profile 1~128. TRT's parser needs the dynamic declaration to build a profiled engine;
+                // OV never loads this file. / TRT动态engine专用变体
+                try
+                {
+                    string dyn = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path),
+                        System.IO.Path.GetFileNameWithoutExtension(path) + "_deploy_dyn.onnx");
+                    OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, config.ImageSize, config.ImageSize }, dyn, dynamicBatch: true);
+                }
+                catch { /* dyn failure does not affect the main onnx / dyn版失败不影响主onnx */ }
                 // [Add 2026-11-10 19:45] TRT batch variant (static batch=8) — TensorRtSharp getInput-family
                 // P/Invokes segfault (dims cannot change on the TRT network side), so a static-batch graph is
                 // the only viable TRT batch path. Emits <name>_deploy_b8.onnx: convert to engine, PredictBatch
