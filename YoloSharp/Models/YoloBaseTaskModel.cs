@@ -474,7 +474,13 @@ namespace YoloSharp.Models
             void DrawCurve()
             {
                 string fileName = Path.Combine(config.OutputPath, "log.csv");
+                // [Fix 2026-11-12] Stopping before epoch 1 completes leaves no log.csv — skip the
+                // plot instead of throwing FileNotFoundException (surfaced as "训练失败" upstream).
+                // / 首个epoch完成前停止时log.csv不存在——跳过画图而非抛错
+                if (!File.Exists(fileName)) { Console.WriteLine("[Txm] no log.csv yet — skip results.png"); return; }
                 Dictionary<string, List<float>> dictionary = Tools.LoadCSV(fileName);
+                if (!dictionary.ContainsKey("Epoch") || dictionary["Epoch"].Count == 0)
+                { Console.WriteLine("[Txm] log.csv has no data rows — skip results.png"); return; }   // header-only guard / 仅表头守卫
                 Multiplot multiplot = new Multiplot();
 
                 int plotCount = dictionary.Keys.Count - 4;
