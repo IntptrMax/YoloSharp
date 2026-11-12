@@ -31,10 +31,10 @@
 
 ## 🔥 近期更新
 
-**2026/11/11**
+**2026/11/12**
 🚀 **YOLOv9（GELAN）**支持：检测（yolov9-s，与官方权重 1:1 对齐、1774 张量）与分割（gelan-c-seg），已回馈开源。
-🚀 **ONNX 导出引擎**：检测/分割/姿态/OBB 头 + v5/v8/v9/v11/v12 骨干；动态 batch 输入；导出 EMA 权重；BN 融合；opset 13。
-🚀 **部署链路**：导出的 ONNX 已在 ONNX Runtime、OpenVINO（动态 batch）与 TensorRT（静态/动态 profile）上验证。
+🚀 **ONNX 导出引擎**：检测/分割/姿态/OBB 头 + v5/v8/v9/v11/v12 骨干；导出 EMA 权重；BN 融合；opset 13。导出**唯一的动态 batch ONNX**（输入 `[-1,3,H,W]`、单输出 `output0`），ONNX Runtime/ML.NET、OpenVINO、TensorRT 动态引擎通用——详见 [docs/ONNX-Output-Format.md](docs/ONNX-Output-Format.md)。
+🚀 **部署链路**：导出的 ONNX 已在 ONNX Runtime（单帧/批量）、OpenVINO（动态 batch）与 TensorRT 4.0 动态引擎（profile 1..128，批量与单帧结果一致）上验证。
 
 **2026/10** —— 训练对齐 ultralytics：EMA（decay 0.9999、tau 2000）、warmup 三件套（bias-lr/momentum/累积）、梯度裁剪 10.0、确定性随机种子、召回守门（best 选择）、batch 级停止、逐轮 results.png 重绘。
 

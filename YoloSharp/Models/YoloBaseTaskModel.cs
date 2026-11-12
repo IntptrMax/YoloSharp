@@ -759,33 +759,15 @@ namespace YoloSharp.Models
             try
             {
                 yolo.eval();
-                // [Fix 2026-11-12] Main onnx keeps STATIC input [1] — Sdcb.OV crashes reading
-                // input.Shape on dynamic(-1) input declarations (partial_shape.cpp:266). OV dynamic
-                // batch is handled at runtime via OnnxPredictCore.LoadOpenVino reshape (11-10 verified
-                // combo: static-input graph + runtime reshape). The TRT dynamic path gets its own
-                // dynamic-input variant file below. / 主onnx静态输入,OV运行时reshape,TRT用动态变体文件
-                OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, config.ImageSize, config.ImageSize }, path, dynamicBatch: false);
-                // [Add 2026-11-12] TRT dynamic-engine variant (input batch=-1) — source for convert4
-                // profile 1~128. TRT's parser needs the dynamic declaration to build a profiled engine;
-                // OV never loads this file. / TRT动态engine专用变体
-                try
-                {
-                    string dyn = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path),
-                        System.IO.Path.GetFileNameWithoutExtension(path) + "_deploy_dyn.onnx");
-                    OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, config.ImageSize, config.ImageSize }, dyn, dynamicBatch: true);
-                }
-                catch { /* dyn failure does not affect the main onnx / dyn版失败不影响主onnx */ }
-                // [Add 2026-11-10 19:45] TRT batch variant (static batch=8) — TensorRtSharp getInput-family
-                // P/Invokes segfault (dims cannot change on the TRT network side), so a static-batch graph is
-                // the only viable TRT batch path. Emits <name>_deploy_b8.onnx: convert to engine, PredictBatch
-                // pads to 8 frames per execute. / TRT批量版静态batch=8
-                try
-                {
-                    string b8 = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path),
-                        System.IO.Path.GetFileNameWithoutExtension(path) + "_deploy_b8.onnx");
-                    OnnxExport.OnnxExporter.Export(yolo, new long[] { 8, 3, config.ImageSize, config.ImageSize }, b8, dynamicBatch: false);
-                }
-                catch { /* b8 failure does not affect the main onnx / b8版失败不影响主onnx */ }
+                // [Fix 2026-11-12 final] SINGLE dynamic onnx (input batch=-1, single output0) — the
+                // one file feeds every backend: OV (LoadOpenVino falls back to configured ImageSize when
+                // reading the dynamic declaration's Shape throws), ONNX Runtime/ML.NET (any N), TensorRT
+                // 4.0 convert4 (profile 1..128). The TRT 0.0.5 legacy converter cannot profile dynamic
+                // graphs (Error 4) and is retired — use convert4. / 唯一动态onnx通吃全后端
+                OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, config.ImageSize, config.ImageSize }, path, dynamicBatch: true);
+                // [Remove 2026-11-12] b8 static-batch variant retired — superseded by the dynamic
+                // engine (profile 1..128, auto-chunked), which is strictly better than b8 padding
+                // (no gray-frame waste, no separate engine). / b8凑批已被4.0动态engine取代,退役
                 Console.WriteLine($"ONNX exported: {path}");
             }
             catch (Exception ex)

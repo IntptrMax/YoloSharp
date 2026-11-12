@@ -99,17 +99,21 @@ namespace YoloSharp.OnnxExport
 
             // Semantic output names: add Identity nodes to rename (avoid internal names like cat_302 — deployment backends bind tensors by name)
             // Semantic output names: Identity nodes rename them (avoids internal names like cat_302 — deployment backends bind tensors by name) / 语义输出名加Identity重命名
-            foreach (var kv in finalOutputs)
+            // [Fix 2026-11-12 用户裁定] Single-output layout is now the ONLY format (multi-head retired):
+            // all per-anchor head outputs concat along dim 1 — output0 = [N, 64 + nc (+1 obb) (+nk·nd pose), A]
+            // (raw DFL boxes, NOT decoded; decode at runtime). Segmentation adds output1 = proto.
+            // The boolean export flag now controls the INPUT declaration only: false = static [1] (OV/ORT),
+            // true = dynamic -1 (TRT profiled engine). / 单输出唯一布局; 开关只控输入静/动
+            var parts = finalOutputs.Where(kv => kv.Key != "masks" && kv.Key != "proto")
+                                    .OrderBy(kv => kv.Key == "boxes" ? 0 : kv.Key == "scores" ? 1 : 2)
+                                    .Select(kv => kv.Value).ToArray();
+            string merged = parts.Length == 1 ? parts[0] : Ops.Concat(c, parts, 1);
+            c.Node("Identity", "output0", merged);
+            c.Model.AddOutput(new OnnxValueInfo { Name = "output0", Rank = 3 });
+            if (finalOutputs.ContainsKey("masks"))
             {
-                string outName = "output_" + kv.Key;   // output_boxes/output_scores/output_masks/output_proto/output_kpts/output_angle/output_cls
-                c.Node("Identity", outName, kv.Value);
-                // [Fix 2026-11-12] Output Dims=null + Rank=<per-output>: emit a fully-dynamic ranked
-                // shape (dim_param entries) instead of omitting the shape field — omission declares
-                // unknown rank, which Netron/ORT read as rank-0 scalar "float" (upstream-reported bug).
-                // dim_param (symbolic) entries keep OV happy (unlike numeric -1 dims, which crashed
-                // Sdcb partial_shape inference on 11-11). / 输出写全动态有秩shape(符号维)
-                int orank = kv.Key.Contains("masks") ? 4 : (kv.Key.Contains("proto") ? 3 : 3);
-                c.Model.AddOutput(new OnnxValueInfo { Name = outName, Rank = orank });
+                c.Node("Identity", "output1", finalOutputs["proto"]);
+                c.Model.AddOutput(new OnnxValueInfo { Name = "output1", Rank = 3 });
             }
             c.Model.Save(outputPath, "yolosharp");
         }

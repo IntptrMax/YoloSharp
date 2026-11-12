@@ -11,7 +11,7 @@ No Python required — from training to inference, everything stays inside .NET.
 - **All task types** – Object detection, segmentation, oriented bounding boxes (OBB), pose estimation (keypoints), and classification.
 - **Model sizes** – n/s/m/l/x variants available for every architecture.
 - **Advanced preprocessing** – Built-in LetterBox and Mosaic4 data augmentation.
-- **ONNX export** – Export trained models (all tasks) to deployable ONNX with dynamic batch; verified against ONNX Runtime / OpenVINO / TensorRT.
+- **ONNX export** – Export trained models (all tasks) to deployable ONNX (multi-head or python-style single output) with dynamic batch; verified against ONNX Runtime / OpenVINO / TensorRT. See [docs/ONNX-Output-Format.md](docs/ONNX-Output-Format.md) for the output layout & post-processing guide.
 - **GPU‑accelerated NMS** – Non‑maximum suppression runs directly on GPU.
 - **Pretrained models** – Load models from Ultralytics YOLO (v5/v8/v11) and converted YOLOv12 checkpoints.
 - **Cross‑platform** – Works with .NET 6 and later, plus netstandard2.0 / .NET Framework 4.8.
@@ -29,10 +29,10 @@ Whether you're building a desktop application, a cloud service, or an edge devic
 
 ## 🔥 Recent Updates
 
-**2026/11/11**
+**2026/11/12**
 🚀 **YOLOv9 (GELAN)** support: Detection (yolov9-s, 1:1 vs official weights, 1774 tensors) and Segmentation (gelan-c-seg), contributed back to open source.
-🚀 **ONNX export engine**: Detection/Segmentation/Pose/OBB heads, v5/v8/v9/v11/v12 backbones; dynamic-batch input; EMA weights; BN fusion; opset 13.
-🚀 **Deploy pipeline**: exported ONNX verified on ONNX Runtime, OpenVINO (dynamic batch) and TensorRT (static & dynamic profiles).
+🚀 **ONNX export engine**: Detection/Segmentation/Pose/OBB heads, v5/v8/v9/v11/v12 backbones; EMA weights; BN fusion; opset 13. Exports **one dynamic-batch ONNX** (input `[-1,3,H,W]`, single `output0`) that runs on ONNX Runtime/ML.NET, OpenVINO and TensorRT dynamic engines alike — see [docs/ONNX-Output-Format.md](docs/ONNX-Output-Format.md).
+🚀 **Deploy pipeline**: exported ONNX verified on ONNX Runtime (single & batch), OpenVINO (dynamic batch) and TensorRT 4.0 dynamic engines (profile 1..128, batch parity with single-frame).
 
 **2026/10** — training aligned with ultralytics: EMA (decay 0.9999, tau 2000), warmup trio (bias-lr/momentum/accumulate), gradient clip 10.0, deterministic seeds, recall gate for best-model selection, batch-level stop, per-epoch results.png redraw.
 
