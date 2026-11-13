@@ -11,34 +11,28 @@ dimension means, and how to post-process them in your own runtime.
 ```csharp
 // C# (library):
 OnnxExporter.Export(yolo, new long[] { 1, 3, 640, 640 }, "best.onnx",
-                    dynamicBatch: false,   // true = input batch dim declared -1 (TRT profile)
-                    pythonStyle: false);   // true = single "output0" (ultralytics layout)
-
-// Platform CLI:
-//   Txm.AIConsoleTest.exe convert best.bin onnx           → multi-head (default)
-//   Txm.AIConsoleTest.exe convert best.bin onnx pystyle   → python-style single output
+                    dynamicBatch: true);   // input batch dim declared -1
 ```
 
-Training auto-emits one onnx beside `best.bin` / 训练自动产出一个onnx:
+Training auto-emits the deployment ONNX beside `best.bin` / 训练自动产出部署onnx:
 
-| File | Input | Intended backend / 用途 |
+| File | Input | Works on / 可直接用于 |
 |---|---|---|
-| `best.onnx` | `[1,3,H,W]` static | OpenVINO (runtime reshape → dynamic batch), ONNX Runtime, libtorch |
-| `best_deploy_dyn.onnx` | `[-1,3,H,W]` dynamic | TensorRT dynamic engine (profile 1..128) |
+| `best.onnx` | `[-1,3,H,W]` dynamic | **all backends**: OpenVINO (load-time reshape), ONNX Runtime / ML.NET (any N), TensorRT (convert4 builds a profiled dynamic engine, batch 1..128), libtorch |
 
-> NOTE `best_deploy_dyn.onnx` is the ONLY variant TensorRT can build into a
-> dynamic-batch engine — python-exported static-trace graphs cannot be profiled
-> (inner reshapes/constants are traced to batch=1). / 动态变体是 TRT 动态
-> engine 的唯一可用形态。
+> ONE file, all backends — no variant juggling. The earlier multi-head /
+> `best_deploy_dyn.onnx` variants are retired. / 一个文件通吃全后端，旧变体已废除。
 
 ---
 
-## 2. Single-Output Layout (both files) / 单输出布局(两个文件通用)
+## 2. Single-Output Layout / 单输出布局
 
-Input `images`: `[N, 3, 640, 640]`, float32, RGB, **/255 normalized** (do it
-before feeding; the graph does NOT normalize). Letterbox: centered padding.
+Input `images`: `[-1, 3, 640, 640]` (batch symbolic), float32, RGB, **/255
+normalized** (do it before feeding; the graph does NOT normalize). Letterbox:
+centered padding.
 
-Single output (dims symbolic; actual at N=1, nc=1 in brackets) / 单输出(维度为符号维):
+Single output, python-convention declaration `[batch, C, A]` (only batch
+symbolic; C/A concrete, e.g. `[batch, 65, 8400]` at nc=1) / 单输出，python惯例声明：
 
 ### Detection
 
@@ -105,19 +99,19 @@ three backends) — feel free to copy. / 参考实现可直接抄
 
 ---
 
-## 4. Python-Style Single Output / python 风格单输出（pystyle）
+## 4. Layout vs. genuine ultralytics export / 与ultralytics原版导出的布局差异
 
-`pythonStyle: true` (or CLI `convert <bin> onnx pystyle`) merges the per-anchor
-heads into one tensor, ultralytics layout / 将各头沿通道拼接成单输出：
+All heads are merged into one tensor, ultralytics-style channel order /
+各头沿通道拼接成单输出（与ultralytics同布局语义）：
 
 | Output | Dims | Layout |
 |---|---|---|
-| `output0` | `[N, 64 + nc (+1 obb) (+nk·nd pose), 8400]` | boxes(64) ‖ scores(nc) ‖ angle/kpts — dim1 channel order, NOT decoded boxes / 通道顺序拼接，boxes 仍是 DFL 原始 64 通道 |
-| `output1` (seg only) | `[N, 32, H/4, W/4]` | proto (same as `output_proto`) |
+| `output0` | `[batch, 64 + nc (+1 obb) (+nk·nd pose), 8400]` | boxes(64) ‖ scores(nc) ‖ angle/kpts — dim1 channel order, NOT decoded boxes / 通道顺序拼接，boxes 仍是 DFL 原始 64 通道 |
+| `output1` (seg only) | `[batch, 32, H/4, W/4]` | proto (same as before) / proto 原型 |
 
-Example (detection, nc=1): `output0 = [1, 65, 8400]` → channels `0..63` =
-boxes DFL, channel `64` = score. Verified identical values to the multi-head
-export / 与多头版数值完全一致。
+Example (detection, nc=1): `output0 = [batch, 65, 8400]` → channels `0..63` =
+boxes DFL, channel `64` = score. Verified identical values across
+ORT / OV / TRT. / 三后端数值一致。
 
 > Difference from a genuine ultralytics export: their `output0` carries
 > **decoded xywh** (4 channels, decode baked into the graph). Ours keeps raw
@@ -146,10 +140,12 @@ A: It's DFL: 4 edges × 16 distribution bins. Decode with softmax+expectation
 (step 2 above). Keeping this out of the graph preserves FP16 accuracy under
 TensorRT and lets all runtimes share one exact decoder. / DFL 分布，图外解码保精度
 
-**Q: The model file declares `['batch','dim1','dim2']` — is that an error?**
-A: No — fully-dynamic ranked shape (torch.onnx.export convention). Actual
-shapes are resolved at inference. / 符号维声明，推理时解析
+**Q: The model declares `['batch', 65, 8400]` — which dims are symbolic?**
+A: Only dim0 (`batch`, a dim_param). Channel and anchor dims are concrete
+dim_values (torch.onnx.export `dynamic_axes` convention) — same as what Netron
+shows for an official ultralytics export. / 仅batch是符号维，其余为具体值（与
+官方ultralytics导出显示一致）。
 
 **Q: Can I feed dynamic batch?**
-A: OV: yes (we reshape at load). TRT: use the `_deploy_dyn.onnx` variant with
-a profile. ORT: any N works with the dyn variant. / 见第 1 节表格
+A: Yes, on every backend: OV (load-time reshape), ORT/ML.NET (any N), TRT
+(convert4 profiles 1..128). / 全后端支持动态batch。
