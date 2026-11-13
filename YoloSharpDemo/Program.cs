@@ -61,10 +61,13 @@ namespace YoloSharpDemo
 
             // 导出
             string onnxPath = $"export_{yoloTypeName}_{taskName}_{imgsz}.onnx";
-            YoloSharp.OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, imgsz, imgsz }, onnxPath);
+            // [Fix 2026-11-13] dynamicBatch:true — the parity demo must exercise the SAME deployment
+            // export as training's best.onnx (single dynamic file). The old static call left batch=1
+            // and mismatched what users deploy. / 对拍demo与训练产物同款动态导出
+            YoloSharp.OnnxExport.OnnxExporter.Export(yolo, new long[] { 1, 3, imgsz, imgsz }, onnxPath, dynamicBatch: true);
             Console.WriteLine($"Export OK: / 导出OK: {onnxPath} ({new System.IO.FileInfo(onnxPath).Length / 1024}KB)");
 
-            // ONNX Runtime跑（比对box分支——导出图为boxes/scores两输出）
+            // ONNX Runtime跑（单输出output0 = boxes‖scores‖extras 通道拼接；seg另有output1=proto）
             using (var session = new Microsoft.ML.OnnxRuntime.InferenceSession(onnxPath))
             {
                 var floatArr = input.detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32).data<float>().ToArray();
@@ -73,51 +76,66 @@ namespace YoloSharpDemo
                 var inputName = session.InputMetadata.First().Key;
                 using var results = session.Run(new[] { Microsoft.ML.OnnxRuntime.NamedOnnxValue.CreateFromTensor(inputName, tensor) });
 
-                // 对拍两输出：boxes(输出0) + scores(输出1) —— 头原始输出（DFL解码前）
+                // [Fix 2026-11-13] Single-output parity: output0 = [1, 64+nc(+extras), A] with channels
+                // 0..63 = boxes DFL, 64.. = scores (sigmoid applied). Slice onnx output0 by channel
+                // and compare against the TorchSharp head tensors. (Old code compared outs[0]/outs[1]
+                // as separate boxes/scores outputs — the multi-head era layout.)
+                // 单输出对拍：按通道切片后与TorchSharp头输出逐点比对
                 var outs = results.Select(r => r.AsTensor<float>().ToArray()).ToArray();
                 var rb = refBoxes is object ? refBoxes.data<float>().ToArray() : new float[0];
                 var rs = refScores is object ? refScores.data<float>().ToArray() : new float[0];
                 double maxDiff = 0; long nBig = 0;
-                var ob = outs[0]; var os_ = outs.Length > 1 ? outs[1] : new float[0];
-                for (int i = 0; i < Math.Min(rb.Length, ob.Length); i++)
-                {
-                    var d = Math.Abs((double)rb[i] - ob[i]);
-                    if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
-                }
-                for (int i = 0; i < Math.Min(rs.Length, os_.Length); i++)
-                {
-                    var d = Math.Abs((double)rs[i] - os_[i]);
-                    if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
-                }
-                // Classification: 输出0=cls
+                var o0 = outs[0];   // single output0 / 单输出
+                long A = refBoxes is object ? refBoxes.shape[refBoxes.shape.Length - 1] : 0;
+                long nBoxCh = refBoxes is object ? refBoxes.shape[1] : 0;    // 64
+                long nClsCh = refScores is object ? refScores.shape[1] : 0;  // nc
+                // boxes: channels 0..nBoxCh — both tensors are [1, C, A] contiguous: (0,ch,a) → ch*A+a
+                // boxes段：两侧都是[1,C,A]连续布局，展平索引=ch*A+a
+                for (int ch = 0; ch < nBoxCh; ch++)
+                    for (int a = 0; a < A; a++)
+                    {
+                        var d = Math.Abs((double)rb[(int)(ch * A + a)] - o0[(int)(ch * A + a)]);
+                        if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
+                    }
+                // scores: channels nBoxCh..nBoxCh+nClsCh — reference is raw logits; the exported
+                // graph applies sigmoid (deployment convention), so sigmoid the reference too.
+                // scores段：参考侧是logits，导出图已过sigmoid（部署约定）——参考侧补sigmoid再比
+                for (int ch = 0; ch < nClsCh; ch++)
+                    for (int a = 0; a < A; a++)
+                    {
+                        float refV = 1f / (1f + (float)Math.Exp(-rs[(int)(ch * A + a)]));   // sigmoid
+                        var d = Math.Abs((double)refV - o0[(int)((nBoxCh + ch) * A + a)]);
+                        if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
+                    }
+                // Classification: 输出0=cls（rank2，直接逐点）
                 if (refCls is object)
                 {
                     var rc = refCls.data<float>().ToArray();
-                    var oc = outs[0];
-                    for (int i = 0; i < Math.Min(rc.Length, oc.Length); i++)
+                    for (int i = 0; i < Math.Min(rc.Length, o0.Length); i++)
                     {
-                        var d = Math.Abs((double)rc[i] - oc[i]);
+                        var d = Math.Abs((double)rc[i] - o0[i]);
                         if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
                     }
                 }
-                // seg: 输出2=masks 3=proto
-                if (refMasks is object && outs.Length > 2)
+                // seg: masks拼在output0通道尾部(64+nc..)，proto=outs[1] — [1,C,A]布局索引=ch*A+a
+                if (refMasks is object && nClsCh > 0)
                 {
                     var rm = refMasks.data<float>().ToArray();
-                    var om = outs[2];
+                    long nMaskCh = refMasks.shape[1];
                     double mMax = 0;
-                    for (int i = 0; i < Math.Min(rm.Length, om.Length); i++)
-                    {
-                        var d = Math.Abs((double)rm[i] - om[i]);
-                        if (d > mMax) mMax = d;
-                        if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
-                    }
-                    Console.WriteLine($"  masks path: ref= / masks路: ref={rm.Length} onnx={om.Length} MaxDiff={mMax:E2}");
+                    for (int ch = 0; ch < nMaskCh; ch++)
+                        for (int a = 0; a < A; a++)
+                        {
+                            var d = Math.Abs((double)rm[(int)(ch * A + a)] - o0[(int)((nBoxCh + nClsCh + ch) * A + a)]);
+                            if (d > mMax) mMax = d;
+                            if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
+                        }
+                    Console.WriteLine($"  masks path: ref={rm.Length} MaxDiff={mMax:E2}");
                 }
-                if (refProto is object && outs.Length > 3)
+                if (refProto is object && outs.Length > 1)
                 {
                     var rp = refProto.data<float>().ToArray();
-                    var op = outs[3];
+                    var op = outs[1];   // output1 = proto / proto走第二输出
                     double pMax = 0;
                     for (int i = 0; i < Math.Min(rp.Length, op.Length); i++)
                     {
@@ -125,13 +143,15 @@ namespace YoloSharpDemo
                         if (d > pMax) pMax = d;
                         if (d > maxDiff) maxDiff = d; if (d > 1e-2) nBig++;
                     }
-                    Console.WriteLine($"  proto path: ref= / proto路: ref={rp.Length} onnx={op.Length} MaxDiff={pMax:E2}");
+                    Console.WriteLine($"  proto path: ref={rp.Length} onnx={op.Length} MaxDiff={pMax:E2}");
                 }
                 bool isCls = refCls is object;
-                bool ok = maxDiff < 1e-2 && rs.Length == os_.Length
+                // extras: obb angle(1) / pose kpts(nk*nd) / seg masks(nm) ride after cls channels
+                long extraCh = (o0.Length / Math.Max(1, A)) - nBoxCh - nClsCh;   // from actual output
+                bool ok = maxDiff < 1e-2
                     && (isCls ? (outs.Length > 0 && refCls.numel() == outs[0].Length)
-                              : (rb.Length == ob.Length));
-                Console.WriteLine($"Parity: boxes ref= / 对拍: boxes ref={rb.Length}/onnx={ob.Length}, scores ref={rs.Length}/onnx={os_.Length}, masks{(refMasks is object ? $"={refMasks.numel()}" : "")} proto{(refProto is object ? $"={refProto.numel()}" : "")}, MaxDiff={maxDiff:E2} over-1e-2= / 超1e-2={nBig}");
+                              : (o0.Length == (nBoxCh + nClsCh + extraCh) * A && extraCh >= 0));
+                Console.WriteLine($"Parity: output0=[1,{o0.Length / Math.Max(1, A)},A={A}] boxesCh={nBoxCh} clsCh={nClsCh} extraCh={extraCh}, MaxDiff={maxDiff:E2} over-1e-2={nBig}");
                 Console.WriteLine(ok ? "=== onnxexport PASS ===" : "=== onnxexport FAIL ===");
             }
         }

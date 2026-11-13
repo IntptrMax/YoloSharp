@@ -258,12 +258,16 @@ namespace YoloSharp.OnnxExport
             int nk = 17;
             var nkField = typeof(Head.Pose).GetField("nk", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
             if (nkField != null) nk = (int)Convert.ChangeType(nkField.GetValue(mod), typeof(int));
-            long bs = 1;
+            // [Fix 2026-11-13] bs=-1 like the Detect head (was hardcoded 1): dynamic batch must
+            // propagate through the kpts branch too, else N folds into the anchor dim.
+            // Anchor dim uses the CONCRETE H*W (like Detect's HWOf) — a Reshape may carry only ONE
+            // -1 wildcard (ORT ShapeInferenceError otherwise). / 对齐Detect头bs=-1；anchor维用具体值
+            long bs = -1;
             var kptViews = new List<string>();
             for (int i = 0; i < feats.Length; i++)
             {
                 var kOut = SequentialDown(c, cv4[i], feats[i]);
-                kptViews.Add(Ops.Reshape(c, kOut, new long[] { bs, nk, -1 }));   // nk already includes dims (num*dim) / nk已含维数(num*dim)
+                kptViews.Add(Ops.Reshape(c, kOut, new long[] { bs, nk, HWOf(c, kOut) }));   // nk already includes dims (num*dim) / nk已含维数(num*dim)
             }
             outputs["kpts"] = Ops.Concat(c, kptViews.ToArray(), 2);
         }
@@ -276,23 +280,31 @@ namespace YoloSharp.OnnxExport
             int ne = 1;   // ne = angle channel count / 角度通道数
             var neF = typeof(Head.Obb).GetField("ne", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             if (neF != null) ne = (int)Convert.ChangeType(neF.GetValue(mod), typeof(int));
-            long bs = 1;
+            // [Fix 2026-11-13] bs=-1 like the Detect head (was hardcoded 1): dynamic batch must
+            // propagate through the angle branch too. Anchor dim = concrete H*W (ONE -1 per Reshape).
+            // 对齐Detect头bs=-1；anchor维用具体值（每个Reshape只允许一个-1）
+            long bs = -1;
             var angViews = new List<string>();
             for (int i = 0; i < feats.Length; i++)
             {
                 var aOut = SequentialDown(c, cv4[i], feats[i]);
-                angViews.Add(Ops.Reshape(c, aOut, new long[] { bs, ne, -1 }));
+                angViews.Add(Ops.Reshape(c, aOut, new long[] { bs, ne, HWOf(c, aOut) }));
             }
             var ang = Ops.Concat(c, angViews.ToArray(), 2);
             // (sigmoid-0.25)*π: Sigmoid→sub(0.25)→mul(π)
+            // [Fix 2026-11-13] propagate the shape through this element-wise chain (was dropped —
+            // the final output0 shape check then fell back to fully-symbolic dims). / 逐元素链补形状传播
             var sigN = c.Temp("osig");
             c.Node("Sigmoid", sigN, ang);
+            var angSh = c.ShapeOf(ang); if (angSh != null) c.SetShape(sigN, angSh);
             var c025 = c.AddInitializer(c.Temp("oc0"), torch.tensor(0.25f));
             var subN = c.Temp("osub");
             c.Node("Sub", subN, sigN, c025);
+            if (angSh != null) c.SetShape(subN, angSh);
             var cPi = c.AddInitializer(c.Temp("opi"), torch.tensor((float)Math.PI));
             var mulN = c.Temp("omul");
             c.Node("Mul", mulN, subN, cPi);
+            if (angSh != null) c.SetShape(mulN, angSh);
             outputs["angle"] = mulN;
         }
 
@@ -304,7 +316,10 @@ namespace YoloSharp.OnnxExport
             // cv4 mask coefficients (same structure as cv2/cv3: Conv,Conv,Conv1x1) / cv4 mask系数结构同cv2cv3同）
             var cv4 = ((TorchSharp.Modules.ModuleList<TorchSharp.Modules.Sequential>)mod.get_field("cv4")).ToArray();
             int nl = feats.Length;
-            long bs = 1;
+            // [Fix 2026-11-13] bs=-1 like the Detect head (was hardcoded 1): dynamic batch must
+            // propagate through the mask branch too. Anchor dim = concrete H*W (ONE -1 per Reshape).
+            // 对齐Detect头bs=-1；anchor维用具体值（每个Reshape只允许一个-1）
+            long bs = -1;
             int nm = 32;   // nm default 32 (mask channels) / mask通道默认32
             var nmF = typeof(Head.Segment).GetField("nm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             if (nmF != null) nm = (int)Convert.ChangeType(nmF.GetValue(mod), typeof(int));
@@ -313,7 +328,7 @@ namespace YoloSharp.OnnxExport
             {
                 var mOut = SequentialDown(c, cv4[i], feats[i]);
                 long mC = (long)nm;
-                maskViews.Add(Ops.Reshape(c, mOut, new long[] { bs, mC, -1 }));
+                maskViews.Add(Ops.Reshape(c, mOut, new long[] { bs, mC, HWOf(c, mOut) }));
             }
             outputs["masks"] = Ops.Concat(c, maskViews.ToArray(), 2);
 

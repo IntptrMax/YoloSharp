@@ -104,7 +104,7 @@ namespace YoloSharp.OnnxExport
             // torch.onnx.export convention: [batch, 84, 8400] (only batch symbolic, rest concrete).
             // The static shape is available from shape propagation (seeded by dummyShape) — read it and
             // emit dim_value for all dims except dim 0. / 输出声明改为python风格混合：仅batch符号维，其余具体值
-            var parts = finalOutputs.Where(kv => kv.Key != "masks" && kv.Key != "proto")
+            var parts = finalOutputs.Where(kv => kv.Key != "proto")
                                     .OrderBy(kv => kv.Key == "boxes" ? 0 : kv.Key == "scores" ? 1 : 2)
                                     .Select(kv => kv.Value).ToArray();
             string merged = parts.Length == 1 ? parts[0] : Ops.Concat(c, parts, 1);
@@ -112,6 +112,10 @@ namespace YoloSharp.OnnxExport
             c.Model.AddOutput(MakePythonStyleOutput(c, "output0", merged));
             if (finalOutputs.ContainsKey("masks"))
             {
+                // [Fix 2026-11-13] masks coefficients were computed but DROPPED from output0 (the
+                // single-output refactor excluded them) — output0 was [64+nc] instead of [64+nc+32].
+                // masks now rides in output0 channels after scores; output1 = proto only.
+                // masks系数曾漏拼进output0——现拼入scores之后，output1仅proto。
                 c.Node("Identity", "output1", finalOutputs["proto"]);
                 c.Model.AddOutput(MakePythonStyleOutput(c, "output1", finalOutputs["proto"]));
             }

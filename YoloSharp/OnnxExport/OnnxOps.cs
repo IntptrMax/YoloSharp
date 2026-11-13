@@ -139,7 +139,12 @@ namespace YoloSharp.OnnxExport
                 {
                     var si = c.ShapeOf(inputs[i]);
                     if (si == null || si.Length != sh0.Length) { outSh = null; break; }
-                    for (int d = 0; d < sh0.Length; d++) if (d != axis && si[d] != sh0[d]) outSh = null;
+                    // [Fix 2026-11-13] A dynamic (<=0) dim matches ANY value on non-concat axes (e.g.
+                    // boxes bs=-1 vs obb-angle chain bs=1 — batch propagates dynamically from input).
+                    // Only two KNOWN-but-different values are a real mismatch. / 非拼接轴上"动态维"
+                    // 与任何值都兼容（动态batch），仅两个具体值不等才是真不匹配
+                    for (int d = 0; d < sh0.Length; d++)
+                        if (d != axis && si[d] > 0 && sh0[d] > 0 && si[d] != sh0[d]) outSh = null;
                     outSh[axis] += si[axis];
                 }
                 if (outSh != null) c.SetShape(outN, outSh);
