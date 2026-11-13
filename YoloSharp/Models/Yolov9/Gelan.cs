@@ -22,8 +22,15 @@ namespace YoloSharp.Models
             }
             public override torch.Tensor forward(torch.Tensor x)
             {
-                using var pooled = torch.nn.functional.avg_pool2d(x, 2, 1, 0, false, true);
-                return cv1.forward(pooled);
+                // [Fix 2026-11-13 author-reported] DisposeScope instead of `using var`: on CUDA,
+                // Dispose()/finalizers do NOT return VRAM — only tensors created inside a dispose
+                // scope are tracked and freed deterministically. `using var pooled` leaked a new
+                // VRAM block per forward call. / CUDA下Dispose不还显存，必须用DisposeScope管理
+                using (torch.NewDisposeScope())
+                {
+                    var pooled = torch.nn.functional.avg_pool2d(x, 2, 1, 0, false, true);
+                    return cv1.forward(pooled).MoveToOuterDisposeScope();
+                }
             }
         }
 
@@ -42,12 +49,17 @@ namespace YoloSharp.Models
             }
             public override torch.Tensor forward(torch.Tensor x)
             {
-                // 官方: y=list(cv1(x).chunk(2)); y.extend(m(y[-1]) for m in [cv2,cv3]); cv4(cat(y))
-                // cat=[y0,y1,a,b]=c3/2+c3/2+c4+c4 = c3+2*c4（实测权重cv4[64,128]证实4块cat）
-                var y = cv1.forward(x).chunk(2, 1);
-                var a = cv2.forward(y[1]);
-                var b = cv3.forward(a);
-                return cv4.forward(torch.cat(new torch.Tensor[] { y[0], y[1], a, b }, 1));
+                // [Fix 2026-11-13 author-reported] DisposeScope-managed intermediates (see AConv note):
+                // CUDA VRAM is only returned for scope-tracked tensors. / 中间张量纳入DisposeScope管理
+                using (torch.NewDisposeScope())
+                {
+                    // 官方: y=list(cv1(x).chunk(2)); y.extend(m(y[-1]) for m in [cv2,cv3]); cv4(cat(y))
+                    // cat=[y0,y1,a,b]=c3/2+c3/2+c4+c4 = c3+2*c4（实测权重cv4[64,128]证实4块cat）
+                    var y = cv1.forward(x).chunk(2, 1);
+                    var a = cv2.forward(y[1]);
+                    var b = cv3.forward(a);
+                    return cv4.forward(torch.cat(new torch.Tensor[] { y[0], y[1], a, b }, 1)).MoveToOuterDisposeScope();
+                }
             }
         }
 
@@ -64,7 +76,13 @@ namespace YoloSharp.Models
                 RegisterComponents();
             }
             public override torch.Tensor forward(torch.Tensor x)
-                => act.forward(conv1.forward(x) + conv2.forward(x));
+            {
+                // [Fix 2026-11-13 author-reported] DisposeScope-managed intermediates (see AConv note). / 中间张量纳入DisposeScope
+                using (torch.NewDisposeScope())
+                {
+                    return act.forward(conv1.forward(x) + conv2.forward(x)).MoveToOuterDisposeScope();
+                }
+            }
         }
 
         /// <summary>RepNBottleneck (common.py:299): RepConvN(3x3) + Conv(3x3) + optional shortcut</summary>
@@ -83,8 +101,12 @@ namespace YoloSharp.Models
             }
             public override torch.Tensor forward(torch.Tensor x)
             {
-                var y = cv2.forward(cv1.forward(x));
-                return add ? x + y : y;
+                // [Fix 2026-11-13 author-reported] DisposeScope-managed intermediates (see AConv note). / 中间张量纳入DisposeScope
+                using (torch.NewDisposeScope())
+                {
+                    var y = cv2.forward(cv1.forward(x));
+                    return (add ? x + y : y).MoveToOuterDisposeScope();
+                }
             }
         }
 
@@ -106,10 +128,14 @@ namespace YoloSharp.Models
             }
             public override torch.Tensor forward(torch.Tensor x)
             {
-                // 官方: cv3(cat(m(cv1(x)), cv2(x)))——m链吃cv1输出(c_)，cv2旁路
-                var a = cv1.forward(x);
-                foreach (var b in m) a = b.forward(a);
-                return cv3.forward(torch.cat(new torch.Tensor[] { a, cv2.forward(x) }, 1));
+                // [Fix 2026-11-13 author-reported] DisposeScope-managed intermediates (see AConv note). / 中间张量纳入DisposeScope
+                using (torch.NewDisposeScope())
+                {
+                    // 官方: cv3(cat(m(cv1(x)), cv2(x)))——m链吃cv1输出(c_)，cv2旁路
+                    var a = cv1.forward(x);
+                    foreach (var b in m) a = b.forward(a);
+                    return cv3.forward(torch.cat(new torch.Tensor[] { a, cv2.forward(x) }, 1)).MoveToOuterDisposeScope();
+                }
             }
         }
 
@@ -137,12 +163,16 @@ namespace YoloSharp.Models
             }
             public override torch.Tensor forward(torch.Tensor x)
             {
-                // 官方: y=list(cv1(x).chunk(2)); y.extend(m(y[-1]) for m in [cv2,cv3]); cv4(cat(y))
-                // → cat = [y0(c3/2), y1(c3/2), cv2(y1)(c4), cv3(cv2(y1))(c4)] = c3 + 2*c4
-                var y = cv1.forward(x).chunk(2, 1);
-                var a = cv2.forward(y[1]);
-                var b = cv3.forward(a);
-                return cv4.forward(torch.cat(new torch.Tensor[] { y[0], y[1], a, b }, 1));
+                // [Fix 2026-11-13 author-reported] DisposeScope-managed intermediates (see AConv note). / 中间张量纳入DisposeScope
+                using (torch.NewDisposeScope())
+                {
+                    // 官方: y=list(cv1(x).chunk(2)); y.extend(m(y[-1]) for m in [cv2,cv3]); cv4(cat(y))
+                    // → cat = [y0(c3/2), y1(c3/2), cv2(y1)(c4), cv3(cv2(y1))(c4)] = c3 + 2*c4
+                    var y = cv1.forward(x).chunk(2, 1);
+                    var a = cv2.forward(y[1]);
+                    var b = cv3.forward(a);
+                    return cv4.forward(torch.cat(new torch.Tensor[] { y[0], y[1], a, b }, 1)).MoveToOuterDisposeScope();
+                }
             }
         }
 
@@ -162,11 +192,15 @@ namespace YoloSharp.Models
             }
             public override torch.Tensor forward(torch.Tensor x)
             {
-                var y0 = cv1.forward(x);
-                var y1 = cv2.forward(y0);      // SP(5)
-                var y2t = cv3.forward(y1);     // SP(5)
-                var y3t = cv4.forward(y2t);    // SP(5)
-                return cv5.forward(torch.cat(new torch.Tensor[] { y0, y1, y2t, y3t }, 1));
+                // [Fix 2026-11-13 author-reported] DisposeScope-managed intermediates (see AConv note). / 中间张量纳入DisposeScope
+                using (torch.NewDisposeScope())
+                {
+                    var y0 = cv1.forward(x);
+                    var y1 = cv2.forward(y0);      // SP(5)
+                    var y2t = cv3.forward(y1);     // SP(5)
+                    var y3t = cv4.forward(y2t);    // SP(5)
+                    return cv5.forward(torch.cat(new torch.Tensor[] { y0, y1, y2t, y3t }, 1)).MoveToOuterDisposeScope();
+                }
             }
         }
 
@@ -184,12 +218,18 @@ namespace YoloSharp.Models
             }
             public override torch.Tensor forward(torch.Tensor x)
             {
-                using var pooled = torch.nn.functional.avg_pool2d(x, 2, 1, 0, false, true);
-                var y = pooled.chunk(2, 1);
-                var x1 = cv1.forward(y[0]);
-                using var x2p = torch.nn.functional.max_pool2d(y[1], 3, 2, 1);
-                var x2 = cv2.forward(x2p);
-                return torch.cat(new torch.Tensor[] { x1, x2 }, 1);
+                // [Fix 2026-11-13 author-reported] DisposeScope instead of `using var` (pooled/x2p
+                // leaked VRAM per call on CUDA — Dispose does not return VRAM; scope-managed tensors
+                // do). / CUDA下using var不还显存，pooled/x2p改DisposeScope管理
+                using (torch.NewDisposeScope())
+                {
+                    var pooled = torch.nn.functional.avg_pool2d(x, 2, 1, 0, false, true);
+                    var y = pooled.chunk(2, 1);
+                    var x1 = cv1.forward(y[0]);
+                    var x2p = torch.nn.functional.max_pool2d(y[1], 3, 2, 1);
+                    var x2 = cv2.forward(x2p);
+                    return torch.cat(new torch.Tensor[] { x1, x2 }, 1).MoveToOuterDisposeScope();
+                }
             }
         }
     }

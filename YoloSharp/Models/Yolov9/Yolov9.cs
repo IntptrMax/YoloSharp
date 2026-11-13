@@ -32,38 +32,52 @@ namespace YoloSharp.Models
         /// <summary>v9 forward: aux branch (22) forks from layer 8 (yaml [8,1,SPPELAN]); Detect(29) inputs=[28,25,22,15,18,21] / v9 forward：aux支路(22)从层8分叉；Detect(29)输入=[28,25,22,15,18,21]</summary>
         public override (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? forward(torch.Tensor x)
         {
-            (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? result = null;
-            var outputs = new List<torch.Tensor>();
-            int catCount = 0;
-            // outputs collection order (outputIndexs): 4,6,8,9,12,15,18,21,22,25,28 -> indices 0..10
-            // Detect inputs: [28(10), 25(9), 22(8), 15(5), 18(6), 21(7)]
-            int[] detectSrc = { 10, 9, 8, 5, 6, 7 };
-            for (int i = 0; i < model.Count; i++)
+            // [Fix 2026-11-13 author-reported] Whole-forward dispose scope: on CUDA, Dispose()/
+            // finalizers do NOT return VRAM — every intermediate (layer outputs, concat caches,
+            // aux-branch tensors) must live inside a scope to be freed deterministically, else each
+            // forward leaks a growing block. The Detect result tensors are moved out on return.
+            // / 整网forward纳入DisposeScope：CUDA下中间张量必须被scope管理，否则每次前向泄漏显存
+            using (torch.NewDisposeScope())
             {
-                // aux branch fork: layer 22 (SPPELAN) input = layer 8 output (outputs index 2), not the sequential x / aux支路分叉：层22输入=层8输出，不是顺序流x
-                if (i == 22)
+                (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? result = null;
+                var outputs = new List<torch.Tensor>();
+                int catCount = 0;
+                // outputs collection order (outputIndexs): 4,6,8,9,12,15,18,21,22,25,28 -> indices 0..10
+                // Detect inputs: [28(10), 25(9), 22(8), 15(5), 18(6), 21(7)]
+                int[] detectSrc = { 10, 9, 8, 5, 6, 7 };
+                for (int i = 0; i < model.Count; i++)
                 {
-                    x = outputs[2];   // layer 8
+                    // aux branch fork: layer 22 (SPPELAN) input = layer 8 output (outputs index 2), not the sequential x / aux支路分叉：层22输入=层8输出，不是顺序流x
+                    if (i == 22)
+                    {
+                        x = outputs[2];   // layer 8
+                    }
+                    switch (model[i])
+                    {
+                        case torch.nn.Module<torch.Tensor, torch.Tensor> mod:
+                            x = mod.forward(x);
+                            break;
+                        case Convs.Concat cat:
+                            x = cat.forward(new torch.Tensor[] { x, outputs[concatIndex[catCount]] });
+                            catCount++;
+                            break;
+                        case Head.DetectV9 detect:
+                            result = detect.forward(detectSrc.Select(idx => outputs[idx]).ToArray());
+                            break;
+                        default:
+                            throw new Exception("Yolov9 forward: unhandled module " + model[i].GetType().Name);
+                    }
+                    if (outputIndexs.Contains(i))
+                        outputs.Add(x);
                 }
-                switch (model[i])
-                {
-                    case torch.nn.Module<torch.Tensor, torch.Tensor> mod:
-                        x = mod.forward(x);
-                        break;
-                    case Convs.Concat cat:
-                        x = cat.forward(new torch.Tensor[] { x, outputs[concatIndex[catCount]] });
-                        catCount++;
-                        break;
-                    case Head.DetectV9 detect:
-                        result = detect.forward(detectSrc.Select(idx => outputs[idx]).ToArray());
-                        break;
-                    default:
-                        throw new Exception("Yolov9 forward: unhandled module " + model[i].GetType().Name);
-                }
-                if (outputIndexs.Contains(i))
-                    outputs.Add(x);
+                // The result tensors must survive the scope exit / 结果张量移出scope存活
+                if (result != null && result.Value.inference != null)
+                    foreach (var kv in result.Value.inference) kv.Value.MoveToOuterDisposeScope();
+                if (result != null && result.Value.preds != null)
+                    foreach (var kv in result.Value.preds)
+                        if (kv.Value is torch.Tensor t) t.MoveToOuterDisposeScope();
+                return result;
             }
-            return result;
         }
 
         internal override ModuleList<torch.nn.Module> BuildModel()
@@ -173,33 +187,44 @@ namespace YoloSharp.Models
             /// <summary>seg forward: 23-layer sequential flow (no aux fork); Segment at layer 22, inputs=[15,18,21] (last 3 of outputs) / seg版forward：23层顺序流；Segment在层22</summary>
             public override (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? forward(torch.Tensor x)
             {
-                (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? result = null;
-                var outputs = new List<torch.Tensor>();
-                int catCount = 0;
-                // cached layers (concat sources + Segment inputs): 4,6,9,12,15,18,21 -> indices 0..6
-                // concat sources: 11(cat6=1) 14(cat4=0) 17(cat12=3) 20(cat9=2)
-                int[] catSrc = { 1, 0, 3, 2 };
-                for (int i = 0; i < model.Count; i++)
+                // [Fix 2026-11-13 author-reported] Whole-forward dispose scope (see Yolov9.forward note):
+                // CUDA VRAM is only returned for scope-tracked tensors. / 整网forward纳入DisposeScope（同Yolov9.forward）
+                using (torch.NewDisposeScope())
                 {
-                    switch (model[i])
+                    (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)? result = null;
+                    var outputs = new List<torch.Tensor>();
+                    int catCount = 0;
+                    // cached layers (concat sources + Segment inputs): 4,6,9,12,15,18,21 -> indices 0..6
+                    // concat sources: 11(cat6=1) 14(cat4=0) 17(cat12=3) 20(cat9=2)
+                    int[] catSrc = { 1, 0, 3, 2 };
+                    for (int i = 0; i < model.Count; i++)
                     {
-                        case torch.nn.Module<torch.Tensor, torch.Tensor> m:
-                            x = m.forward(x);
-                            break;
-                        case Convs.Concat cat:
-                            x = cat.forward(new torch.Tensor[] { x, outputs[catSrc[catCount]] });
-                            catCount++;
-                            break;
-                        case Head.Segment seg:
-                            result = seg.forward(new torch.Tensor[] { outputs[4], outputs[5], outputs[6] });  // 15,18,21
-                            break;
-                        default:
-                            throw new Exception("Yolov9Segment forward: unhandled " + model[i].GetType().Name);
+                        switch (model[i])
+                        {
+                            case torch.nn.Module<torch.Tensor, torch.Tensor> m:
+                                x = m.forward(x);
+                                break;
+                            case Convs.Concat cat:
+                                x = cat.forward(new torch.Tensor[] { x, outputs[catSrc[catCount]] });
+                                catCount++;
+                                break;
+                            case Head.Segment seg:
+                                result = seg.forward(new torch.Tensor[] { outputs[4], outputs[5], outputs[6] });  // 15,18,21
+                                break;
+                            default:
+                                throw new Exception("Yolov9Segment forward: unhandled " + model[i].GetType().Name);
+                        }
+                        if (i == 4 || i == 6 || i == 9 || i == 12 || i == 15 || i == 18 || i == 21)
+                            outputs.Add(x);
                     }
-                    if (i == 4 || i == 6 || i == 9 || i == 12 || i == 15 || i == 18 || i == 21)
-                        outputs.Add(x);
+                    // The result tensors must survive the scope exit / 结果张量移出scope存活
+                    if (result != null && result.Value.inference != null)
+                        foreach (var kv in result.Value.inference) kv.Value.MoveToOuterDisposeScope();
+                    if (result != null && result.Value.preds != null)
+                        foreach (var kv in result.Value.preds)
+                            if (kv.Value is torch.Tensor t) t.MoveToOuterDisposeScope();
+                    return result;
                 }
-                return result;
             }
         }
 }

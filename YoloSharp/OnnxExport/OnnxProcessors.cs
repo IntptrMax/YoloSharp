@@ -751,6 +751,11 @@ namespace YoloSharp.OnnxExport
             ap.AttrIntLists.Add(("strides", new long[] { 1, 1 }));   // k2s1: size unchanged (ceil aligned) / k2s1：尺寸不变(ceil对齐)
             ap.AttrIntLists.Add(("pads", new long[] { 0, 0, 0, 0 }));
             ap.AttrInts.Add(("ceil_mode", 1));
+            // [Fix 2026-11-13] propagate the pool shape (k2s1+ceil_mode keeps H/W — identity) —
+            // without the entry every downstream op loses propagation and the head Reshape falls
+            // back to double -1 (ORT rejects the graph). / 池化形状传播（k2s1恒等，但必须有表项）
+            var adIn = c.ShapeOf(input);
+            if (adIn != null) c.SetShape(pooled, new long[] { adIn[0], adIn[1], adIn[2], adIn[3] });
             var cv1 = (Convs.Conv)mod.get_field("cv1");
             var cv2 = (Convs.Conv)mod.get_field("cv2");
             int half = (int)cv1.conv.in_channels;   // after chunk(2) each half = pooled channels/2 = cv1 input / chunk(2)后每半
@@ -770,6 +775,10 @@ namespace YoloSharp.OnnxExport
             ap.AttrIntLists.Add(("strides", new long[] { 1, 1 }));   // k2s1 same as ADown / k2s1同ADown
             ap.AttrIntLists.Add(("pads", new long[] { 0, 0, 0, 0 }));
             ap.AttrInts.Add(("ceil_mode", 1));
+            // [Fix 2026-11-13] propagate the pool shape — k2s1+ceil keeps H/W (identity), but the
+            // shape entry itself must exist or every downstream op loses propagation. / 池化形状传播
+            var acIn = c.ShapeOf(input);
+            if (acIn != null) c.SetShape(pooled, new long[] { acIn[0], acIn[1], acIn[2], acIn[3] });
             return Conv(c, (Convs.Conv)mod.get_field("cv1"), pooled, "ac1");
         }
 
