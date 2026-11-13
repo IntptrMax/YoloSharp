@@ -99,23 +99,46 @@ namespace YoloSharp.OnnxExport
 
             // Semantic output names: add Identity nodes to rename (avoid internal names like cat_302 — deployment backends bind tensors by name)
             // Semantic output names: Identity nodes rename them (avoids internal names like cat_302 — deployment backends bind tensors by name) / 语义输出名加Identity重命名
-            // [Fix 2026-11-12 用户裁定] Single-output layout is now the ONLY format (multi-head retired):
-            // all per-anchor head outputs concat along dim 1 — output0 = [N, 64 + nc (+1 obb) (+nk·nd pose), A]
-            // (raw DFL boxes, NOT decoded; decode at runtime). Segmentation adds output1 = proto.
-            // The boolean export flag now controls the INPUT declaration only: false = static [1] (OV/ORT),
-            // true = dynamic -1 (TRT profiled engine). / 单输出唯一布局; 开关只控输入静/动
+            // [Fix 2026-11-13 作者反馈] Output shape must be python-style mixed, not fully symbolic:
+            // previously Rank=3 declared [bs, dim1, dim2] (all symbolic) — Netron/author expected the
+            // torch.onnx.export convention: [batch, 84, 8400] (only batch symbolic, rest concrete).
+            // The static shape is available from shape propagation (seeded by dummyShape) — read it and
+            // emit dim_value for all dims except dim 0. / 输出声明改为python风格混合：仅batch符号维，其余具体值
             var parts = finalOutputs.Where(kv => kv.Key != "masks" && kv.Key != "proto")
                                     .OrderBy(kv => kv.Key == "boxes" ? 0 : kv.Key == "scores" ? 1 : 2)
                                     .Select(kv => kv.Value).ToArray();
             string merged = parts.Length == 1 ? parts[0] : Ops.Concat(c, parts, 1);
             c.Node("Identity", "output0", merged);
-            c.Model.AddOutput(new OnnxValueInfo { Name = "output0", Rank = 3 });
+            c.Model.AddOutput(MakePythonStyleOutput(c, "output0", merged));
             if (finalOutputs.ContainsKey("masks"))
             {
                 c.Node("Identity", "output1", finalOutputs["proto"]);
-                c.Model.AddOutput(new OnnxValueInfo { Name = "output1", Rank = 3 });
+                c.Model.AddOutput(MakePythonStyleOutput(c, "output1", finalOutputs["proto"]));
             }
             c.Model.Save(outputPath, "yolosharp");
+        }
+
+        /// <summary>
+        /// [Add 2026-11-13] Output declaration in torch.onnx.export style: concrete dims from static shape
+        /// propagation, dynamic dims (<=0, e.g. the Detect-head bs=-1) symbolic "batch" — yielding
+        /// [batch, 84, 8400], matching what the official python export produces. Falls back to
+        /// fully-symbolic ranked shape only when propagation lost the shape entirely.
+        /// / python风格输出声明：动态维(≤0)符号化，其余具体值；传播整体丢失才回退全符号
+        /// </summary>
+        static OnnxValueInfo MakePythonStyleOutput(ExportContext c, string name, string src)
+        {
+            var sh = c.ShapeOf(src);
+            if (sh == null || sh.Length == 0)
+                return new OnnxValueInfo { Name = name, Rank = 3 };   // fallback: fully symbolic / 回退全符号
+            // dynamic dims (<=0 in propagation) become symbolic dim_params / 传播中≤0的维转符号维
+            var sym = new List<int>();
+            for (int i = 0; i < sh.Length; i++) if (sh[i] <= 0) sym.Add(i);
+            // python semantic: dynamic dim is batch (dim 0); any other dynamic dim → fully symbolic fallback / 仅batch允许动态
+            if (sym.Count > 0 && sym[0] != 0)
+                return new OnnxValueInfo { Name = name, Rank = sh.Length };
+            var dims = (long[])sh.Clone();
+            for (int i = 0; i < dims.Length; i++) if (dims[i] <= 0) dims[i] = 1;   // concrete placeholder for symbolic dims / 符号维占位
+            return new OnnxValueInfo { Name = name, Dims = dims, SymbolicDims = sym.Count > 0 ? sym.ToArray() : null };
         }
 
         /// <summary>Backbone module dispatch (everything except Detect heads) / 骨干模块分发（Detect头之外的一切）</summary>

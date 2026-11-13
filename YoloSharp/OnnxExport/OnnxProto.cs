@@ -165,6 +165,12 @@ namespace YoloSharp.OnnxExport
         public long[] Dims;          // includes batch dim; dynamic dim uses -1 / 含batch维；动态维用-1
         public OnnxDataType DataType = OnnxDataType.Float;
         public int? Rank;            // [Add 2026-11-12] used with Dims=null to emit a fully-dynamic ranked shape / Dims=null时的动态秩
+        /// <summary>[Add 2026-11-13] python-style mixed shape: concrete Dims except the dims listed here,
+        /// which are emitted as symbolic dim_param entries (torch.onnx.export dynamic_axes convention).
+        /// E.g. Dims=[1,84,8400] + SymbolicDims=[0] → [batch, 84, 8400] — what Netron shows for official
+        /// ultralytics ONNX. Use instead of Dims=null+Rank for outputs whose static shape is known.
+        /// / python风格混合shape：除符号维外全是具体值（[batch,84,8400]）</summary>
+        public int[] SymbolicDims;
 
         public void WriteTo(ProtoWriter parent, int field)
         {
@@ -197,11 +203,14 @@ namespace YoloSharp.OnnxExport
             var tt = new ProtoWriter();
             tt.WriteInt64Field(1, (long)DataType);               // TypeProto.TensorType.elem_type = field 1
             var shape = new ProtoWriter();
-            foreach (var d in Dims)
+            for (int i = 0; i < Dims.Length; i++)
             {
                 var dim = new ProtoWriter();
-                dim.WriteInt64Field(1, d);            // Dim.dim_value = field 1 (official hex: 08=1<<3|0)
-                shape.WriteMessageField(1, dim);      // TensorShapeProto.dim = field 1 (repeated)
+                if (SymbolicDims != null && SymbolicDims.Contains(i))
+                    dim.WriteStringField(2, "batch");            // Dim.dim_param = field 2 (symbolic) — python dynamic_axes style / 符号维
+                else
+                    dim.WriteInt64Field(1, Dims[i]);             // Dim.dim_value = field 1 (official hex: 08=1<<3|0)
+                shape.WriteMessageField(1, dim);                 // TensorShapeProto.dim = field 1 (repeated)
             }
             tt.WriteMessageField(2, shape);                      // tensor_type.shape = field 2
             var type = new ProtoWriter();
