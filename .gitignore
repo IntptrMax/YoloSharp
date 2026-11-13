@@ -361,6 +361,3 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
-PR_DESCRIPTION_YOLOV9.md
-py_obb30/
-COMMIT_MESSAGE_TRAINING_FIX.md
