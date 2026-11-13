@@ -11,7 +11,7 @@ No Python required — from training to inference, everything stays inside .NET.
 - **All task types** – Object detection, segmentation, oriented bounding boxes (OBB), pose estimation (keypoints), and classification.
 - **Model sizes** – n/s/m/l/x variants available for every architecture.
 - **Advanced preprocessing** – Built-in LetterBox and Mosaic4 data augmentation.
-- **ONNX export** – Export trained models (all tasks) to deployable ONNX (multi-head or python-style single output) with dynamic batch; verified against ONNX Runtime / OpenVINO / TensorRT. See [docs/ONNX-Output-Format.md](docs/ONNX-Output-Format.md) for the output layout & post-processing guide.
+- **ONNX export** – Export trained models (all tasks) to a deployable ONNX with dynamic batch: single `output0` (ultralytics-style layout, `[batch, 64+nc, 8400]`), one file feeding ONNX Runtime / OpenVINO / TensorRT / libtorch. See [docs/ONNX-Output-Format.md](docs/ONNX-Output-Format.md) for the output layout & post-processing guide.
 - **GPU‑accelerated NMS** – Non‑maximum suppression runs directly on GPU.
 - **Pretrained models** – Load models from Ultralytics YOLO (v5/v8/v11) and converted YOLOv12 checkpoints.
 - **Cross‑platform** – Works with .NET 6 and later, plus netstandard2.0 / .NET Framework 4.8.

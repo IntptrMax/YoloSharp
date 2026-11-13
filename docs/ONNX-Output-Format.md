@@ -32,43 +32,30 @@ normalized** (do it before feeding; the graph does NOT normalize). Letterbox:
 centered padding.
 
 Single output, python-convention declaration `[batch, C, A]` (only batch
-symbolic; C/A concrete, e.g. `[batch, 65, 8400]` at nc=1) / 单输出，python惯例声明：
+symbolic; C/A concrete, e.g. `[batch, 65, 8400]` at nc=1). **Every task packs
+into ONE `output0`** — per-task channel layout below / 各任务全部打包进唯一
+`output0`，按任务区分通道布局：
 
-### Detection
+### Channel layout of `output0` / output0 通道布局
 
-| Output | Dims | Meaning |
+| Task | `output0` dims | dim1 channel order / 通道顺序 |
 |---|---|---|
-| `output0` | `[N, 64+nc, 8400]` | channels `0..63` = **raw DFL distributions — NOT coordinates**; channels `64..` = class probabilities (**sigmoid already applied**) / ch0-63=DFL原始分布(不是坐标), ch64+=已sigmoid类别概率 |
+| Detection | `[batch, 64+nc, 8400]` | boxes DFL (64, raw distribution) ‖ class scores (nc, sigmoid applied) |
+| OBB | `[batch, 64+nc+1, 8400]` | … ‖ angle (1) / 追加角度通道 |
+| Pose | `[batch, 64+nc+nk·nd, 8400]` | … ‖ keypoints (nk×nd) / 追加关键点通道 |
+| Segmentation | `[batch, 64+nc+32, 8400]` + `output1` proto | … ‖ mask coefficients (32)；proto 单独走 `output1` `[batch, 32, H/4, W/4]` |
 
-### OBB (rotated boxes) adds / OBB 任务额外输出
-
-| Output | Dims | Meaning |
-|---|---|---|
-| `output_angle` | `[N, 1, 8400]` | Per-anchor angle logits / 每 anchor 一个角度 logit |
-
-### Segmentation adds / 分割任务额外输出
-
-| Output | Dims | Meaning |
-|---|---|---|
-| `output_masks` | `[N, 32, 8400]` | Mask coefficients (32 per anchor) / mask 系数 |
-| `output_proto` | `[N, 32, H/4, W/4]` | Mask prototypes (P3-level) / mask 原型 |
-
-### Pose adds / 姿态任务额外输出
-
-| Output | Dims | Meaning |
-|---|---|---|
-| `output_kpts` | `[N, nk*nd, 8400]` | Keypoints (nk points × nd dims: 2=x,y / 3=x,y,visible) / 关键点 |
+> channels `0..63` are the **raw DFL distributions — NOT coordinates**; decode
+> at runtime (see §3). Class scores already went through sigmoid.
+> / ch0-63=DFL原始分布(不是坐标，运行时解码)；类别概率已过sigmoid。
 
 ### What each dim is / 各维含义
 
-- **dim0 = N** — batch (frames). Static export declares 1; OV reshapes to -1 at
-  load; TRT dyn variant declares it symbolic. / 帧数
-- **dim1 = channels** — see per-output table above (`output_scores` dim1 = nc,
-  `output_angle` dim1 = 1, `output_boxes` dim1 = 4×regMax=64). / 通道
+- **dim0 = batch** — symbolic (`batch` dim_param); any N at runtime. / 帧数，符号维
+- **dim1 = channels** — see the table above. / 通道，见上表
 - **dim2 = 8400 anchors** — the P3/P4/P5 grid: `80²+40²+20² = 6400+1600+400`
   (stride 8/16/32 at 640 input). Anchor order: P3 rows first, then P4, P5.
   / anchor 网格，P3 在前
-- **dim3 (proto only)** — spatial H/4 × W/4. / proto 的空间维
 
 ---
 
@@ -77,8 +64,8 @@ symbolic; C/A concrete, e.g. `[batch, 65, 8400]` at nc=1) / 单输出，python�
 Scores threshold → DFL decode → grid + stride → xywh → map to original image → NMS.
 
 ```
-1) Filter:   score = output_scores[n, c, a] > conf        (already a probability)
-2) DFL:      for each anchor, take 64 channels = 4 edges × 16 bins
+1) Filter:   score = output0[n, 64+c, a] > conf         (already a probability)
+2) DFL:      for each anchor, take channels 0..63 = 4 edges × 16 bins
              each 16-bin group: softmax → dot([0..15]) → expected distance d_i
              box (ltrb in stride units): [−d0, −d1, d2, d3]  (order: l,t,r,b)
 3) Grid:     anchor a → (gx, gy) on its level; stride s ∈ {8,16,32}
@@ -89,10 +76,8 @@ Scores threshold → DFL decode → grid + stride → xywh → map to original i
 5) NMS per class (IoU 0.45 typical)
 ```
 
-> Angle (OBB): `output_angle` is a raw logit (multi-class angle bins when
-> angle_bins > 1). Decode: softmax over bins → expectation × π / bins, or
-> `sigmoid × π` for the continuous single-channel case — match your training
-> config. / 角度按训练配置的 bins 解码
+> Angle (OBB): channel `64+nc` of `output0` is the decoded angle
+> (`(sigmoid−0.25)·π`, single channel). / OBB角度通道已解码((sigmoid−0.25)·π)
 
 Reference implementation: `Txm.AI/Yolo/OnnxPredictCore.cs` (C#, used by all
 three backends) — feel free to copy. / 参考实现可直接抄
@@ -135,7 +120,7 @@ output: frame-contiguous [N, C, 8400] — slice per frame: a-th anchor at
 
 ## 6. FAQ
 
-**Q: Why is `output_boxes` 64 channels instead of 4?**
+**Q: Why are the box channels 64 wide instead of 4?**
 A: It's DFL: 4 edges × 16 distribution bins. Decode with softmax+expectation
 (step 2 above). Keeping this out of the graph preserves FP16 accuracy under
 TensorRT and lets all runtimes share one exact decoder. / DFL 分布，图外解码保精度
