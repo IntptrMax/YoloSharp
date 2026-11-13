@@ -71,7 +71,8 @@ namespace YoloSharp.Models
         }
         internal class Yolov5uSegment : Yolov5u
         {
-            private readonly ModuleList<torch.nn.Module> model;
+            // [Fix 2026-11-13] removed unused `model` field: it hid the base class field (CS0108) and was
+            // never used (CS0169) — BuildModel() override already swaps the head. / 删除未使用且遮蔽基类的字段
 
             internal Yolov5uSegment(int nc = 80, int reg_max = 16, YoloSize yoloSize = YoloSize.n, bool end2end = false, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nc, reg_max: reg_max, yoloSize: yoloSize, end2end: end2end, device: device, dtype: dtype)
             {

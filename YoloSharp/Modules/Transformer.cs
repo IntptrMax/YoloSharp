@@ -165,11 +165,13 @@ namespace YoloSharp.Modules
             /// Returns:
             ///     (torch.Tensor): Output tensor with shape [B, C, H, W].
             /// </summary>
-            public new torch.Tensor forward(torch.Tensor x)
+            public torch.Tensor forward(torch.Tensor x)
             {
                 long c = x.shape[1], h = x.shape[2], w = x.shape[3];
                 var pos_embed = build_2d_sincos_position_embedding((int)w, (int)h, (int)c, 10000.0, x);
                 // Flatten [B, C, H, W] to [B, HxW, C]
+                // NOTE: no `new` keyword — this does NOT hide a base member (TransformerEncoderLayer.forward
+                // takes different parameters = overloading, not hiding). / 无new：与基类参数不同是重载不是遮蔽
                 x = base.forward(x.flatten(2).permute(0, 2, 1), pos_embed.to(x.dtype));
                 return x.permute(0, 2, 1).reshape(-1, c, h, w).contiguous();
             }
@@ -616,7 +618,7 @@ namespace YoloSharp.Modules
                 var sampling_offsets = this.sampling_offsets.forward(query).view(bs, len_q, n_heads, n_total_points, 2);
                 var attention_weights = this.attention_weights.forward(query).view(bs, len_q, n_heads, n_total_points);
                 attention_weights = torch.nn.functional.softmax(attention_weights, -1);
-                int num_points = (int)refer_bbox.shape[-1];
+                int num_points = (int)refer_bbox.shape[refer_bbox.shape.Length - 1];   // python shape[-1] — C# long[] has no negative indexing / C#数组无负索引
                 torch.Tensor sampling_locations;
                 if (num_points == 2)
                 {
