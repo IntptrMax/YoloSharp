@@ -17,6 +17,7 @@ namespace YoloSharp.Models
             {
                 YoloType.Yolov5u => new Yolo.Yolov5uObb(config.NumberClass, end2end: config.End2End, yoloSize: config.YoloSize, device: config.Device, dtype: config.Dtype),
                 YoloType.Yolov8 => new Yolo.Yolov8Obb(config.NumberClass, end2end: config.End2End, yoloSize: config.YoloSize, device: config.Device, dtype: config.Dtype),
+                YoloType.Yolov9 => throw new NotSupportedException("YOLOv9 (GELAN): official yolov9 has no OBB variant at all. Use Yolov8/Yolov11 for OBB."),
                 YoloType.Yolov11 => new Yolo.Yolov11Obb(config.NumberClass, end2end: config.End2End, yoloSize: config.YoloSize, device: config.Device, dtype: config.Dtype),
                 YoloType.Yolov12 => new Yolo.Yolov12Obb(config.NumberClass, end2end: config.End2End, yoloSize: config.YoloSize, device: config.Device, dtype: config.Dtype),
                 _ => throw new NotImplementedException("Yolo type not supported."),
@@ -155,7 +156,7 @@ namespace YoloSharp.Models
 
         internal override float GetFitness(float[] metrics)
         {
-            // metrics = [P, R, mAP50, mAP50-95]（OBB 只有 box）
+            // metrics = [P, R, mAP50, mAP50-95] (OBB has box only) / OBB只有box
             return 0.1f * metrics[2] + 0.9f * metrics[3];
         }
         internal override string GetTrainDescription()

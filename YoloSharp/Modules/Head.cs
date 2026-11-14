@@ -5,6 +5,67 @@ namespace YoloSharp.Modules
 {
 	internal class Head
 	{
+		/// <summary>
+		/// YOLOv9 Detect head — contributed back to the open-source YoloSharp project.
+		/// v9 yaml Detect over 6 inputs [aux(P3,P4,P5), main(P3,P4,P5)]; inference uses the
+		/// LAST 3 (main). Channel basis: cv2/cv3 built per-branch from its own ch (aux uses ch[0] basis,
+		/// matching official v9 Detect: c2/c3 from ch[0] for first half, c4/c5 from ch[nl] for second).
+		/// Weight layout verified 1:1 with real yolov9-s: cv2.{0..5}, cv3.{0..5}, dfl.
+		/// </summary>
+		/// <summary>
+		/// [Rewrite 2026-11-04] Aligned with the ACTUAL head used by yolov9-s.yaml training:
+		/// `Detect` (v8-style, models/yolo.py:78 is DDetect — but the yaml's Detect entry maps to
+		/// the v8-style Detect with nl=len(ch)=6). Verified against python: Model('yolov9-s.yaml')
+		/// builds `Detect [1, [128,192,256,128,192,256]]` — SIX groups, all in forward+loss,
+		/// c2/c3 all based on ch[0], plain convs (no groups=4). Aux branch layers 22-28 DO feed
+		/// the head. Previous attempts aligned to DDetect/DualDDetect — wrong target (that's the
+		/// converted.pt inference-only checkpoint, not the training yaml).
+		/// Matches the actual yolov9-s.yaml training head: v8-style Detect with all six groups, ch[0] base, plain convs. / 对齐yolov9-s.yaml实际训练头
+		/// </summary>
+		internal class DetectV9 : Detect
+		{
+			internal DetectV9(int nc = 80, int[] ch = null, int reg_max = 16, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, reg_max, ch: ch, legacy: true, end2end: false, device: device, dtype: dtype)
+			{
+				// Rebuild to 6 groups, all based on ch[0] (official Detect: c2=max(ch0/4,4R,16),
+				// c3=max(ch0,min(nc*2,128))). Plain convs. / 六组全按ch[0]基准，普通卷积。
+				int c2 = Math.Max(Math.Max(ch[0] / 4, reg_max * 4), 16);
+				int c3 = Math.Max(ch[0], Math.Min(Math.Max(nc * 2, 1), 128));
+				var all2 = new List<Sequential>();
+				var all3 = new List<Sequential>();
+				for (int i = 0; i < ch.Length; i++)
+				{
+					all2.Add(torch.nn.Sequential(
+						new Convs.Conv(ch[i], c2, 3, device: device, dtype: dtype),
+						new Convs.Conv(c2, c2, 3, device: device, dtype: dtype),
+						torch.nn.Conv2d(c2, 4 * reg_max, 1, device: device, dtype: dtype)));
+					all3.Add(torch.nn.Sequential(
+						new Convs.Conv(ch[i], c3, 3, device: device, dtype: dtype),
+						new Convs.Conv(c3, c3, 3, device: device, dtype: dtype),
+						torch.nn.Conv2d(c3, nc, 1, device: device, dtype: dtype)));
+				}
+				cv2 = torch.nn.ModuleList(all2.ToArray());
+				cv3 = torch.nn.ModuleList(all3.ToArray());
+				SetPrivate("nl", ch.Length);
+				SetPrivate("no", nc + reg_max * 4);
+				SetPrivate("stride", new int[] { 8, 16, 32, 8, 16, 32 });   // 6 layers: aux(P3,P4,P5)+main(P3,P4,P5)
+				RegisterComponents();
+			}
+
+			void SetPrivate(string field, object value)
+			{
+				var f = typeof(Detect).GetField(field, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+				f?.SetValue(this, value);
+			}
+
+			public override (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds) forward(torch.Tensor[] x)
+			{
+				// All 6 groups participate (training AND eval) — identical to v8 Detect with nl=6.
+				// / All 6 groups participate (training and inference) — isomorphic to the nl=6 v8 Detect. / 全6组参与
+				return base.forward(x);
+			}
+		}
+
 		internal class Detect : torch.nn.Module<torch.Tensor[], (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)>
 		{
 			private long[] shape = null;
@@ -168,14 +229,24 @@ namespace YoloSharp.Modules
 
 				using (torch.no_grad())
 				{
-					if (count is null)
+					// [Fix 2026-11-04] BF16-safe bias write: fill_/index-fill on BFloat16 silently
+					// no-ops in this TorchSharp build ("No support for BFloat16") — the good prior
+					// log(5/nc/640²) never landed → epoch-1 cls loss exploded (1661). Compute in
+					// Float32 (full vector when count==null, else the first `count` slots) and copy
+					// back so the value survives any dtype.
+					// BF16-safe pattern: fill_ silently no-ops on BF16 — build the target vector in Float32 then copy_ back. / BF16安全写法
+					int n = (int)lastConv.bias.shape[0];
+					int k = count is null ? n : Math.Min(count.Value, n);
+					var biasF32 = lastConv.bias.to(torch.ScalarType.Float32);
+					var filled = torch.full(new long[] { k }, value, torch.ScalarType.Float32, device: biasF32.device);
+					if (k == n)
 					{
-						lastConv.bias.fill_(value);
+						lastConv.bias.copy_(filled.to(lastConv.bias.dtype));
 					}
 					else
 					{
-						int k = Math.Min(count.Value, (int)lastConv.bias.shape[0]);
-						lastConv.bias[torch.TensorIndex.Slice(0, k)].fill_(value);
+						biasF32[torch.TensorIndex.Slice(0, k)] = filled;
+						lastConv.bias.copy_(biasF32.to(lastConv.bias.dtype));
 					}
 				}
 			}
@@ -671,6 +742,260 @@ namespace YoloSharp.Modules
 				Dictionary<string, torch.Tensor> inference = new Dictionary<string, torch.Tensor>();
 				inference["cls"] = y;
 				return (inference, cls);
+			}
+		}
+
+		// ═══════════════════════════════════════════════════════════════════════════
+		// [Add 2026-10-30] Below heads mirror ultralytics head.py order (Segment26/OBB26/Pose26/
+		// Depth/WorldDetect/LRPCHead/YOLOEDetect/YOLOESegment/YOLOESegment26/RTDETRDecoder/
+		// v10Detect/SemanticSegment). These task families (YOLO26/YOLO-E/RT-DETR/Depth/World) are
+		// not yet exercised by the YoloSharp training/prediction pipeline — constructors keep the
+		// full ultralytics docstrings; heads that depend on unported ecosystems throw
+		// NotSupportedException on construction.
+		// ═══════════════════════════════════════════════════════════════════════════
+
+		/// <summary>
+		/// Ultralytics YOLO26 models segment head for segmentation models.
+		/// </summary>
+		internal class Segment26 : Segment
+		{
+			/// <summary>
+			/// Initialize the YOLO26 segment head.
+			///
+			/// Args:
+			///     nc (int): Number of classes.
+			///     nm (int): Number of masks.
+			/// </summary>
+			internal Segment26(int nc = 80, int nm = 32, int npr = 256, int reg_max = 16, int[]? ch = null, bool legacy = true, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, nm, npr, reg_max, ch, legacy, device: device, dtype: dtype)
+			{
+			}
+		}
+
+		/// <summary>
+		/// Ultralytics YOLO26 models OBB head for oriented bounding box detection.
+		/// </summary>
+		internal class OBB26 : Obb
+		{
+			/// <summary>
+			/// Initialize the YOLO26 OBB head.
+			///
+			/// Args:
+			///     nc (int): Number of classes.
+			/// </summary>
+			internal OBB26(int nc = 80, int ne = 1, int reg_max = 16, int[]? ch = null, bool legacy = true, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, ne, reg_max, ch, legacy, device: device, dtype: dtype)
+			{
+			}
+		}
+
+		/// <summary>
+		/// Ultralytics YOLO26 models pose head for keypoints detection.
+		/// </summary>
+		internal class Pose26 : Pose
+		{
+			/// <summary>
+			/// Initialize the YOLO26 pose head.
+			///
+			/// Args:
+			///     nc (int): Number of classes.
+			///     kpt_shape (tuple): Shape of keypoints (num_kpts, dim).
+			/// </summary>
+			internal Pose26(int nc = 1, int keypoint_num = 17, int keypoint_dim = 3, int reg_max = 16, int[]? ch = null, bool legacy = true, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, keypoint_num, keypoint_dim, reg_max, ch, legacy, device: device, dtype: dtype)
+			{
+			}
+		}
+
+		/// <summary>
+		/// Depth head for depth estimation models (ultralytics YOLO11-Depth family).
+		/// </summary>
+		internal class Depth : torch.nn.Module<torch.Tensor[], (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)>
+		{
+			private readonly Convs.Conv cv2;
+
+			/// <summary>
+			/// Initialize the Depth head.
+			///
+			/// Args:
+			///     ch (int): Input channels from the final backbone stage.
+			/// </summary>
+			internal Depth(int ch = 512, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nameof(Depth))
+			{
+				this.cv2 = new Convs.Conv(ch, 1, 1, device: device, dtype: dtype);
+				RegisterComponents();
+			}
+
+			public override (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds) forward(torch.Tensor[] input)
+			{
+				torch.Tensor x = input[input.Length - 1];
+				x = this.cv2.forward(x);
+				Dictionary<string, object> preds = new Dictionary<string, object>();
+				preds["depth"] = x;
+				Dictionary<string, torch.Tensor> inference = new Dictionary<string, torch.Tensor>();
+				inference["depth"] = x.sigmoid();
+				return (inference, preds);
+			}
+		}
+
+		/// <summary>
+		/// WorldDetect head for open-vocabulary detection using text embeddings (YOLO-World family).
+		/// </summary>
+		internal class WorldDetect : Detect
+		{
+			/// <summary>
+			/// Initialize WorldDetect head.
+			///
+			/// Args:
+			///     nc (int): Number of classes.
+			///     embed (int): Embedding size for text features.
+			/// </summary>
+			internal WorldDetect(int nc = 80, int embed = 512, int reg_max = 16, int[]? ch = null, bool legacy = true, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, reg_max, ch, legacy, device: device, dtype: dtype)
+			{
+				throw new NotSupportedException(
+					"WorldDetect (YOLO-World open-vocabulary) is not yet supported in YoloSharp: it requires " +
+					"offline text-embedding features produced by the CLIP tokenizer.");
+			}
+		}
+
+		/// <summary>
+		/// LRPCHead: low-rank projection head for efficient channel compression.
+		/// </summary>
+		internal class LRPCHead : torch.nn.Module<torch.Tensor, torch.Tensor>
+		{
+			private readonly TorchSharp.Modules.Linear linear;
+
+			/// <summary>
+			/// Initialize LRPCHead.
+			///
+			/// Args:
+			///     c1 (int): Input channels.
+			///     c2 (int): Output channels.
+			/// </summary>
+			internal LRPCHead(int c1, int c2, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nameof(LRPCHead))
+			{
+				this.linear = torch.nn.Linear(c1, c2, device: device, dtype: dtype);
+				RegisterComponents();
+			}
+
+			public override torch.Tensor forward(torch.Tensor x)
+			{
+				return this.linear.forward(x.flatten(2).transpose(1, 2)).transpose(1, 2);
+			}
+		}
+
+		/// <summary>
+		/// YOLOEDetect head for promptable visual detection (YOLO-E family).
+		/// </summary>
+		internal class YOLOEDetect : Detect
+		{
+			/// <summary>
+			/// Initialize YOLOEDetect head.
+			///
+			/// Args:
+			///     nc (int): Number of classes.
+			/// </summary>
+			internal YOLOEDetect(int nc = 80, int reg_max = 16, int[]? ch = null, bool legacy = true, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, reg_max, ch, legacy, device: device, dtype: dtype)
+			{
+				throw new NotSupportedException(
+					"YOLOEDetect (YOLO-E promptable detection) is not yet supported in YoloSharp: it requires " +
+					"the YOLO-E visual-prompt embedding (SAVPE) and text branch.");
+			}
+		}
+
+		/// <summary>
+		/// YOLOESegment head for promptable visual segmentation (YOLO-E family).
+		/// </summary>
+		internal class YOLOESegment : YOLOEDetect
+		{
+			internal YOLOESegment(int nc = 80, int reg_max = 16, int[]? ch = null, bool legacy = true, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, reg_max, ch, legacy, device: device, dtype: dtype)
+			{
+			}
+		}
+
+		/// <summary>
+		/// YOLOESegment26 head (YOLO26 variant of YOLO-E segmentation).
+		/// </summary>
+		internal class YOLOESegment26 : YOLOESegment
+		{
+			internal YOLOESegment26(int nc = 80, int reg_max = 16, int[]? ch = null, bool legacy = true, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, reg_max, ch, legacy, device: device, dtype: dtype)
+			{
+			}
+		}
+
+		/// <summary>
+		/// RTDETRDecoder: decoder module for Real-Time DETR (RT-DETR) models.
+		/// </summary>
+		internal class RTDETRDecoder : torch.nn.Module
+		{
+			/// <summary>
+			/// Initialize RTDETRDecoder.
+			///
+			/// Args:
+			///     nc (int): Number of classes.
+			///     nd (int): Number of decoder layers.
+			/// </summary>
+			internal RTDETRDecoder(int nc = 80, int nd = 6, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nameof(RTDETRDecoder))
+			{
+				throw new NotSupportedException(
+					"RTDETRDecoder is not yet supported in YoloSharp: requires the Deformable-DETR training " +
+					"objective (Hungarian matching with denoising groups) which is not ported.");
+			}
+		}
+
+		/// <summary>
+		/// v10Detect head supporting end-to-end NMS-free detection (YOLOv10 family).
+		/// </summary>
+		internal class v10Detect : Detect
+		{
+			/// <summary>
+			/// Initialize v10Detect head.
+			///
+			/// Args:
+			///     nc (int): Number of classes.
+			/// </summary>
+			internal v10Detect(int nc = 80, int reg_max = 16, int[]? ch = null, bool legacy = true, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, reg_max, ch, legacy, device: device, dtype: dtype)
+			{
+				// YOLOv10 one-to-one head branches are additional registered modules in ultralytics;
+				// YoloSharp inference path treats v10 models through the standard Detect head.
+			}
+		}
+
+		/// <summary>
+		/// SemanticSegment head for semantic segmentation models.
+		/// </summary>
+		internal class SemanticSegment : torch.nn.Module<torch.Tensor[], (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)>
+		{
+			private readonly TorchSharp.Modules.Conv2d seg_head;
+
+			/// <summary>
+			/// Initialize SemanticSegment head.
+			///
+			/// Args:
+			///     c1 (int): Input channels.
+			///     nc (int): Number of classes.
+			/// </summary>
+			internal SemanticSegment(int c1 = 512, int nc = 80, torch.Device? device = null, torch.ScalarType? dtype = null) : base(nameof(SemanticSegment))
+			{
+				this.seg_head = torch.nn.Conv2d(c1, nc, 1, device: device, dtype: dtype);
+				RegisterComponents();
+			}
+
+			public override (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds) forward(torch.Tensor[] input)
+			{
+				torch.Tensor x = input[input.Length - 1];
+				x = this.seg_head.forward(x);
+				Dictionary<string, object> preds = new Dictionary<string, object>();
+				preds["semseg"] = x;
+				Dictionary<string, torch.Tensor> inference = new Dictionary<string, torch.Tensor>();
+				inference["semseg"] = x;
+				return (inference, preds);
 			}
 		}
 	}

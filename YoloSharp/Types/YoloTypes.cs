@@ -9,6 +9,7 @@
 	{
 		Yolov5u,
 		Yolov8,
+		Yolov9,
 		Yolov11,
 		Yolov12,
 	}

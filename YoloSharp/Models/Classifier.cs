@@ -16,6 +16,7 @@ namespace YoloSharp.Models
             {
                 YoloType.Yolov5u => new Yolo.Yolov5uClassify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
                 YoloType.Yolov8 => new Yolo.Yolov8Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
+                YoloType.Yolov9 => throw new NotSupportedException("YOLOv9 (GELAN) Classification: official variant exists (yolov9-cls) but not yet implemented in this C# port. Contributions welcome."),
                 YoloType.Yolov11 => new Yolo.Yolov11Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
                 YoloType.Yolov12 => new Yolo.Yolov12Classify(config.NumberClass, config.YoloSize, config.Device, config.Dtype),
                 _ => throw new NotImplementedException("Yolo type not supported."),

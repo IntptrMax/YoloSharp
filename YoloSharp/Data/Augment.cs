@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Threading;
 using TorchSharp;
 
 namespace Data
@@ -284,8 +285,8 @@ namespace Data
 						   int imgsz = 640, float p = 0.0f, float beta = 32.0f)
 				: base(dataset: dataset, pre_transform: pre_transform, p: p)
 			{
-				Debug.Assert(0f <= p && p <= 1.0f, "p 必须在 [0, 1] 范围内");
-				Debug.Assert(beta > 0f, "beta 必须 > 0");
+				Debug.Assert(0f <= p && p <= 1.0f, "p must be in [0, 1] / p 必须在 [0, 1] 范围内");
+				Debug.Assert(beta > 0f, "beta must be > 0 / beta 必须 > 0");
 				this.imgsz = imgsz;
 				this.beta = beta;
 			}
@@ -429,10 +430,24 @@ namespace Data
 
 		internal static class ThreadLocalRandom
 		{
-			private static readonly ThreadLocal<Random> _rng =
-				new ThreadLocal<Random>(() => new Random(Guid.NewGuid().GetHashCode()));
+			// [Fix 2026-11-09] Seeded RNG factory (ultralytics init_seeds semantics): was per-thread
+			// Guid-seeded (irreproducible). ReSeed(0) at Train() start makes the random SOURCE fixed;
+			// per-worker thread instances draw sequential seeds from the factory.
+			// Seeded random factory: the original per-thread Guid seed is not reproducible; ReSeed(0) at Train() start pins the random source. / 种子化随机工厂：原每线程Guid种子不可复现；Train()开头ReSeed(0)固定随机源。
+			private static ThreadLocal<Random> _rng =
+				new ThreadLocal<Random>(() => new Random(Interlocked.Increment(ref _seedBase)));
+			private static int _seedBase = 1;
 			public static Random Instance => _rng.Value;
+			/// <summary>Re-seed the factory (called at Train start)</summary>
+			internal static void ReSeed(int seed)
+			{
+				_seedBase = seed;
+				_rng = new ThreadLocal<Random>(() => new Random(Interlocked.Increment(ref _seedBase)));
+			}
 		}
+
+		/// <summary>[Add 2026-11-09] Public re-seed entry for Train()(bridges to the ThreadLocalRandom factory / 桥接到ThreadLocalRandom工厂)</summary>
+		public static void ReSeedAll(int seed) => ThreadLocalRandom.ReSeed(seed);
 
 
 		internal class CopyPaste : BaseMixTransform
@@ -909,7 +924,7 @@ namespace Data
 			/// <returns>Transformed keypoints array with the same shape as input (N, K, 3).</returns>
 			/// <summary>
 			/// Apply affine transformation to keypoints.
-			/// 支持 KeyPoint_Dim = 2（无可见性）和 3（有可见性）。
+			/// Supports KeyPoint_Dim = 2 (no visibility) and 3 (with visibility). / 支持 KeyPoint_Dim = 2（无可见性）和 3（有可见性）。
 			/// </summary>
 			private torch.Tensor apply_keypoints(torch.Tensor keypoints, torch.Tensor M)
 			{

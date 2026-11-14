@@ -15,6 +15,10 @@ namespace YoloSharp.Models
 
         public YoloTask(Config config)
         {
+            // Fail fast on invalid task x architecture combinations (e.g. Yolov9+Obb):
+            // reject with a clear message instead of a generic exception deep inside a task-model ctor.
+            ValidateTaskYoloCombo(config.TaskType, config.YoloType);
+
             if (string.IsNullOrEmpty(config.OutputPath))
             {
                 config.OutputPath = Path.Combine("result", config.TaskType.ToString().ToUpper(), DateTime.Now.ToString("yyyyMMddHHmmss"));
@@ -29,6 +33,38 @@ namespace YoloSharp.Models
                 TaskType.Classification => new Classifier(config),
                 _ => throw new NotImplementedException("Task type not support now.")
             };
+        }
+
+        /// <summary>
+        /// Fail-fast validation of the task x architecture support matrix.
+        /// YOLOv9 (GELAN) official support matrix (WongKinYiu/yolov9 + ultralytics docs):
+        ///   Detection: yes (this C# implementation contributed)
+        ///   Segmentation/Classification: exist officially, not yet contributed in C# (throws with note; community PRs welcome)
+        ///   Pose/OBB: no such variants officially / v9官方支持矩阵
+        /// </summary>
+        static void ValidateTaskYoloCombo(TaskType task, YoloType yolo)
+        {
+            if (yolo != YoloType.Yolov9) return;
+
+            switch (task)
+            {
+                case TaskType.Detection:
+                    return;   // implemented / 已实现
+                case TaskType.Segmentation:
+                    return;   // implemented / 已实现（Yolov9Segment, gelan-c-seg）
+                case TaskType.Classification:
+                    throw new NotSupportedException(
+                        $"{yolo} + {task}: official YOLOv9 ships this variant, but the C# port has not implemented it yet. " +
+                        "Use Yolov8/Yolov11 for this task, or contribute the v9 {task} head.");
+                case TaskType.Obb:
+                case TaskType.Pose:
+                    throw new NotSupportedException(
+                        $"Invalid combination: {yolo} + {task}. " +
+                        "Official YOLOv9 (GELAN) does not ship OBB/Pose variants at all. " +
+                        "Use Yolov8/Yolov11 for this task.");
+                default:
+                    return;
+            }
         }
 
         public void LoadModel(string path, bool skipNcNotEqualLayers = false)
