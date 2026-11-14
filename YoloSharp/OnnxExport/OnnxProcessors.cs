@@ -477,7 +477,12 @@ namespace YoloSharp.OnnxExport
 
             var sh = c.ShapeOf(input);
             if (sh == null) throw new NotSupportedException("AAttn input shape unknown / AAttn输入shape未知");
-            long B = sh[0], H = sh[2], W = sh[3], N = H * W;
+            // [Fix 2026-11-14 TRT dynamic-batch] All reshapes bake B=1 from the dummy shape — under a
+            // dynamic profile (kOPT batch=8) every IShuffleLayer fails volume checks ("reshaping
+            // failed ... 4915200 to 614400") and TRT returns an empty engine. Emit -1 for the batch
+            // dim (ONE wildcard per reshape — legal) so batch flows through the attention chain.
+            // / 注意力链的Reshape全部烘焙了B=1——动态profile下IShuffleLayer体积校验失败返回空engine。
+            long B = -1, H = sh[2], W = sh[3], N = H * W;
 
             var qkv = Conv(c, qkvConv, input, "aqkv");
             var flat = Ops.Reshape(c, qkv, new long[] { B, C * 3, N });
@@ -485,8 +490,11 @@ namespace YoloSharp.OnnxExport
             long Bq = B, Nq = N;
             if (area > 1)
             {
-                tr = Ops.Reshape(c, tr, new long[] { B * area, N / area, C * 3 });
-                Bq = B * area; Nq = N / area;
+                // area partition folds B×area rows — emit -1 (NOT B*area: -1×4=-4 is invalid) so
+                // the wildcard infers B·area for BOTH static(1) and dynamic(N) batches.
+                // / area分区折叠B×area行——直接用-1通配（B*area会得-4非法），静动batch皆宜
+                tr = Ops.Reshape(c, tr, new long[] { -1, N / area, C * 3 });
+                Bq = -1; Nq = N / area;
             }
             var vw = Ops.Reshape(c, tr, new long[] { Bq, Nq, num_heads, head_dim * 3 });
             var pm = Ops.Transpose(c, vw, new long[] { 0, 2, 3, 1 });
@@ -560,7 +568,10 @@ namespace YoloSharp.OnnxExport
 
             var sh = c.ShapeOf(input);   // (B,C,H,W) — available via shape propagation / shape传播可得
             if (sh == null) throw new NotSupportedException("Attention input shape unknown — upstream layer missing shape propagation / 前置层缺shape传播");
-            long B = sh[0], C = sh[1], H = sh[2], W = sh[3], N = H * W;
+            // [Fix 2026-11-14 TRT dynamic-batch] batch dim -1 in all reshapes (same as AAttn) — a
+            // baked B=1 fails IShuffleLayer volume checks under dynamic profiles.
+            // / 与AAttn同款：batch维-1，动态profile下体积校验才通过
+            long B = -1, C = sh[1], H = sh[2], W = sh[3], N = H * W;
 
             var qkv = Conv(c, qkvConv, input, "qkv");           // actually (B, h*(2kd+hd), H, W) / 实为该shape, h*(2kd+hd), H, W)
             var flat = Ops.Reshape(c, qkv, new long[] { B, num_heads, 2 * key_dim + head_dim, N });
