@@ -126,6 +126,84 @@ namespace YoloSharp.OnnxExport
             return outN;
         }
 
+        /// <summary>Element-wise sub/mul/div with an initializer constant (broadcast) — [Add 2026-11-14]
+        /// for the in-graph DFL decode chain. Shapes follow the tensor input. / 与常量的逐元素运算</summary>
+        public static string SubConst(ExportContext c, string input, float v, string hint = "subc")
+        {
+            var outN = c.Temp(hint);
+            c.Node("Sub", outN, input, c.AddInitializer(c.Temp("c"), torch.tensor(v)));
+            var sh = c.ShapeOf(input);
+            if (sh != null) c.SetShape(outN, sh);
+            return outN;
+        }
+
+        public static string MulConst(ExportContext c, string input, float v, string hint = "mulc")
+        {
+            var outN = c.Temp(hint);
+            c.Node("Mul", outN, input, c.AddInitializer(c.Temp("c"), torch.tensor(v)));
+            var sh = c.ShapeOf(input);
+            if (sh != null) c.SetShape(outN, sh);
+            return outN;
+        }
+
+        /// <summary>Softmax over an axis — [Add 2026-11-14] DFL distribution → probabilities. / 指定轴softmax</summary>
+        public static string Softmax(ExportContext c, string input, long axis, long[] outShape = null)
+        {
+            var outN = c.Temp("sm");
+            c.Node("Softmax", outN, input).AttrInts.Add(("axis", axis));
+            var sh = outShape ?? c.ShapeOf(input);
+            if (sh != null) c.SetShape(outN, sh);
+            return outN;
+        }
+
+        /// <summary>MatMul — [Add 2026-11-14] DFL expected-value contraction. Shapes must be
+        /// precomputed by the caller (broadcasting rules vary). / 矩阵乘</summary>
+        public static string MatMul(ExportContext c, string a, string b, long[] outShape)
+        {
+            var outN = c.Temp("mm");
+            c.Node("MatMul", outN, a, b);
+            if (outShape != null) c.SetShape(outN, outShape);
+            return outN;
+        }
+
+        /// <summary>Add initializer-backed constant tensor from float[] data with explicit dims — [Add 2026-11-14] / 常量张量</summary>
+        public static string ConstTensor(ExportContext c, float[] data, long[] dims, string hint = "k")
+        {
+            var name = c.Temp(hint);
+            c.Model.AddInitializer(new OnnxTensor { Name = name, Dims = dims, DataType = OnnxDataType.Float, FloatData = data });
+            return name;
+        }
+
+        /// <summary>Element-wise add of two tensors (broadcast by ONNX rules) — [Add 2026-11-14] / 双张量加</summary>
+        public static string AddT(ExportContext c, string a, string b, long[] outShape = null)
+        {
+            var outN = c.Temp("addt");
+            c.Node("Add", outN, a, b);
+            var sh = outShape ?? c.ShapeOf(a) ?? c.ShapeOf(b);
+            if (sh != null) c.SetShape(outN, sh);
+            return outN;
+        }
+
+        /// <summary>Mul of two tensors (broadcast) — [Add 2026-11-14] / 双张量乘</summary>
+        public static string MulT(ExportContext c, string a, string b, long[] outShape = null)
+        {
+            var outN = c.Temp("mult");
+            c.Node("Mul", outN, a, b);
+            var sh = outShape ?? c.ShapeOf(a) ?? c.ShapeOf(b);
+            if (sh != null) c.SetShape(outN, sh);
+            return outN;
+        }
+
+        /// <summary>Sub of two tensors (broadcast) — [Add 2026-11-14] DFL lt branch / 双张量减</summary>
+        public static string SubT(ExportContext c, string a, string b, long[] outShape = null)
+        {
+            var outN = c.Temp("subt");
+            c.Node("Sub", outN, a, b);
+            var sh = outShape ?? c.ShapeOf(a) ?? c.ShapeOf(b);
+            if (sh != null) c.SetShape(outN, sh);
+            return outN;
+        }
+
         public static string Concat(ExportContext c, string[] inputs, long axis = 1)
         {
             var outN = c.Temp("cat");

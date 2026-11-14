@@ -1,5 +1,6 @@
 ﻿using Data;
 using OpenCvSharp;
+using torch = TorchSharp.torch;   // alias only — avoid DeviceType ambiguity with YoloSharp.Types / 仅别名避免DeviceType歧义
 using YoloSharp.Models;
 using YoloSharp.Types;
 
@@ -45,6 +46,7 @@ namespace YoloSharpDemo
             // TorchSharp基准输出（boxes分支 = 推理输出）
             var input = TorchSharp.torch.zeros(1, 3, imgsz, imgsz);
             TorchSharp.torch.Tensor refBoxes, refScores, refMasks = null, refProto = null, refCls = null;
+            torch.Tensor[] refFeatsArr = null;   // [Add 2026-11-14] feats for DFL decode reference / 解码参考
             using (TorchSharp.torch.no_grad())
             {
                 input = TorchSharp.torch.randn(1, 3, imgsz, imgsz);
@@ -55,7 +57,33 @@ namespace YoloSharpDemo
                 refScores = one2many.ContainsKey("scores") ? ((TorchSharp.torch.Tensor)one2many["scores"]).detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32) : (TorchSharp.torch.Tensor)null;
                 refMasks = one2many.ContainsKey("mask_coefficient") ? ((TorchSharp.torch.Tensor)one2many["mask_coefficient"]).detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32) : (TorchSharp.torch.Tensor)null;
                 refProto = one2many.ContainsKey("proto") ? ((TorchSharp.torch.Tensor)one2many["proto"]).detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32) : (TorchSharp.torch.Tensor)null;
+                if (one2many.ContainsKey("feats")) refFeatsArr = (torch.Tensor[])one2many["feats"];
                 if (preds.TryGetValue("cls", out var clsV)) refCls = clsV as TorchSharp.torch.Tensor;
+            }
+            // [Fix 2026-11-14] Reference decode: the exported graph now bakes DFL decode into output0
+            // (ultralytics layout — boxes = decoded xyxy in pixels, matching python exports). Decode the
+            // reference identically: DFL(64ch)→softmax→expectation→dist2bbox(make_anchors)×strides.
+            // / 参考侧同款解码：与导出图相同的DFL解码链
+            torch.Tensor refDecoded = null;
+            if (refBoxes is object && refFeatsArr is object)
+            {
+                using (TorchSharp.torch.no_grad())
+                using (TorchSharp.torch.NewDisposeScope())
+                {
+                    // strides from feats vs input (concrete) / 由特征图推stride
+                    var stridesL = refFeatsArr.Select(f => (int)(imgsz / f.shape[3])).ToArray();
+                    var (anchors, strides) = YoloSharp.Utils.Tal.make_anchors(refFeatsArr, stridesL, 0.5f);
+                    var raw = refBoxes.detach().cpu();
+                    long A = raw.shape[2];
+                    var reshaped = raw.reshape(1, 4, 16, A);
+                    var probs = TorchSharp.torch.nn.functional.softmax(reshaped, dim: 2);
+                    // expectation over bins: [1,4,16,A] · arange[16] = Σ k·p_k → [1,4,A]
+                    var proj = TorchSharp.torch.arange(16, TorchSharp.torch.ScalarType.Float32).view(1, 16, 1);   // [1,16,1]
+                    var p3 = probs.reshape(4, 16, A);           // merge batch+edge dims for matmul / 合并批+边维便于矩阵乘
+                    var dist = TorchSharp.torch.matmul(p3.transpose(1, 2), proj).reshape(1, 4, A);   // [4,A,16]@[16,1]→[4,A,1]→[1,4,A]
+                    var dbox = YoloSharp.Utils.Tal.dist2bbox(dist, anchors.transpose(0, 1).unsqueeze(0), xywh: false, dim: 1) * strides.transpose(0, 1).unsqueeze(0);
+                    refDecoded = dbox.detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32).MoveToOuterDisposeScope();
+                }
             }
             Console.WriteLine($"TorchSharp head outputs: boxes= / 头输出: boxes={(refBoxes is object ? string.Join("x", refBoxes.shape) : "-")} scores={(refScores is object ? string.Join("x", refScores.shape) : "-")}");
 
@@ -76,18 +104,16 @@ namespace YoloSharpDemo
                 var inputName = session.InputMetadata.First().Key;
                 using var results = session.Run(new[] { Microsoft.ML.OnnxRuntime.NamedOnnxValue.CreateFromTensor(inputName, tensor) });
 
-                // [Fix 2026-11-13] Single-output parity: output0 = [1, 64+nc(+extras), A] with channels
-                // 0..63 = boxes DFL, 64.. = scores (sigmoid applied). Slice onnx output0 by channel
-                // and compare against the TorchSharp head tensors. (Old code compared outs[0]/outs[1]
-                // as separate boxes/scores outputs — the multi-head era layout.)
-                // 单输出对拍：按通道切片后与TorchSharp头输出逐点比对
+                // [Fix 2026-11-14] Single-output parity, ultralytics layout: output0 = [1, 4+nc(+extras), A]
+                // with channels 0..3 = DECODED xyxy (in-graph DFL decode; pixels), 4.. = scores (sigmoid).
+                // Reference decodes identically (refDecoded). / 单输出对拍：boxes已图内解码
                 var outs = results.Select(r => r.AsTensor<float>().ToArray()).ToArray();
-                var rb = refBoxes is object ? refBoxes.data<float>().ToArray() : new float[0];
+                var rb = refDecoded is object ? refDecoded.data<float>().ToArray() : new float[0];   // decoded reference / 解码后参考
                 var rs = refScores is object ? refScores.data<float>().ToArray() : new float[0];
                 double maxDiff = 0; long nBig = 0;
                 var o0 = outs[0];   // single output0 / 单输出
-                long A = refBoxes is object ? refBoxes.shape[refBoxes.shape.Length - 1] : 0;
-                long nBoxCh = refBoxes is object ? refBoxes.shape[1] : 0;    // 64
+                long A = refDecoded is object ? refDecoded.shape[refDecoded.shape.Length - 1] : 0;
+                long nBoxCh = refDecoded is object ? refDecoded.shape[1] : 0;   // 4 (decoded)
                 long nClsCh = refScores is object ? refScores.shape[1] : 0;  // nc
                 // boxes: channels 0..nBoxCh — both tensors are [1, C, A] contiguous: (0,ch,a) → ch*A+a
                 // boxes段：两侧都是[1,C,A]连续布局，展平索引=ch*A+a

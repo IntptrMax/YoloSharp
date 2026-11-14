@@ -75,7 +75,11 @@ namespace YoloSharp.Models
                     foreach (var kv in result.Value.inference) kv.Value.MoveToOuterDisposeScope();
                 if (result != null && result.Value.preds != null)
                     foreach (var kv in result.Value.preds)
+                    {
                         if (kv.Value is torch.Tensor t) t.MoveToOuterDisposeScope();
+                        else if (kv.Value is torch.Tensor[] arr)   // "feats": consumers (export/parity) read shapes later / feats数组同样移出
+                            foreach (var ft in arr) ft?.MoveToOuterDisposeScope();
+                    }
                 return result;
             }
         }
@@ -222,7 +226,11 @@ namespace YoloSharp.Models
                         foreach (var kv in result.Value.inference) kv.Value.MoveToOuterDisposeScope();
                     if (result != null && result.Value.preds != null)
                         foreach (var kv in result.Value.preds)
+                        {
                             if (kv.Value is torch.Tensor t) t.MoveToOuterDisposeScope();
+                            else if (kv.Value is torch.Tensor[] arr)   // "feats" array / feats数组同样移出
+                                foreach (var ft in arr) ft?.MoveToOuterDisposeScope();
+                        }
                     return result;
                 }
             }

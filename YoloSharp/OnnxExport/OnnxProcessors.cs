@@ -120,8 +120,11 @@ namespace YoloSharp.OnnxExport
         }
 
         /// <summary>Detect head: box_head/cls_head per-level Conv(1x1)→view(bs,C,-1)→cat(3 levels)
-        /// Emits two graph outputs: boxes(bs,4*reg_max,8400) scores(bs,nc,8400) — NMS left to runtime
-        /// Emits two graph outputs: boxes/scores — NMS left to runtime / 输出boxes与scores</summary>
+        /// [Fix 2026-11-14 author-reported] Boxes are exported DECODED (ultralytics layout): DFL
+        /// softmax+expectation and grid+stride are baked into the graph — output0 = [bs, 4+nc(+extras), A]
+        /// (4 = decoded xyxy in pixels), matching python's export instead of the raw 64-ch DFL.
+        /// / boxes导出改为解码版（python布局）：DFL解码+网格烘焙进图
+        /// </summary>
         public static void Detect(ExportContext c, Head.Detect mod, string[] feats, Dictionary<string, string> outputs, int headIndexBase = 0)
         {
             var allBox = ((TorchSharp.Modules.ModuleList<TorchSharp.Modules.Sequential>)mod.get_field("cv2")).ToArray();
@@ -136,20 +139,94 @@ namespace YoloSharp.OnnxExport
             // input the [N,C,A] frame-contiguous layout is preserved (the old bs=1 hardcode folded dynamic
             // batch into the anchor dim, mis-slicing frames — trt4test measured 38/19 fluctuation) / bs维用-1动态
             long bs = -1;
+            long regMax = 16;   // DFL bins per edge / 每边DFL bins
+            var dflF = mod.get_field("dfl");
+            if (dflF is Block.DFL dflMod)
+            {
+                // DFL's conv is Conv2d(c1, 1, 1): bins = IN channels (c1), NOT the 1x1 kernel size.
+                // / DFL的conv是1x1卷积：bins=输入通道c1，不是kernel尺寸
+                var dflConv = dflMod.get_field("conv") as Conv2d;
+                if (dflConv != null && dflConv.in_channels > 1) regMax = dflConv.in_channels;
+            }
             var boxViews = new List<string>();
             var clsViews = new List<string>();
+            var strides = new List<long>();
+            var levelHW = new List<long>();   // per-level H*W (concrete) / 每级H*W
             for (int i = 0; i < nl; i++)
             {
                 // box branch head unit = Sequential(Conv,Conv,Conv2d) — emitted via SequentialDown / box分支头单元单元经SequentialDown发射
                 var bOut = HeadConv(c, boxHeads[i], feats[i], $"bx{i}");
                 var cOut = HeadConv(c, clsHeads[i], feats[i], $"cs{i}");
+                long hw = HWOf(c, bOut);
+                levelHW.Add(hw);
                 // view(bs, C, -1): NCHW -> (bs,C,H*W) — via Reshape / NCHW转三维
                 long bC = (long)GetHeadOutChannels(boxHeads[i]);
                 long cC = (long)GetHeadOutChannels(clsHeads[i]);
-                boxViews.Add(Ops.Reshape(c, bOut, new long[] { bs, bC, HWOf(c, bOut) }));
-                clsViews.Add(Ops.Reshape(c, cOut, new long[] { bs, cC, HWOf(c, cOut) }));
+                boxViews.Add(Ops.Reshape(c, bOut, new long[] { bs, bC, hw }));
+                clsViews.Add(Ops.Reshape(c, cOut, new long[] { bs, cC, hw }));
+                // stride from the feature/input size ratio (input dims are concrete) / 由特征图与输入尺寸求stride
+                var fSh = c.ShapeOf(feats[i]);
+                var inSh = c.ShapeOf("images");
+                strides.Add(fSh != null && inSh != null && inSh.Length == 4 && fSh[3] > 0 && inSh[3] > 0 ? inSh[3] / fSh[3] : (long)(1L << (i + 3)));
             }
-            outputs["boxes"] = Ops.Concat(c, boxViews.ToArray(), 2);
+            // ── In-graph DFL decode (ultralytics layout) ──
+            // boxes concat: [bs, 4*regMax, A] → reshape [bs, 4, regMax, A] → softmax(axis=2) →
+            // MatMul(arange[regMax]) → [bs, 4, A] expected ltrb distances → grid+stride → xyxy pixels.
+            // Level-wise decode keeps softmax bins per-level contiguous (A = ΣH·W per level order).
+            string rawBoxes = Ops.Concat(c, boxViews.ToArray(), 2);
+            string decoded;
+            long totalA = 0;
+            foreach (var hw in levelHW) totalA += hw;
+            {
+                // [bs, 64, A] → [bs, 4, 16, A]
+                var reshaped = Ops.Reshape(c, rawBoxes, new long[] { bs, 4, regMax, totalA });
+                var sm = Ops.Softmax(c, reshaped, axis: 2, outShape: new long[] { bs, 4, regMax, totalA });
+                // expectation over bins: softmax × arange → ReduceSum(axis=2) → [bs,4,1,A] → [bs,4,A]
+                // (NOT MatMul: trailing-dims matrix product can't broadcast the anchor dim) / 期望用乘加而非MatMul
+                float[] proj = new float[regMax];
+                for (int k = 0; k < regMax; k++) proj[k] = k;
+                var projT = Ops.ConstTensor(c, proj, new long[] { 1, 1, regMax, 1 }, "dfp");
+                var weighted = Ops.MulT(c, sm, projT, new long[] { bs, 4, regMax, totalA });   // broadcast bins
+                var rsName = c.Temp("drs");
+                // opset13+: ReduceSum takes axes as an INPUT initializer, not an attribute
+                // opset13+：axes是输入initializer不是属性
+                var axesI = c.AddInitializer(c.Temp("dax"), torch.tensor(new long[] { 2 }, ScalarType.Int64));
+                var rsNode = c.Node("ReduceSum", rsName, weighted, axesI);
+                rsNode.AttrInts.Add(("keepdims", 1));
+                c.SetShape(rsName, new long[] { bs, 4, 1, totalA });
+                var dist = Ops.Reshape(c, rsName, new long[] { bs, 4, totalA });
+                // anchors/strides per anchor (constant, concrete A): [1, 2, A] grid centers (GRID units,
+                // NOT pre-multiplied — the ×stride happens once at the end, like python's make_anchors
+                // + dist2bbox×strides) + [1,1,A] stride. / 网格坐标不预乘stride（末尾统一乘）
+                var anchorX = new List<float>(); var anchorY = new List<float>(); var strideArr = new List<float>();
+                for (int lv = 0; lv < levelHW.Count; lv++)
+                {
+                    long hwi = levelHW[lv]; long s = strides[lv];
+                    long w = fShOf(c, feats, lv, 3); long h = hwi / (w > 0 ? w : 1);
+                    for (long y = 0; y < h; y++)
+                        for (long x = 0; x < w; x++)
+                        {
+                            anchorX.Add((x + 0.5f) * 1.0f);   // grid units / 格坐标
+                            anchorY.Add((y + 0.5f) * 1.0f);
+                            strideArr.Add(s);
+                        }
+                }
+                var axT = Ops.ConstTensor(c, anchorX.ToArray(), new long[] { 1, 1, totalA }, "ax");
+                var ayT = Ops.ConstTensor(c, anchorY.ToArray(), new long[] { 1, 1, totalA }, "ay");
+                var stT = Ops.ConstTensor(c, strideArr.ToArray(), new long[] { 1, 1, totalA }, "st");
+                // dist [bs,4,A]: rows 0/1 = lt (anchor − d), rows 2/3 = rb (anchor + d) → xyxy in stride units → ×stride
+                // Split rows: gather via Slice on axis 1 (0:2 lt, 2:4 rb)
+                var lt = Slice(c, rawT: dist, starts: new long[] { 0 }, ends: new long[] { 2 }, axes: new long[] { 1 }, outSh: new long[] { bs, 2, totalA });
+                var rb = Slice(c, rawT: dist, starts: new long[] { 2 }, ends: new long[] { 4 }, axes: new long[] { 1 }, outSh: new long[] { bs, 2, totalA });
+                // anchor points stacked [1, 2, A] (x row, y row)
+                var anchorT = ConcatConst2(c, axT, ayT, totalA);   // [1,2,A]
+                var x1y1 = Ops.SubT(c, anchorT, lt, new long[] { bs, 2, totalA });   // broadcast [1,2,A] − [bs,2,A]
+                var x2y2 = Ops.AddT(c, anchorT, rb, new long[] { bs, 2, totalA });
+                var xyxy = Ops.Concat(c, new[] { x1y1, x2y2 }, 1);   // [bs,4,A] in stride units
+                decoded = Ops.MulT(c, xyxy, stT, new long[] { bs, 4, totalA });   // → pixels
+                c.SetShape(decoded, new long[] { bs, 4, totalA });
+            }
+            outputs["boxes"] = decoded;
             // [Fix 2026-11-02] Apply sigmoid to exported scores (aligns with libtorch inference
             // `cat(dbox, scores.sigmoid())` in Head.Detect.forward). The raw cls-branch logits were
             // exported before, so every runtime consumer (OnnxPredictCore/TxmLabeling/OV/TRT) read
@@ -158,6 +235,36 @@ namespace YoloSharp.OnnxExport
             // Export scores with sigmoid (aligns with the libtorch chain's scores.sigmoid()): the previous
             // export emitted raw cls logits, which runtimes read as probabilities, deflating deployment scores. / scores加sigmoid对齐推理链
             outputs["scores"] = Ops.Sigmoid(c, Ops.Concat(c, clsViews.ToArray(), 2));
+        }
+
+        /// <summary>Concrete dim of feats[lv] (0-based from the last: 2=H,3=W in NCHW) — 0 when unknown / 特征图具体维</summary>
+        static long fShOf(ExportContext c, string[] feats, int lv, int dim)
+        {
+            var sh = c.ShapeOf(feats[lv]);
+            if (sh != null && sh.Length == 4 && sh[dim] > 0) return sh[dim];
+            return 0;
+        }
+
+        /// <summary>Slice helper on a tensor dim — [Add 2026-11-14] DFL lt/rb row split / 维度切片</summary>
+        static string Slice(ExportContext c, string rawT, long[] starts, long[] ends, long[] axes, long[] outSh)
+        {
+            var outN = c.Temp("sl");
+            var startsI = c.AddInitializer(c.Temp("sls"), torch.tensor(starts, ScalarType.Int64));
+            var endsI = c.AddInitializer(c.Temp("sle"), torch.tensor(ends, ScalarType.Int64));
+            var axesI = c.AddInitializer(c.Temp("sla"), torch.tensor(axes, ScalarType.Int64));
+            var n = c.Node("Slice", outN, rawT, startsI, endsI, axesI);
+            if (outSh != null) c.SetShape(outN, outSh);
+            return outN;
+        }
+
+        /// <summary>Concat two [1,k,A] constants along dim1 → [1,2k,A] — [Add 2026-11-14] anchor stack / 常量拼接</summary>
+        static string ConcatConst2(ExportContext c, string a, string b, long A)
+        {
+            var outN = c.Temp("acat");
+            var n = c.Node("Concat", outN, a, b);
+            n.AttrInts.Add(("axis", 1));
+            c.SetShape(outN, new long[] { 1, 2, A });
+            return outN;
         }
 
         /// <summary>Feature-map H*W (from NCHW shape propagation dims [2]*[3]; falls back to -1 when unknown) — the Detect-head Reshape anchor dim / 特征图H*W</summary>
