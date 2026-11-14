@@ -20,34 +20,40 @@ Training auto-emits the deployment ONNX beside `best.bin` / 训练自动产出�
 |---|---|---|
 | `best.onnx` | `[-1,3,H,W]` dynamic | **all backends**: OpenVINO (load-time reshape), ONNX Runtime / ML.NET (any N), TensorRT (convert4 builds a profiled dynamic engine, batch 1..128), libtorch |
 
-> ONE file, all backends — no variant juggling. The earlier multi-head /
-> `best_deploy_dyn.onnx` variants are retired. / 一个文件通吃全后端，旧变体已废除。
+> ONE file, all backends — no variant juggling. / 一个文件通吃全后端，旧变体已废除。
+
+**nc must match your dataset** — the demo brings bundled-dataset presets:
+`YoloSharpDemo Yolov8 Pose 640 0.45 10 coco8-pose` (nc=1) / `... coco128` (nc=80)
+/ `... coco128-seg` / `...` (default dotav1, nc=15). The `onnxexport` parity mode
+accepts nc directly: `onnxexport <yolo> <task> [imgsz] [nc] [--pt|--bin <path>]`.
+/ **nc必须与数据集匹配**——demo内置数据集预设带出nc；onnxexport第4参直传nc。
 
 ---
 
-## 2. Single-Output Layout / 单输出布局
+## 2. Single-Output Layout (ultralytics convention) / 单输出布局（ultralytics惯例）
 
 Input `images`: `[-1, 3, 640, 640]` (batch symbolic), float32, RGB, **/255
 normalized** (do it before feeding; the graph does NOT normalize). Letterbox:
 centered padding.
 
-Single output, python-convention declaration `[batch, C, A]` (only batch
-symbolic; C/A concrete, e.g. `[batch, 65, 8400]` at nc=1). **Every task packs
-into ONE `output0`** — per-task channel layout below / 各任务全部打包进唯一
-`output0`，按任务区分通道布局：
+Single output `[batch, C, A]` — **only batch symbolic; C/A concrete dim_values**,
+exactly what Netron shows for an official ultralytics export. **The DFL decode
+(softmax + expectation), grid and stride composition are baked into the graph**:
+channels 0..3 are decoded xyxy **in input pixels** — no softmax/decode needed in
+your runtime. / 单输出：**DFL解码/网格/stride已烘焙进图**，ch0-3就是解码后的像素xyxy。
 
 ### Channel layout of `output0` / output0 通道布局
 
 | Task | `output0` dims | dim1 channel order / 通道顺序 |
 |---|---|---|
-| Detection | `[batch, 64+nc, 8400]` | boxes DFL (64, raw distribution) ‖ class scores (nc, sigmoid applied) |
-| OBB | `[batch, 64+nc+1, 8400]` | … ‖ angle (1) / 追加角度通道 |
-| Pose | `[batch, 64+nc+nk·nd, 8400]` | … ‖ keypoints (nk×nd) / 追加关键点通道 |
-| Segmentation | `[batch, 64+nc+32, 8400]` + `output1` proto | … ‖ mask coefficients (32)；proto 单独走 `output1` `[batch, 32, H/4, W/4]` |
+| Detection | `[batch, 4+nc, 8400]` | xyxy (4, decoded, pixels) ‖ class scores (nc, sigmoid applied) |
+| OBB | `[batch, 4+nc+1, 8400]` | … ‖ angle (1, `(sigmoid−0.25)·π` decoded) / 追加角度通道 |
+| Pose | `[batch, 4+nc+nk·nd, 8400]` | … ‖ keypoints (nk×nd, still head raw values — decode like python: `(v*2 + anchor − 0.5) * stride`, visibility via sigmoid when nd=3) / 追加关键点通道（原始值，按python公式解码） |
+| Segmentation | `[batch, 4+nc+32, 8400]` + `output1` proto | … ‖ mask coefficients (32)；proto 单独走 `output1` `[1, 32, H/4, W/4]` |
 
-> channels `0..63` are the **raw DFL distributions — NOT coordinates**; decode
-> at runtime (see §3). Class scores already went through sigmoid.
-> / ch0-63=DFL原始分布(不是坐标，运行时解码)；类别概率已过sigmoid。
+Measured examples / 实测示例: dotav1-obb (nc=15) `[batch, 20, 8400]`,
+coco128-detect (nc=80) `[batch, 84, 8400]`, coco128-seg `[batch, 116, 8400]`,
+coco8-pose (nc=1, kpt 17×3) `[batch, 56, 8400]`, v9 6-branch `[batch, 4+nc, 16800]`.
 
 ### What each dim is / 各维含义
 
@@ -61,48 +67,41 @@ into ONE `output0`** — per-task channel layout below / 各任务全部打包�
 
 ## 3. Post-Processing Recipe / 后处理步骤
 
-Scores threshold → DFL decode → grid + stride → xywh → map to original image → NMS.
+Decode is already in the graph — your runtime only filters and NMSes:
+解码已在图内，运行时只需过滤与NMS：
 
 ```
-1) Filter:   score = output0[n, 64+c, a] > conf         (already a probability)
-2) DFL:      for each anchor, take channels 0..63 = 4 edges × 16 bins
-             each 16-bin group: softmax → dot([0..15]) → expected distance d_i
-             box (ltrb in stride units): [−d0, −d1, d2, d3]  (order: l,t,r,b)
-3) Grid:     anchor a → (gx, gy) on its level; stride s ∈ {8,16,32}
-             xyxy = ((gx + 0.5 − d0·?) ...)  — equivalently
-             x1,y1 = (gx − d0, gy − d1)·s ; x2,y2 = (gy + d2, gy + d3)·s
-4) Un-letterbox: subtract the centered pad, divide by the scale ratio
+1) Filter:   score = output0[n, 4+c, a] > conf          (already a probability)
+2) Box:      xyxy = output0[n, 0..3, a]                 (already input-pixel coords)
+3) Un-letterbox: subtract the centered pad, divide by the scale ratio
                 (pad_l = (640 − new_w)/2, ratio = min(640/w, 640/h))
-5) NMS per class (IoU 0.45 typical)
+4) NMS per class (IoU 0.45 typical)
 ```
 
-> Angle (OBB): channel `64+nc` of `output0` is the decoded angle
-> (`(sigmoid−0.25)·π`, single channel). / OBB角度通道已解码((sigmoid−0.25)·π)
+> Angle (OBB): channel `4+nc` is the decoded angle (`(sigmoid−0.25)·π`).
+> Pose keypoints: decode `(v*2 + anchor − 0.5) * stride` per point (same as
+> python's kpts_decode); visibility = sigmoid(v) when nd=3.
+> / OBB角度已解码；pose关键点按python公式解码
 
 Reference implementation: `Txm.AI/Yolo/OnnxPredictCore.cs` (C#, used by all
 three backends) — feel free to copy. / 参考实现可直接抄
 
 ---
 
-## 4. Layout vs. genuine ultralytics export / 与ultralytics原版导出的布局差异
-
-All heads are merged into one tensor, ultralytics-style channel order /
-各头沿通道拼接成单输出（与ultralytics同布局语义）：
+## 4. Equivalence with ultralytics exports / 与ultralytics导出等价性
 
 | Output | Dims | Layout |
 |---|---|---|
-| `output0` | `[batch, 64 + nc (+1 obb) (+nk·nd pose), 8400]` | boxes(64) ‖ scores(nc) ‖ angle/kpts — dim1 channel order, NOT decoded boxes / 通道顺序拼接，boxes 仍是 DFL 原始 64 通道 |
-| `output1` (seg only) | `[batch, 32, H/4, W/4]` | proto (same as before) / proto 原型 |
+| `output0` | `[batch, 4 + nc (+1 obb) (+nk·nd pose) (+32 seg), 8400]` | xyxy(4, decoded) ‖ scores(nc) ‖ extras — same channel semantics as a genuine ultralytics export / 与官方导出同通道语义 |
+| `output1` (seg only) | `[1, 32, H/4, W/4]` | proto / 原型 |
 
-Example (detection, nc=1): `output0 = [batch, 65, 8400]` → channels `0..63` =
-boxes DFL, channel `64` = score. Verified identical values across
-ORT / OV / TRT. / 三后端数值一致。
+Verified point-wise against the TorchSharp forward on every architecture ×
+task (MaxDiff 6e-5 random weights / ~1e-3 real BF16 weights), plus
+ORT / OpenVINO / TensorRT round-trips. / 与TorchSharp逐点对拍+三后端往返验证。
 
-> Difference from a genuine ultralytics export: their `output0` carries
-> **decoded xywh** (4 channels, decode baked into the graph). Ours keeps raw
-> DFL (64 channels) — better FP16/quantization accuracy, same anchor layout,
-> one extra softmax step in your post-processing. / 与 ultralytics 原版差异：
-> 原版已解码(4通道)，我们保留原始 DFL(64通道)，后处理多一步 softmax
+> Historical note: an earlier iteration kept raw DFL (64ch) for FP16 accuracy.
+> Reviewers preferred full ultralytics parity — the decode moved into the graph
+> (commit 2bc1c36). / 历史注记：早期版本保留64通道原始DFL，应作者反馈改为图内解码
 
 ---
 
@@ -113,24 +112,28 @@ Feed any exported model this way and expect / 按此喂图，应得：
 ```
 input : RGB image letterboxed to 640×640 (centered pad 114,114,114), /255
 scores: max ≈ your trained confidence on a known positive (e.g. 0.937)
-boxes : max < regMax (=16), because they are pre-softmax distributions
+boxes : pixel coords inside [−margin, 640+margin]; with a zeros input every
+        anchor's box centers on its grid point (P3 first ≈ (4,4), P5 last ≈ (624,640))
 output: frame-contiguous [N, C, 8400] — slice per frame: a-th anchor at
         [n, :, a]; N frames do NOT fold into dim2 / 帧连续布局，不会折进 anchor 维
 ```
 
 ## 6. FAQ
 
-**Q: Why are the box channels 64 wide instead of 4?**
-A: It's DFL: 4 edges × 16 distribution bins. Decode with softmax+expectation
-(step 2 above). Keeping this out of the graph preserves FP16 accuracy under
-TensorRT and lets all runtimes share one exact decoder. / DFL 分布，图外解码保精度
-
-**Q: The model declares `['batch', 65, 8400]` — which dims are symbolic?**
+**Q: The model declares `['batch', 20, 8400]` — which dims are symbolic?**
 A: Only dim0 (`batch`, a dim_param). Channel and anchor dims are concrete
 dim_values (torch.onnx.export `dynamic_axes` convention) — same as what Netron
-shows for an official ultralytics export. / 仅batch是符号维，其余为具体值（与
-官方ultralytics导出显示一致）。
+shows for an official ultralytics export. / 仅batch是符号维，其余为具体值。
+
+**Q: Why do the boxes look decoded already?**
+A: They are — the DFL softmax/expectation, grid and stride multiply are part of
+the exported graph (ultralytics parity). Just un-letterbox and NMS. / 解码已进图，直接NMS即可
 
 **Q: Can I feed dynamic batch?**
 A: Yes, on every backend: OV (load-time reshape), ORT/ML.NET (any N), TRT
 (convert4 profiles 1..128). / 全后端支持动态batch。
+
+**Q: nc mismatched my dataset — shapes look wrong.**
+A: nc drives the channel count (4+nc+extras). The demo takes the dataset into
+account (coco8-pose→56, coco128→84/116); make sure your Config.NumberClass
+matches your labels. / 通道数由nc决定——确保nc与数据集一致
