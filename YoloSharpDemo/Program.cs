@@ -14,7 +14,13 @@ namespace YoloSharpDemo
             Console.WriteLine($"=== OnnxExport parity: / 对拍: {yoloTypeName}+{taskName} imgsz={imgsz} ===");
             var yoloType = (YoloType)Enum.Parse(typeof(YoloType), yoloTypeName, true);
             var task = (TaskType)Enum.Parse(typeof(TaskType), taskName, true);
+            // [Fix 2026-11-14 author-reported] nc must match the dataset, not a dotav1 hardcode:
+            // onnxexport <yolo> <task> [imgsz] [nc] [--bin <path>] — e.g. nc=80 (coco128),
+            // nc=1 (coco8-pose). Default stays 15 (dotav1) for backward compatibility.
+            // nc必须与数据集匹配而非dotav1硬编码：onnxexport第4参直传
             int nc = task == TaskType.Classification ? 1 : 15;
+            for (int i = 4; i < args.Length; i++)
+                if (int.TryParse(args[i], out var n) && n > 0 && n <= 1000) { nc = n; break; }
 
             var config = new Config
             {
@@ -221,37 +227,61 @@ namespace YoloSharpDemo
             }
 
             // 统一入口（v8/v9/v11/v12同一流程，仅Config不同）：
-            //   YoloSharpDemo [yoloType] [task] [predictImgsz] [predictConf] [epochs]
+            //   YoloSharpDemo [yoloType] [task] [predictImgsz] [predictConf] [epochs] [dataset]
             //   yoloType:     Yolov5u/Yolov8/Yolov9/Yolov11/Yolov12（默认Yolov8）
             //   task:         Detection/Obb/Segmentation/Pose/Classification（默认Obb——沿用示例数据集dotav1）
             //   predictImgsz: 推理输入尺寸（letterbox等比缩放目标，需32倍数，默认640）
             //                 ——应与训练尺寸一致；训练1280的模型推理传1280，否则精度下降
             //   predictConf:  置信度阈值（默认0.45）
             //   epochs:       训练轮数（默认10；dotav1-obb/v9示例均适用）
+            //   dataset:      [Add 2026-11-14] 内置数据集名——自动带出nc/kpt/数据路径/预训练权重：
+            //                 dotav1(默认,nc=15) | coco128(nc=80) | coco128-seg(nc=80) | coco8-pose(nc=1,kpt17x3)
             // 例：
-            //   YoloSharpDemo                              → v8+Obb 默认（训练+推理）
-            //   YoloSharpDemo Yolov9 Detection             → v9 从头训练dotav1+推理
-            //   YoloSharpDemo Yolov8 Obb 1280 0.3          → v8 训练后按1280推理、conf=0.3
-            //   YoloSharpDemo Yolov9 Segmentation          → v9-seg（需自备权重路径见下）
+            //   YoloSharpDemo                                          → v8+Obb dotav1 默认（训练+推理）
+            //   YoloSharpDemo Yolov8 Detection 640 0.45 10 coco128    → v8 训练coco128(nc=80)
+            //   YoloSharpDemo Yolov8 Pose 640 0.45 10 coco8-pose      → v8-pose(nc=1,17kpt)
+            //   YoloSharpDemo Yolov9 Detection                         → v9 从头训练dotav1+推理
             YoloType yoloType = args.Length > 0 ? (YoloType)Enum.Parse(typeof(YoloType), args[0], true) : YoloType.Yolov8;
             TaskType taskType = args.Length > 1 ? (TaskType)Enum.Parse(typeof(TaskType), args[1], true) : TaskType.Obb;
             int predictImgsz = args.Length > 2 ? int.Parse(args[2]) : 0;   // 0=用config.ImageSize
             float predictConf = args.Length > 3 ? float.Parse(args[3]) : 0.45f;
             int epochs = args.Length > 4 ? int.Parse(args[4]) : 10;
+            string dataset = args.Length > 5 ? args[5].ToLowerInvariant() : "dotav1";
 
             string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-obb.pt"; // Pretrained model path.
             string predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
-
             string dataRootPath = @"..\..\..\Assets\DataSets\dotav1";
 
-            string trainDataPath = @"train.txt";
-            string valDataPath = @"val.txt";
+            // [Add 2026-11-14] dataset presets: nc/kpt/data root/data lists/pretrained weights per bundled
+            // dataset. / 内置数据集预设：nc/关键点/数据根/列表文件/预训练权重按数据集带出（nc必须与
+            // 数据集匹配——作者反馈：coco8-pose应[batch,56,8400]、coco128-seg应[batch,116,8400]、coco128-detect应[batch,84,8400]）
+            int nc = 15; int kptNum = 17, kptDim = 3;
+            string trainDataPath = "train.txt", valDataPath = "val.txt";
+            switch (dataset)
+            {
+                case "coco128":
+                    nc = 80; dataRootPath = @"..\..\..\Assets\DataSets\coco128";
+                    preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\Yolov8n.bin"; break;
+                case "coco128-seg":
+                    nc = 80; dataRootPath = @"..\..\..\Assets\DataSets\coco128-seg";
+                    preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-seg.bin"; break;
+                case "coco8-pose":
+                    // no train/val lists shipped — scan the image dir directly (8 imgs, all train)
+                    // / 未附带列表文件——直接扫图目录（8张全为训练集，val复用）
+                    nc = 1; dataRootPath = @"..\..\..\Assets\DataSets\coco8-pose";
+                    trainDataPath = "images/train2017"; valDataPath = "images/train2017";
+                    preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-pose.bin"; break;
+                default:   // dotav1
+                    nc = taskType == TaskType.Classification ? 1 : 15; break;
+            }
+            if (taskType == TaskType.Classification) nc = 1;
+            if (dataset != "coco8-pose")
+            {
+                trainDataPath = "train.txt"; valDataPath = "val.txt";
+            }
 
             Mat predictImage = Cv2.ImRead(predictImagePath);
 
-            // Create a Yolo config（任务相关参数按task自动适配；v9等无预训练权重的架构从头训练）
-            // nc: 示例数据集dotav1为15类（train.txt/val.txt标签0..14）；Classification任务无框标签按1类
-            int nc = taskType == TaskType.Classification ? 1 : 15;
             Config config = new Config
             {
                 DeviceType = DeviceType.CUDA,
@@ -268,8 +298,8 @@ namespace YoloSharpDemo
                 Workers = 4,
                 Epochs = epochs,
                 LearningRate = 2e-4f,
-                KeyPoint_Num = 17,
-                KeyPoint_Dim = 3,
+                KeyPoint_Num = kptNum,
+                KeyPoint_Dim = kptDim,
                 CloseMosaic = 10,
             };
 
