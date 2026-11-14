@@ -220,10 +220,19 @@ namespace YoloSharp.OnnxExport
                 var rb = Slice(c, rawT: dist, starts: new long[] { 2 }, ends: new long[] { 4 }, axes: new long[] { 1 }, outSh: new long[] { bs, 2, totalA });
                 // anchor points stacked [1, 2, A] (x row, y row)
                 var anchorT = ConcatConst2(c, axT, ayT, totalA);   // [1,2,A]
-                var x1y1 = Ops.SubT(c, anchorT, lt, new long[] { bs, 2, totalA });   // broadcast [1,2,A] − [bs,2,A]
-                var x2y2 = Ops.AddT(c, anchorT, rb, new long[] { bs, 2, totalA });
-                var xyxy = Ops.Concat(c, new[] { x1y1, x2y2 }, 1);   // [bs,4,A] in stride units
-                decoded = Ops.MulT(c, xyxy, stT, new long[] { bs, 4, totalA });   // → pixels
+                // [Fix 2026-11-14 real-weights bug] ultralytics exports xywh (CENTER format,
+                // dist2bbox(xywh=true)): cxy = anchor + (rb − lt)/2, wh = lt + rb. The first
+                // in-graph-decode implementation emitted xyxy (lt/rb concat) — self-parity
+                // passed (both sides xyxy) but every xywh consumer (our platform adapter,
+                // ML.NET samples, python tooling) read x1,y1 as center and x2,y2 as size →
+                // real detections were badly displaced. Switch to the python xywh semantics.
+                // / 必须输出xywh中心格式（ultralytics语义）：此前xyxy布局真权重推理全偏
+                var dwh = Ops.AddT(c, lt, rb, new long[] { bs, 2, totalA });                       // w,h = lt+rb
+                var rbMinusLt = Ops.SubT(c, rb, lt, new long[] { bs, 2, totalA });
+                var halfOffset = Ops.MulT(c, rbMinusLt, Ops.ConstTensor(c, new float[] { 0.5f }, new long[] { 1, 1, 1 }, "dh2"), new long[] { bs, 2, totalA });   // scalar-like broadcast / 标量广播
+                var cxyT = Ops.AddT(c, anchorT, halfOffset, new long[] { bs, 2, totalA });          // cx,cy = anchor + (rb−lt)/2
+                var xywh = Ops.Concat(c, new[] { cxyT, dwh }, 1);   // [bs,4,A] = cx,cy,w,h in stride units
+                decoded = Ops.MulT(c, xywh, stT, new long[] { bs, 4, totalA });   // → pixels
                 c.SetShape(decoded, new long[] { bs, 4, totalA });
             }
             outputs["boxes"] = decoded;

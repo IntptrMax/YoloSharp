@@ -37,15 +37,19 @@ namespace YoloSharpDemo
             // 建网络并取内部yolo模块
             var yoloTask = new YoloTask(config);
             var yolo = YoloSharp.OnnxExport.OnnxExporter.GetYoloModule(yoloTask);
-            if (args.Length > 5 && args[4] == "--pt" && System.IO.File.Exists(args[5]))
+            // [Fix 2026-11-14] --pt/--bin positional break: the nc arg (4th) shifted the flag off
+            // its fixed slot — weights silently never loaded (all-anchor ~0.5 scores on real
+            // images). Scan for the flag anywhere. / 位置无关地解析--pt/--bin
+            string weightPath = null;
+            for (int i = 3; i < args.Length - 1; i++)
             {
-                yoloTask.LoadModel(args[5], skipNcNotEqualLayers: true);   // load real weights for COCO parity / 加载真权重对拍
-                Console.WriteLine($"[PtLoad] {args[5]}");
+                if ((args[i] == "--pt" || args[i] == "--bin") && System.IO.File.Exists(args[i + 1]))
+                { weightPath = args[i + 1]; break; }
             }
-            else if (args.Length > 5 && args[4] == "--bin" && System.IO.File.Exists(args[5]))
+            if (weightPath != null)
             {
-                yoloTask.LoadModel(args[5], skipNcNotEqualLayers: true);   // load bin weights / 加载bin权重
-                Console.WriteLine($"[BinLoad] {args[5]}");
+                yoloTask.LoadModel(weightPath, skipNcNotEqualLayers: true);   // load real weights for COCO parity / 加载真权重对拍
+                Console.WriteLine($"[WLoad] {weightPath}");
             }
             yolo.eval();
 
@@ -87,7 +91,9 @@ namespace YoloSharpDemo
                     var proj = TorchSharp.torch.arange(16, TorchSharp.torch.ScalarType.Float32).view(1, 16, 1);   // [1,16,1]
                     var p3 = probs.reshape(4, 16, A);           // merge batch+edge dims for matmul / 合并批+边维便于矩阵乘
                     var dist = TorchSharp.torch.matmul(p3.transpose(1, 2), proj).reshape(1, 4, A);   // [4,A,16]@[16,1]→[4,A,1]→[1,4,A]
-                    var dbox = YoloSharp.Utils.Tal.dist2bbox(dist, anchors.transpose(0, 1).unsqueeze(0), xywh: false, dim: 1) * strides.transpose(0, 1).unsqueeze(0);
+                    // xywh:true — ultralytics export semantics (center format), matching the graph
+                    // / xywh中心格式，与ultralytics导出及图内解码一致
+                    var dbox = YoloSharp.Utils.Tal.dist2bbox(dist, anchors.transpose(0, 1).unsqueeze(0), xywh: true, dim: 1) * strides.transpose(0, 1).unsqueeze(0);
                     refDecoded = dbox.detach().cpu().to_type(TorchSharp.torch.ScalarType.Float32).MoveToOuterDisposeScope();
                 }
             }
