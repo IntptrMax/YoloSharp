@@ -248,15 +248,15 @@ namespace YoloSharpDemo
             //   YoloSharpDemo Yolov8 Pose 640 0.45 10 coco8-pose      → v8-pose(nc=1,17kpt)
             //   YoloSharpDemo Yolov9 Detection                         → v9 从头训练dotav1+推理
             YoloType yoloType = args.Length > 0 ? (YoloType)Enum.Parse(typeof(YoloType), args[0], true) : YoloType.Yolov8;
-            TaskType taskType = args.Length > 1 ? (TaskType)Enum.Parse(typeof(TaskType), args[1], true) : TaskType.Obb;
+            TaskType taskType = args.Length > 1 ? (TaskType)Enum.Parse(typeof(TaskType), args[1], true) : TaskType.Detection;
             int predictImgsz = args.Length > 2 ? int.Parse(args[2]) : 0;   // 0=用config.ImageSize
             float predictConf = args.Length > 3 ? float.Parse(args[3]) : 0.45f;
             int epochs = args.Length > 4 ? int.Parse(args[4]) : 10;
-            string dataset = args.Length > 5 ? args[5].ToLowerInvariant() : "dotav1";
+            string dataset = args.Length > 5 ? args[5].ToLowerInvariant() : "coco128";
 
-            string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-obb.pt"; // Pretrained model path.
+            string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n.pt"; // Pretrained model path.
             string predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
-            string dataRootPath = @"..\..\..\Assets\DataSets\dotav1";
+            string dataRootPath = @"..\..\..\Assets\DataSets\coco128";
 
             // [Add 2026-11-14] dataset presets: nc/kpt/data root/data lists/pretrained weights per bundled
             // dataset. / 内置数据集预设：nc/关键点/数据根/列表文件/预训练权重按数据集带出（nc必须与
