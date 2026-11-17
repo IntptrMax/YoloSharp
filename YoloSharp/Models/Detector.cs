@@ -14,38 +14,71 @@ namespace YoloSharp.Models
             this.config = config;
             yolo = config.YoloType switch
             {
-                YoloType.Yolov5u => new Yolo.Yolov5u(this.config.NumberClass, end2end: config.End2End, device: this.config.Device, dtype: this.config.Dtype),
-                YoloType.Yolov8 => new Yolo.Yolov8(this.config.NumberClass, end2end: config.End2End, device: this.config.Device, dtype: this.config.Dtype),
-                YoloType.Yolov11 => new Yolo.Yolov11(this.config.NumberClass, end2end: config.End2End, device: this.config.Device, dtype: this.config.Dtype),
-                YoloType.Yolov12 => new Yolo.Yolov12(this.config.NumberClass, end2end: config.End2End, device: this.config.Device, dtype: this.config.Dtype),
+                YoloType.Yolov5u => new Yolo.Yolov5u(this.config.NumberClass, end2end: config.End2End, yoloSize: this.config.YoloSize, device: this.config.Device, dtype: this.config.Dtype),
+                YoloType.Yolov8 => new Yolo.Yolov8(this.config.NumberClass, end2end: config.End2End, yoloSize: this.config.YoloSize, device: this.config.Device, dtype: this.config.Dtype),
+                YoloType.Yolov9 => new Yolo.Yolov9(this.config.NumberClass, end2end: config.End2End, yoloSize: this.config.YoloSize, device: this.config.Device, dtype: this.config.Dtype),
+                YoloType.Yolov11 => new Yolo.Yolov11(this.config.NumberClass, end2end: config.End2End, yoloSize: this.config.YoloSize, device: this.config.Device, dtype: this.config.Dtype),
+                // [Fix 2026-11-06] Pass YoloSize through — the default parameter (YoloSize.n) silently
+                // discarded the UI's size choice: a "s" training built an n skeleton (first conv 16ch
+                // vs pretrained 32ch), 504/741 keys mismatched, A2C2f cores stayed random → garbage
+                // bottom-edge boxes + scores stuck at ~0.81.
+                // Pass YoloSize through — the default (n) dropped the UI-selected s tier: s training built an
+                // n skeleton, 504-key mismatch, A2C2f all-random -> 16 fake boxes at image bottom @0.81 scores. / 传递YoloSize
+                YoloType.Yolov12 => new Yolo.Yolov12(this.config.NumberClass, end2end: config.End2End, yoloSize: this.config.YoloSize, device: this.config.Device, dtype: this.config.Dtype),
                 _ => throw new NotImplementedException(),
             };
-            loss = config.End2End ? new Loss.E2EDetectLoss(this.config.NumberClass, device: this.config.Device, dtype: this.config.Dtype) : new Utils.Loss.v8DetectionLoss(this.config.NumberClass, device: this.config.Device, dtype: this.config.Dtype);
+            // [Fix 2026-11-04] v9 training yaml uses the v8-style Detect head (6 groups in ONE
+            // head, single TAL loss) — same loss as v8, no dual weighting. The earlier dual-head
+            // experiment targeted DualDDetect (wrong reference; that's converted.pt's inference
+            // checkpoint, not the training yaml). Stride must cover all 6 feature maps
+            // (aux P3-P5 + main P3-P5).
+            // v9 training yaml uses a v8-style single Detect head with six groups + single TAL loss; strides cover 6 feature maps. / v9训练yaml用v8式Detect单头六组
+            int[] lossStride = config.YoloType == YoloType.Yolov9 ? new int[] { 8, 16, 32, 8, 16, 32 } : null;
+            loss = config.End2End
+                ? new Loss.E2EDetectLoss(this.config.NumberClass, device: this.config.Device, dtype: this.config.Dtype)
+                : new Utils.Loss.v8DetectionLoss(this.config.NumberClass, stride: lossStride, device: this.config.Device, dtype: this.config.Dtype);
         }
 
         internal override List<YoloResult> ImagePredict(torch.Tensor orgImage, float predictThreshold, float iouThreshold)
         {
             using (torch.no_grad())
             {
-                // Change RGB → BGR
-                orgImage = orgImage.to(config.Dtype, config.Device).unsqueeze(0);
-                int w = (int)orgImage.shape[3];
-                int h = (int)orgImage.shape[2];
-                int padHeight = 32 - (int)(orgImage.shape[2] % 32);
-                int padWidth = 32 - (int)(orgImage.shape[3] % 32);
+                // [Fix 2026-10-27] Inference preprocessing aligned with training/val (aspect-ratio letterbox).
+                // [Fix 2026-10-29] Padding must be CENTERED to match the training/val pipeline (Augment.LetterboxImage/
+                // RectangleImage pad_l=(w-new_w)/2, pad_u=(h-new_h)/2). The 10-27 version padded to bottom-right
+                // (0,padW,0,padH): for extreme aspect-ratio images (groove bar 1190x256) the content band sits
+                // ~250px off vertically vs training distribution → confidence collapse → 0 detections.
+                // Inference preprocessing aligned with training/val (aspect-preserving letterbox). / 推理预处理与训练对齐
+                // [Fix 2026-10-29] Padding must be centered to match the training/val pipeline (Augment.LetterboxImage/
+                // RectangleImage use pad_l=(w-new_w)/2, pad_u=(h-new_h)/2). The 10-27 version padded bottom-right
+                // (0,padW,0,padH): extreme-aspect images (groove bar 1190x256) shifted content ~250px off the
+                // training distribution -> confidence collapse -> 0 detections. / 填充必须居中才与训练管线一致
+                orgImage = orgImage.to(config.Dtype, config.Device);
+                // Accepts both CHW (3-dim) and NCHW (4-dim) inputs: read_image yields CHW — take H/W from the last two dims uniformly / 兼容CHW与NCHW入参
+                int dimC = (int)orgImage.dim();
+                int orgH = (int)orgImage.shape[dimC - 2];
+                int orgW = (int)orgImage.shape[dimC - 1];
+                float ratio = Math.Min(config.ImageSize / (float)orgH, config.ImageSize / (float)orgW);
+                int rsH = (int)(ratio * orgH);
+                int rsW = (int)(ratio * orgW);
+                var batched = orgImage.dim() == 3 ? orgImage.unsqueeze(0) : orgImage;
+                using (var resized = torch.nn.functional.interpolate(batched,
+                    new long[] { rsH, rsW }, mode: torch.InterpolationMode.Bilinear, align_corners: false))
+                {
+                    // Centered padding to 32-multiples (same as training Letterbox) / 居中填充到32倍数（与训练Letterbox一致）
+                    int padH = (32 - rsH % 32) % 32;
+                    int padW = (32 - rsW % 32) % 32;
+                    int padU = padH / 2;
+                    int padD = padH - padU;
+                    int padL = padW / 2;
+                    int padR = padW - padL;
+                    torch.Tensor input = torch.nn.functional.pad(resized, new long[] { padL, padR, padU, padD }, PaddingModes.Zeros, 114) / 255.0f;
+                    yolo.eval();
 
-                padHeight = padHeight == 32 ? 0 : padHeight;
-                padWidth = padWidth == 32 ? 0 : padWidth;
+                    Dictionary<string, torch.Tensor> inference = yolo.forward(input)?.inference;
 
-                torch.Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros, 114) / 255.0f;
-                yolo.eval();
-
-
-                //Tensor[] tensors = yolo.forward(input);
-                Dictionary<string, torch.Tensor> inference = yolo.forward(input)?.inference;
-
-                torch.Tensor nms_results = Ops.non_max_suppression(inference["boxes"], predictThreshold, iouThreshold, end2end: config.End2End).output[0];
-                List<YoloResult> results = new List<YoloResult>();
+                    torch.Tensor nms_results = Ops.non_max_suppression(inference["boxes"], predictThreshold, iouThreshold, end2end: config.End2End).output[0];
+                    List<YoloResult> results = new List<YoloResult>();
                 for (int i = 0; i < nms_results.shape[0]; i++)
                 {
                     int x = nms_results[i][0].ToInt32();
@@ -56,17 +89,27 @@ namespace YoloSharp.Models
                     float score = nms_results[i][4].ToSingle();
                     int sort = nms_results[i][5].ToInt32();
 
+                    // [Fix] Coordinate back-mapping: network input (centered letterbox) -> original image coords — subtract centered offsets (padL/padU) first, then divide by ratio / 坐标反映射
+                    // [Fix] Coordinate back-mapping: network input (centered letterbox) → original image coords —
+                    // subtract the centered offset (padL/padU) first, then divide by ratio to restore scale.
+                    // [Fix 2026-11-08] Pad-region filter (python scale_boxes semantics): the gray border
+                    // fires phantom high scores (unseen in training); drop boxes whose center falls
+                    // outside the valid content area instead of emitting them below/beside the image.
+                    // Pad-region box filter: gray-border high-score boxes fall outside the original image after mapping — drop by box center. / pad区框过滤
+                    float cX = x + rw / 2f, cY = y + rh / 2f;   // input-domain center / 输入域中心
+                    if (cX < padL || cY < padU || cX > padL + rsW || cY > padU + rsH) continue;
                     results.Add(new YoloResult()
                     {
                         ClassID = sort,
                         Score = score,
-                        CenterX = x + rw / 2,
-                        CenterY = y + rh / 2,
-                        Width = rw,
-                        Height = rh
+                        CenterX = (int)((x + rw / 2 - padL) / ratio),
+                        CenterY = (int)((y + rh / 2 - padU) / ratio),
+                        Width = (int)(rw / ratio),
+                        Height = (int)(rh / ratio)
                     });
+                    }
+                    return results;
                 }
-                return results;
             }
         }
 
@@ -95,7 +138,11 @@ namespace YoloSharp.Models
                         (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds) = amp.Evaluate(data["images"].to(config.Dtype)).Value;
                         torch.Tensor loss_detach = loss.forward(preds, data).loss_detach;
 
-                        List<torch.Tensor> nms_results = Ops.non_max_suppression(inference["boxes"], nc: config.NumberClass, conf_thres: 0.1f, iou_thres: 0.7f, end2end: config.End2End).output;
+                        // [Fix 2026-11-05] Val conf 0.001 (python val.py): early epochs score low and
+                        // the old 0.1 threshold filtered everything → mAP50 stayed 0.000 for the
+                        // first ~9 epochs (looked stalled). python's 0.001 sees them from epoch 1.
+                        // Val threshold aligned with python (0.001): early low scores were all filtered by 0.1 -> mAP stuck at 0 for the first 9 epochs. / Val阈值对齐python
+                        List<torch.Tensor> nms_results = Ops.non_max_suppression(inference["boxes"], nc: config.NumberClass, conf_thres: 0.001f, iou_thres: 0.7f, end2end: config.End2End).output;
                         float w = data["images"].shape[data["images"].shape.Length - 1];
                         float h = data["images"].shape[data["images"].shape.Length - 2];
                         torch.Tensor scale = torch.tensor(new float[] { w, h, w, h }, device: new torch.Device(data["images"].device_type));

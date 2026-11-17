@@ -6,8 +6,8 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<LangVersion>latest</LangVersion>
 		<Nullable>enable</Nullable>
-		<RootNamespace />
-		<AssemblyName>IntptrMax.YoloSharp</AssemblyName>
+		<RootNamespace>YoloSharp</RootNamespace>
+		<AssemblyName>YoloSharp</AssemblyName>
 		<PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
 		<Authors>IntptrMax</Authors>
 		<PackageProjectUrl>https://github.com/IntptrMax/YoloSharp</PackageProjectUrl>
@@ -22,10 +22,6 @@ Requires reference to one of libtorch-cpu, libtorch-cuda-12.1, libtorch-cuda-12.
 		<Compile Remove="Assets\**" />
 		<EmbeddedResource Remove="Assets\**" />
 		<None Remove="Assets\**" />
-	</ItemGroup>
-
-	<ItemGroup>
-		<None Remove="Yolo.cs~RF6d1ae515.TMP" />
 	</ItemGroup>
 
 	<ItemGroup>

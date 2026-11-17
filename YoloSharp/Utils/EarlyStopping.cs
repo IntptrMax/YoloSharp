@@ -17,6 +17,11 @@
 
         internal bool ShouldStop(float fitness, int epoch)
         {
+            // [Fix 2026-11-01] patience <= 0 disables early stopping entirely (train all configured
+            // epochs) — previously patience=0 stopped at the very first epoch check (delta >= 0).
+            // patience<=0彻底禁用早停（训练满设定轮数）——旧实现0会在首轮判定即停。
+            if (this.patience <= 0) return false;
+
             if (fitness > this.best_fitness)
             {
                 this.best_epoch = epoch;

@@ -26,6 +26,7 @@ namespace YoloSharp.Models
             {
                 YoloType.Yolov5u => new Yolo.Yolov5uPose(config.NumberClass, kpt_num: config.KeyPoint_Num, kpt_dim: config.KeyPoint_Dim, yoloSize: config.YoloSize, end2end: config.End2End, device: config.Device, dtype: config.Dtype),
                 YoloType.Yolov8 => new Yolo.Yolov8Pose(config.NumberClass, kpt_num: config.KeyPoint_Num, kpt_dim: config.KeyPoint_Dim, yoloSize: config.YoloSize, end2end: config.End2End, device: config.Device, dtype: config.Dtype),
+                YoloType.Yolov9 => throw new NotSupportedException("YOLOv9 (GELAN): official yolov9 has no Pose variant at all. Use Yolov8/Yolov11 for Pose."),
                 YoloType.Yolov11 => new Yolo.Yolov11Pose(config.NumberClass, kpt_num: config.KeyPoint_Num, kpt_dim: config.KeyPoint_Dim, yoloSize: config.YoloSize, end2end: config.End2End, device: config.Device, dtype: config.Dtype),
                 YoloType.Yolov12 => new Yolo.Yolov12Pose(config.NumberClass, kpt_num: config.KeyPoint_Num, kpt_dim: config.KeyPoint_Dim, yoloSize: config.YoloSize, end2end: config.End2End, device: config.Device, dtype: config.Dtype),
                 _ => throw new NotImplementedException("Yolo type not supported."),

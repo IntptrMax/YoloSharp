@@ -182,8 +182,21 @@ namespace Data
                 string desc = $"{this.prefix}Scanning {(this.scanPath + "..."),-20}";
                 using (Tqdm<string> pbar = new Tqdm<string>(im_files, total: total, barStyle: Tqdm.BarStyle.Classic, barColor: Tqdm.BarColor.White, barWidth: 10, showPartialChar: true))
                 {
+                    int imgIndex = 0;   // parallel index into im_files/label_files (same order, same length) / 与im_files同序同长的并行索引
                     foreach (string im_file in pbar)
                     {
+                        // [Add 2026-11-13] Stop check inside the dataset scan: scanning thousands of images
+                        // takes tens of seconds BEFORE epoch 1 starts — honor Config.StopRequested here so
+                        // "stop training" takes effect within one image (~ms) instead of after the whole scan.
+                        // Scan-phase stop check: honor the stop token during the pre-epoch scan. / 扫描阶段停止检查
+                        bool stopRequested = false;
+                        try { stopRequested = config.StopRequested != null && config.StopRequested(); }
+                        catch { }
+                        if (stopRequested)
+                        {
+                            throw new OperationCanceledException("Dataset scan cancelled by user stop request. / 用户请求停止，数据集扫描已取消");
+                        }
+
                         Struct.LabelStruct label = new Struct.LabelStruct();
                         label.im_file = im_file;
                         torch.Tensor img = torchvision.io.read_image(im_file, torchvision.io.ImageReadMode.RGB);
@@ -206,7 +219,13 @@ namespace Data
                         int mask_w = (int)Math.Ceiling((float)resized_w / this.mask_ratio);
                         int mask_h = (int)Math.Ceiling((float)resized_h / this.mask_ratio);
 
-                        string label_file = label_files[im_files.ToList().IndexOf(im_file)];
+                        // [Fix 2026-11-13] O(N^2) -> O(1): the old code rebuilt the whole im_files list
+                        // (ToList) and did a linear search for EVERY image (N images -> N*N). On 5000
+                        // images that's ~12.5M string comparisons added to the scan. img2label_paths
+                        // maps 1:1 in the same order, so a parallel index does the same job in O(1).
+                        // Parallel index replaces per-image ToList+IndexOf (was O(N^2)). / 并行索引替代逐图ToList+IndexOf
+                        string label_file = label_files[imgIndex];
+                        imgIndex++;
                         if (File.Exists(label_file))
                         {
                             string[] lines = File.ReadAllLines(label_file);

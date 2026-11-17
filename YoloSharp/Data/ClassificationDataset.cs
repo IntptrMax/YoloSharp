@@ -52,6 +52,16 @@ namespace Data
                 List<Struct.LabelStruct> labels = new List<Struct.LabelStruct>();
                 foreach (string imgFileName in this.im_files)
                 {
+                    // [Add 2026-11-13] Scan-phase stop check (see YoloDataset.get_labels): honor the stop
+                    // token during the pre-epoch scan so stopping takes effect within one image.
+                    bool stopRequested = false;
+                    try { stopRequested = config.StopRequested != null && config.StopRequested(); }
+                    catch { }
+                    if (stopRequested)
+                    {
+                        throw new OperationCanceledException("Dataset scan cancelled by user stop request. / 用户请求停止，数据集扫描已取消");
+                    }
+
                     string labelName = Directory.GetParent(imgFileName).Name;
                     int cls = classsNames.IndexOf(labelName);
                     Struct.LabelStruct label = new Struct.LabelStruct()

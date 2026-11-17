@@ -117,7 +117,11 @@ namespace YoloSharp.Utils
 
         public static Dictionary<string, List<float>> LoadCSV(string path)
         {
+            // [Fix 2026-11-12] Header-only / missing CSV (stopped before epoch 1): return empty
+            // instead of throwing — callers guard on empty data. / empty-csv tolerance
+            if (!File.Exists(path) || new FileInfo(path).Length == 0) return new Dictionary<string, List<float>>();
             string[] lines = File.ReadAllLines(path);
+            if (lines.Length < 2) return new Dictionary<string, List<float>>();
             string[] headers = lines[0].Split(new char[] { '\t', ',' });
 
             Dictionary<string, List<float>> dataDict = new Dictionary<string, List<float>>();

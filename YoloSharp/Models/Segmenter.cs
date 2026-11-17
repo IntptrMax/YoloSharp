@@ -17,6 +17,7 @@ namespace YoloSharp.Models
             {
                 YoloType.Yolov5u => new Yolo.Yolov5uSegment(config.NumberClass, yoloSize: config.YoloSize, end2end: config.End2End, device: config.Device, dtype: config.Dtype),
                 YoloType.Yolov8 => new Yolo.Yolov8Segment(config.NumberClass, yoloSize: config.YoloSize, end2end: config.End2End, device: config.Device, dtype: config.Dtype),
+                YoloType.Yolov9 => new Yolo.Yolov9Segment(config.NumberClass, yoloSize: config.YoloSize, end2end: config.End2End, device: config.Device, dtype: config.Dtype),
                 YoloType.Yolov11 => new Yolo.Yolov11Segment(config.NumberClass, yoloSize: config.YoloSize, end2end: config.End2End, device: config.Device, dtype: config.Dtype),
                 YoloType.Yolov12 => new Yolo.Yolov12Segment(config.NumberClass, yoloSize: config.YoloSize, end2end: config.End2End, device: config.Device, dtype: config.Dtype),
                 _ => throw new NotImplementedException("Yolo type not supported."),

@@ -480,7 +480,11 @@ namespace YoloSharp.Utils
 					loss[0] *= this.hyp_box;  // box gain
 					loss[1] *= this.hyp_cls;  // cls gain
 					loss[2] *= this.hyp_dfl;  // dfl gain
-					return ((fg_mask.MoveToOuterDisposeScope(), target_gt_idx.MoveToOuterDisposeScope(), target_bboxes.MoveToOuterDisposeScope(), anchor_points.MoveToOuterDisposeScope(), stride_tensor.MoveToOuterDisposeScope()), loss.MoveToOuterDisposeScope(), loss.detach());
+					// [Fix 2026-11-04] loss_detach must ALSO move out of the scope — the scope
+					// disposes it on return; any later arithmetic on it (v9 dual-head combines
+					// two heads' items) hits "Tensor invalid -- empty handle".
+					// detach也必须迁出dispose域——否则域释放后对其做运算(empty handle)。
+					return ((fg_mask.MoveToOuterDisposeScope(), target_gt_idx.MoveToOuterDisposeScope(), target_bboxes.MoveToOuterDisposeScope(), anchor_points.MoveToOuterDisposeScope(), stride_tensor.MoveToOuterDisposeScope()), loss.MoveToOuterDisposeScope(), loss.detach().MoveToOuterDisposeScope());
 				}
 			}
 
@@ -498,6 +502,43 @@ namespace YoloSharp.Utils
 				return this.loss(preds, batch);
 			}
 
+		}
+
+		/// <summary>
+		/// [Add 2026-11-04] YOLOv9 dual-head deep-supervision loss (official utils/loss_tal_dual.py
+		/// ComputeLoss): aux head (groups 0..2) carries full weight, main head (groups 3..5) is
+		/// scaled ×0.25 before summing — total = (0.25*main + 1.0*aux) * batch. Each head gets its
+		/// own TaskAlignedAssigner pass. The previous single-head path left the whole aux branch
+		/// (layers 22-28) without gradients — weaker regression on edge/hard targets.
+		/// v9双头深监督损失：aux头(组0..2)全权重+main头(组3..5)×0.25——各自独立TAL分配。
+		/// </summary>
+		internal class v9DualDetectionLoss : v8DetectionLoss
+		{
+			public v9DualDetectionLoss(int nc, int reg_max = 16, int[]? stride = null, int tal_topk = 10,
+				float hyp_box = 7.5f, float hyp_cls = 0.5f, float hyp_dfl = 1.5f,
+				torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, reg_max, stride, tal_topk, null, hyp_box, hyp_cls, hyp_dfl, device, dtype)
+			{
+			}
+
+			public override (torch.Tensor loss, torch.Tensor loss_detach) forward(Dictionary<string, object> preds, Dictionary<string, torch.Tensor> batch)
+			{
+				if (!preds.ContainsKey("aux"))
+				{
+					return base.forward(preds, batch);   // 非双头来源退回单头
+				}
+				// [Fix 2026-11-04] No nested dispose scope here: moved-out tensors were still
+				// reclaimed when combined across two get_assigned_targets_and_loss calls
+				// ("Tensor invalid -- empty handle" at mul). The single-head path (loss()) also
+				// runs scopeless — rely on the caller's (TrainStep/TrainEpoch batch) scope.
+				// 不加嵌套dispose域：迁出张量跨两次调用组合时仍被回收。单头路径同样无域。
+				(_, torch.Tensor mainLoss, torch.Tensor mainItems) = this.get_assigned_targets_and_loss(preds, batch);
+				(_, torch.Tensor auxLoss, torch.Tensor auxItems) = this.get_assigned_targets_and_loss((Dictionary<string, object>)preds["aux"], batch);
+				mainItems = mainItems.mul(0.25f);
+				torch.Tensor loss = mainLoss.mul(0.25f).add(auxLoss);
+				long batch_size = ((torch.Tensor)preds["boxes"]).shape[0];
+				return (loss.mul(batch_size), mainItems.add(auxItems));
+			}
 		}
 
 		internal class v8OBBLoss : v8DetectionLoss
